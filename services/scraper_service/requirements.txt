@@ -1,0 +1,8 @@
+requests
+scrapy
+playwright
+celery
+redis
+psycopg2-binary
+SQLAlchemy
+boto3

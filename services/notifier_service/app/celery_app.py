@@ -1,0 +1,3 @@
+# services/notifier_service/app/celery_app.py
+
+from common.celery_app import celery_app
