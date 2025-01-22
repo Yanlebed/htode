@@ -1,0 +1,12 @@
+aiogram==2.25.1
+celery==5.2.7
+redis==4.5.1
+requests==2.28.2
+
+# Если нужна SQLAlchemy и psycopg2 для чтения БД
+SQLAlchemy==1.4.46
+psycopg2==2.9.5
+
+# Прочие зависимости
+python-dotenv==0.21.1
+loguru==0.6.0

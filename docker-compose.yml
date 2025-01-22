@@ -1,0 +1,120 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7
+    container_name: my_redis
+    command: [ "redis-server", "--appendonly", "yes" ]
+    ports:
+      - "6379:6379"
+    networks:
+      - app_net
+
+  postgres:
+    image: postgres:14
+    container_name: my_postgres
+    environment:
+      POSTGRES_DB: mydb
+      POSTGRES_USER: myuser
+      POSTGRES_PASSWORD: mypass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - app_net
+
+  telegram_service:
+    container_name: telegram_service
+    build:
+      context: .
+      dockerfile: services/telegram_service/Dockerfile
+    depends_on:
+      - redis
+      - postgres
+    environment:
+      REDIS_URL: "redis://redis:6379/0"
+      DB_HOST: "postgres"
+      DB_PORT: "5432"
+      DB_NAME: "mydb"
+      DB_USER: "myuser"
+      DB_PASS: "mypass"
+      TELEGRAM_TOKEN: "SET_YOUR_TELEGRAM_TOKEN_HERE"
+    networks:
+      - app_net
+    command: python -m app.main
+
+  telegram_worker_service:
+    networks:
+      - app_net
+    depends_on:
+      - redis
+      - postgres
+    environment:
+      REDIS_URL: "redis://redis:6379/0"
+      DB_HOST: "postgres"
+      DB_PORT: "5432"
+      DB_NAME: "mydb"
+      DB_USER: "myuser"
+      DB_PASS: "mypass"
+    build:
+      context: .
+      dockerfile: services/telegram_service/Dockerfile
+    container_name: telegram_worker
+    command: celery -A app.celery_app.celery_app worker -Q telegram_queue --loglevel=info --concurrency=1
+
+  scraper_service:
+    container_name: scraper_service
+    build:
+      context: .
+      dockerfile: services/scraper_service/Dockerfile
+    depends_on:
+      - redis
+      - postgres
+    environment:
+      REDIS_URL: "redis://redis:6379/0"
+      DB_HOST: "postgres"
+      DB_PORT: "5432"
+      DB_NAME: "mydb"
+      DB_USER: "myuser"
+      DB_PASS: "mypass"
+      # Add AWS credentials/region/bucket
+      AWS_ACCESS_KEY_ID: "AKIAS74TMCYOZMLDIA6K"
+      AWS_SECRET_ACCESS_KEY: "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"
+      AWS_DEFAULT_REGION: "us-east-1"
+      AWS_S3_BUCKET: "htodebucket"
+      # Optionally a prefix or CloudFront domain:
+      AWS_S3_BUCKET_PREFIX: "ads-images/"
+      # or AWS_CLOUDFRONT_DOMAIN: "https://XXXX.cloudfront.net"
+    networks:
+      - app_net
+    command:
+      - celery -A app.celery_app.celery_app worker --loglevel=info -Q scrape_queue
+      - celery -A scraper_service.app.celery_app beat --loglevel=info
+
+  notifier_service:
+    container_name: notifier_service
+    build:
+      context: .
+      dockerfile: services/notifier_service/Dockerfile
+    depends_on:
+      - redis
+      - postgres
+    environment:
+      REDIS_URL: "redis://redis:6379/0"
+      DB_HOST: "postgres"
+      DB_PORT: "5432"
+      DB_NAME: "mydb"
+      DB_USER: "myuser"
+      DB_PASS: "mypass"
+    networks:
+      - app_net
+    command: celery -A app.celery_app.celery_app worker --loglevel=info -Q notify_queue
+
+networks:
+  app_net:
+    driver: bridge
+
+volumes:
+  postgres-data:
