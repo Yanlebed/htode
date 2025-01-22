@@ -3,6 +3,45 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 
+def main_menu_keyboard():
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(
+        InlineKeyboardButton("Моя подписка", callback_data="menu_my_subscription"),
+        InlineKeyboardButton("Как это работает?", callback_data="menu_how_to_use"),
+        InlineKeyboardButton("Техподдержка", callback_data="menu_tech_support")
+    )
+    return keyboard
+
+
+def subscription_menu_keyboard():
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(
+        InlineKeyboardButton("Отключить", callback_data="subs_disable"),
+        InlineKeyboardButton("Включить", callback_data="subs_enable"),
+        InlineKeyboardButton("Изменить", callback_data="subs_edit"),
+        InlineKeyboardButton("Вернуться в меню", callback_data="subs_back")
+    )
+    return keyboard
+
+
+def how_to_use_keyboard():
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(
+        InlineKeyboardButton("Написать в техподдержку", callback_data="contact_support"),
+        InlineKeyboardButton("Вернуться в меню", callback_data="main_menu")
+    )
+    return keyboard
+
+
+def tech_support_keyboard():
+    # Or just go directly to chat, but here's an example
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(
+        InlineKeyboardButton("Вернуться в меню", callback_data="main_menu")
+    )
+    return keyboard
+
+
 def property_type_keyboard():
     keyboard = InlineKeyboardMarkup(row_width=1)
     keyboard.add(

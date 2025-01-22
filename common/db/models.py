@@ -92,3 +92,29 @@ def find_users_for_ad(ad):
     # Выполняем SQL-запрос
     rows = execute_query(sql, [ad_property_type, ad_city, ad_rooms, ad_price, ad_price, ad_insert_time], fetch=True)
     return [row["user_id"] for row in rows]
+
+
+def disable_subscription_for_user(user_id):
+    sql = "UPDATE users SET subscription_until = '1970-01-01' WHERE id = %s"
+    execute_query(sql, [user_id])
+
+
+def enable_subscription_for_user(user_id):
+    sql = "UPDATE users SET subscription_until = NOW() + interval '30 days' WHERE id = %s"
+    execute_query(sql, [user_id])
+
+def get_subscription_data_for_user(user_id):
+    sql = "SELECT * FROM user_filters WHERE user_id = %s"
+    row = execute_query(sql, [user_id], fetchone=True)
+    if row:
+        return row
+    else:
+        return None
+
+def get_subscription_until_for_user(user_id):
+    sql = "SELECT subscription_until FROM users WHERE id = %s"
+    row = execute_query(sql, [user_id], fetchone=True)
+    if row:
+        return row['subscription_until']
+    else:
+        return None

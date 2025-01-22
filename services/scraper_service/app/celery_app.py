@@ -33,3 +33,6 @@ celery_app.conf.beat_schedule = {
         # 'args': (...) if needed
     },
 }
+
+# 2) Autodiscover tasks from the specified module
+celery_app.autodiscover_tasks(['scraper_service.app'], force=True)

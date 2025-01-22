@@ -3,6 +3,8 @@
 import os
 import boto3
 import logging
+import random
+from time import sleep
 import requests
 from datetime import datetime, timedelta
 from common.db.database import execute_query
@@ -12,90 +14,9 @@ from common.celery_app import celery_app  # or from .celery_app import celery_ap
 
 logger = logging.getLogger(__name__)
 
-
-@celery_app.task(name="scraper_service.app.tasks.fetch_new_ads")
-def fetch_new_ads():
-    """
-    Periodic task that scrapes new ads from a source (page by page) and stores them in the DB.
-    Then triggers the handler for new ads.
-    """
-    logger.info("Starting fetch_new_ads task...")
-
-    # 1) Determine how far back we should collect ads
-    interval_minutes = int(os.getenv("SCRAPER_INTERVAL", 5))
-    interval_delta = timedelta(minutes=interval_minutes)
-    cutoff_time = datetime.utcnow() - interval_delta
-
-    # 2) Start from page 1 and move forward until ads are older than the cutoff
-    page = 1
-    newly_inserted_ad_ids = []
-
-    while True:
-        logger.info(f"Scraping page {page}...")
-        ads = _scrape_ads_from_page(page)
-        if not ads:
-            logger.info(f"No ads on page {page}. Stopping.")
-            break
-
-        # Flag to know if we should continue to next page
-        continue_to_next_page = False
-
-        # 3) Process each ad
-        for ad in ads:
-            ad_time = ad.get("insert_time")  # or parse from ad data
-            # Convert string to datetime if needed:
-            # ad_time = datetime.strptime(ad["insert_time"], "%Y-%m-%d %H:%M:%S")
-
-            # If this ad is older than our cutoff_time, we can stop paging
-            if ad_time < cutoff_time:
-                logger.info("Found ad older than cutoff time. Stopping further pages.")
-                continue_to_next_page = False
-                break
-            else:
-                # This ad is new enough to consider inserting in DB
-                inserted_id = _insert_ad_if_new(ad)
-                if inserted_id:
-                    newly_inserted_ad_ids.append(inserted_id)
-                # We saw at least one valid ad, so let's attempt next ads
-                continue_to_next_page = True
-
-        if not continue_to_next_page:
-            break
-        page += 1
-
-    logger.info(f"Total new ads inserted: {len(newly_inserted_ad_ids)}")
-
-    if newly_inserted_ad_ids:
-        # 4) Trigger the handler for newly inserted ads
-        #    e.g. "sorter" or "notifier" – depends on your architecture
-        handle_new_records.delay(newly_inserted_ad_ids)
-    else:
-        logger.info("No new ads found in this run.")
-
-    logger.info("fetch_new_ads task completed.")
-
-
-def _scrape_ads_from_page(page):
-    """
-    Example function that does the actual GET to fetch ads for a given page.
-    Replace with your real scraping logic and structure.
-    """
-    base_url = "https://example.com/api/ads"
-    params = {
-        "page": page,
-        "per_page": 30  # example
-    }
-    # Add headers, proxies, etc. as needed
-    try:
-        response = requests.get(base_url, params=params, timeout=15)
-        response.raise_for_status()
-        data = response.json()
-        # Suppose the data structure is data["results"]
-        return data.get("results", [])
-    except Exception as e:
-        logger.error(f"Error while scraping page {page}: {e}")
-        return []
-
+S3_BUCKET = os.getenv("AWS_S3_BUCKET", "your-bucket-name")
+S3_PREFIX = os.getenv("AWS_S3_BUCKET_PREFIX", "")
+CLOUDFRONT_DOMAIN = os.getenv("AWS_CLOUDFRONT_DOMAIN")  # if you have one
 
 s3_client = boto3.client(
     's3',
@@ -104,9 +25,142 @@ s3_client = boto3.client(
     region_name=os.getenv("AWS_DEFAULT_REGION", "us-east-1")
 )
 
-S3_BUCKET = os.getenv("AWS_S3_BUCKET", "your-bucket-name")
-S3_PREFIX = os.getenv("AWS_S3_BUCKET_PREFIX", "")
-CLOUDFRONT_DOMAIN = os.getenv("AWS_CLOUDFRONT_DOMAIN")  # if you have one
+USER_AGENTS = [
+    "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:100.0) Gecko/20100101 Firefox/100.0",
+    "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 ...",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ...",
+    # Add more user agents here...
+]
+
+PROXIES = [
+    "http://proxy1.example:8080",
+    "http://proxy2.example:8080",
+    # add more if you have them
+]
+
+
+def get_random_user_agent():
+    return random.choice(USER_AGENTS)
+
+
+def get_random_proxy():
+    return random.choice(PROXIES)
+
+
+def make_request(url, params=None, max_retries=5, use_proxies=False, rotate_user_agents=True):
+    """
+    Make an HTTP GET request with optional retry logic, proxy rotation, user-agent rotation.
+    Returns response object on success or raises an Exception if all attempts fail.
+    """
+    attempt = 0
+    while attempt < max_retries:
+        attempt += 1
+        try:
+            headers = {
+                "User-Agent": get_random_user_agent() if rotate_user_agents else "Mozilla/5.0",
+                "Accept": "*/*",
+                "Accept-Language": "en-US,en;q=0.5",
+                "Accept-Encoding": "gzip, deflate, br, zstd",
+            }
+            # If you want to rotate proxies, pick one:
+            proxy_dict = {}
+            if use_proxies and PROXIES:
+                chosen_proxy = get_random_proxy()
+                proxy_dict = {
+                    "http": chosen_proxy,
+                    "https": chosen_proxy
+                }
+
+            logger.info(f"make_request attempt={attempt}, url={url}, params={params}, proxy={proxy_dict}")
+
+            response = requests.get(url, params=params, headers=headers, proxies=proxy_dict, timeout=15)
+            # Raise if not 200
+            response.raise_for_status()
+            return response  # success
+        except Exception as e:
+            logger.warning(f"Request attempt #{attempt} failed: {e}")
+            if attempt < max_retries:
+                sleep(2)  # short sleep before retry
+            else:
+                logger.error(f"All {max_retries} attempts failed for URL={url}")
+                raise
+
+
+@celery_app.task(name="scraper_service.app.tasks.fetch_new_ads")
+def fetch_new_ads():
+    # Query distinct subscribed cities (active subscriptions) from DB
+    sql = """
+    SELECT DISTINCT uf.city
+    FROM user_filters uf
+    JOIN users u ON uf.user_id = u.id
+    WHERE uf.city IS NOT NULL
+      AND (u.subscription_until > now() OR u.free_until > now())
+    """
+    rows = execute_query(sql, fetch=True)
+    if not rows:
+        return
+
+    distinct_cities = [r["city"] for r in rows if r["city"]]
+    for city in distinct_cities:
+        geo_id = map_city_to_geo_id(city)
+        _scrape_ads_for_city(geo_id)
+
+
+def map_city_to_geo_id(city: str) -> int:
+    # Example from your existing code
+    geo_id_mapping = {
+        'Киев': 10009580,
+        'Харьков': 10024345,
+        'Одесса': 10009570,
+        # ...
+    }
+    return geo_id_mapping.get(city, 10009580)  # default to Kyiv or something
+
+
+def _scrape_ads_for_city(geo_id: int):
+    page = 1
+    cutoff_time = datetime.utcnow() - timedelta(minutes=5)
+
+    while True:
+        ads = _scrape_ads_from_page(geo_id, page)
+        if not ads:
+            break
+
+        found_new = False
+        for ad in ads:
+            # parse ad's time, see if it's older than cutoff, etc.
+            # insert in DB if new
+            inserted_id = _insert_ad_if_new(ad)
+            if inserted_id:
+                found_new = True
+
+        if not found_new:
+            # if none were inserted or they're older than cutoff
+            break
+        page += 1
+
+
+def _scrape_ads_from_page(geo_id, page):
+    base_url = "https://flatfy.ua/api/realties"
+    params = {
+        "currency": "UAH",
+        "geo_id": geo_id,
+        "group_collapse": 1,
+        "has_eoselia": "false",
+        "is_without_fee": "false",
+        "lang": "uk",
+        "page": page,
+        "price_sqm_currency": "UAH",
+        "section_id": 2,
+        "sort": "relevance"
+    }
+    try:
+        response = make_request(base_url, params=params, max_retries=5, use_proxies=False, rotate_user_agents=True)
+        data = response.json()
+        return data.get("data", [])
+    except Exception as e:
+        # log error
+        return []
 
 
 def _upload_image_to_s3(image_url, ad_unique_id):
