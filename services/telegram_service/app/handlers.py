@@ -4,21 +4,27 @@ import logging
 from aiogram import types
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters import Text
-from aiogram.utils.markdown import escape_md
 from aiogram.types import ParseMode
-from .bot import dp
+from .bot import dp, bot
 from .states import FilterStates
 from .keyboards import (
     property_type_keyboard, city_keyboard, rooms_keyboard,
     price_keyboard, listing_date_keyboard, confirmation_keyboard,
     edit_parameters_keyboard
 )
-from common.db.models import get_or_create_user, update_user_filter, get_user_filters
-from common.utils.logger import logger
+from common.db.models import get_or_create_user, update_user_filter, get_user_filters, disable_subscription_for_user, \
+    enable_subscription_for_user, get_subscription_data_for_user, get_subscription_until_for_user
 from common.celery_app import celery_app  # Импортируем общий Celery экземпляр
+from .keyboards import (
+    main_menu_keyboard,
+    subscription_menu_keyboard,
+    how_to_use_keyboard,
+    tech_support_keyboard
+)
 
 # Список доступных городов (можно получить из базы данных или конфигурации)
 AVAILABLE_CITIES = ["Киев", "Харьков", "Одесса", "Днепр", "Львов"]
+
 
 @dp.message_handler(commands=['start'])
 async def start_command(message: types.Message, state: FSMContext):
@@ -36,6 +42,136 @@ async def start_command(message: types.Message, state: FSMContext):
     # Сохраняем user_db_id в состоянии, чтобы использовать его позже
     await state.update_data(user_db_id=user_db_id, telegram_id=telegram_id)
 
+
+@dp.message_handler(commands=['menu'])
+async def show_main_menu(message: types.Message):
+    await message.answer(
+        "Выбери опцию:",
+        reply_markup=main_menu_keyboard()
+    )
+
+
+"""
+CREATE TABLE IF NOT EXISTS user_filters (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    property_type VARCHAR(50),
+    city VARCHAR(255),
+    rooms_count INTEGER[] NOT NULL,
+    price_min NUMERIC,
+    price_max NUMERIC,
+    listing_date VARCHAR(50)
+);
+
+"""
+
+
+@dp.callback_query_handler(lambda c: c.data == 'menu_my_subscription')
+async def my_subscription_handler(callback_query: types.CallbackQuery):
+    # You can fetch subscription status from DB:
+    user_id = callback_query.from_user.id
+    subscription_data = get_subscription_data_for_user(user_id)
+    subscription_valid_until = get_subscription_until_for_user(user_id)
+    text = f"""Детали подписки:
+    - Город: {subscription_data['city']}
+    - Тип недвижимости: {subscription_data['property_type']}
+    - Количество комнат: {subscription_data['rooms_count']}
+    - Цена: {subscription_data['price_min']}-{subscription_data['price_max']}
+    
+    Подписка активна до {subscription_valid_until}
+    """
+    await bot.send_message(
+        chat_id=callback_query.message.chat.id,
+        text=text,
+        reply_markup=subscription_menu_keyboard()
+    )
+
+
+@dp.callback_query_handler(lambda c: c.data == 'subs_disable')
+async def disable_subscription_handler(callback_query: types.CallbackQuery):
+    user_id = callback_query.from_user.id
+    # Call your DB method to disable subscription
+    disable_subscription_for_user(user_id)
+    await bot.send_message(
+        chat_id=callback_query.message.chat.id,
+        text="Ваша подписка отключена.",
+        reply_markup=main_menu_keyboard()
+    )
+
+
+@dp.callback_query_handler(lambda c: c.data == 'subs_enable')
+async def enable_subscription_handler(callback_query: types.CallbackQuery):
+    user_id = callback_query.from_user.id
+    enable_subscription_for_user(user_id)
+    await bot.send_message(
+        chat_id=callback_query.message.chat.id,
+        text="Ваша подписка включена.",
+        reply_markup=main_menu_keyboard()
+    )
+
+
+@dp.callback_query_handler(lambda c: c.data == 'subs_edit')
+async def edit_subscription_handler(callback_query: types.CallbackQuery):
+    user_id = callback_query.from_user.id
+    await bot.send_message(
+        chat_id=callback_query.message.chat.id,
+        text="Давайте отредактируем параметры вашей подписки...",
+        # Maybe show some filters, etc.
+    )
+
+
+@dp.callback_query_handler(lambda c: c.data == 'subs_back')
+async def subscription_back_handler(callback_query: types.CallbackQuery):
+    await bot.send_message(
+        chat_id=callback_query.message.chat.id,
+        text="Возвращаемся в главное меню...",
+        reply_markup=main_menu_keyboard()
+    )
+
+
+@dp.callback_query_handler(lambda c: c.data == 'menu_how_to_use')
+async def how_to_use_handler(callback_query: types.CallbackQuery):
+    text = (
+        "Как использовать:\n\n"
+        "1. Настройте параметры фильтра.\n"
+        "2. Включите подписку.\n"
+        "3. Получайте уведомления.\n\n"
+        "Если у вас есть дополнительные вопросы, свяжитесь со службой поддержки!"
+    )
+    await bot.send_message(
+        chat_id=callback_query.message.chat.id,
+        text=text,
+        reply_markup=how_to_use_keyboard()
+    )
+
+
+@dp.callback_query_handler(lambda c: c.data == 'contact_support')
+async def contact_support_handler(callback_query: types.CallbackQuery):
+    # If you want them to message an admin directly, you can provide a link or instructions.
+    # Or you can set up a separate "Support chat" logic. For simplicity:
+    await bot.send_message(
+        chat_id=callback_query.message.chat.id,
+        text="Напишите свой вопрос, и наша служба поддержки ответит вам в ближайшее время..."
+    )
+
+
+@dp.callback_query_handler(lambda c: c.data == 'menu_tech_support')
+async def menu_tech_support_handler(callback_query: types.CallbackQuery):
+    # Same as above or you can show a new keyboard
+    await bot.send_message(
+        chat_id=callback_query.message.chat.id,
+        text="Обращение в техподдержку. Пожалуйста, введите свой вопрос.",
+        reply_markup=tech_support_keyboard()
+    )
+
+
+@dp.callback_query_handler(lambda c: c.data == 'main_menu')
+async def back_to_main_menu_handler(callback_query: types.CallbackQuery):
+    await bot.send_message(
+        chat_id=callback_query.message.chat.id,
+        text="Главное меню:",
+        reply_markup=main_menu_keyboard()
+    )
 
 
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith('property_type_'),
@@ -110,7 +246,6 @@ async def process_rooms(callback_query: types.CallbackQuery, state: FSMContext):
     else:
         await callback_query.message.answer("Неизвестная команда.")
         await callback_query.answer()
-
 
 
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith('price_'), state=FilterStates.waiting_for_price)
@@ -248,6 +383,7 @@ async def subscribe(callback_query: types.CallbackQuery, state: FSMContext):
         'notifier_service.app.tasks.notify_user_with_ads',
         args=[telegram_id, filters]
     )
+
 
 @dp.callback_query_handler(Text(startswith="edit_"), state=FilterStates.waiting_for_confirmation)
 async def handle_edit(callback_query: types.CallbackQuery, state: FSMContext):
