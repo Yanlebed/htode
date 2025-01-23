@@ -1,6 +1,5 @@
 # services/scraper_service/app/tasks.py
 
-import os
 import boto3
 import logging
 import random
@@ -8,7 +7,7 @@ from time import sleep
 import requests
 from datetime import datetime, timedelta, timezone
 from common.db.database import execute_query
-from common.celery_app import celery_app  # or from .celery_app import celery_app
+from common.celery_app import celery_app
 
 # You might have some config with base URLs or any other relevant settings
 
@@ -30,13 +29,11 @@ USER_AGENTS = [
     "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:100.0) Gecko/20100101 Firefox/100.0",
     "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 ...",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ...",
-    # Add more user agents here...
 ]
 
 PROXIES = [
     "http://proxy1.example:8080",
     "http://proxy2.example:8080",
-    # add more if you have them
 ]
 
 GEO_ID_MAPPING = {10000020: 'Львов', 10000060: 'Днепр', 10003908: 'Винница', 10007252: 'Житомир',
@@ -166,7 +163,7 @@ def _scrape_ads_from_page(geo_id, page):
         data = response.json()
         return data.get("data", [])
     except Exception as e:
-        # log error
+        logging.error(f"Failed to scrape page {page} for geo_id {geo_id}: {e}")
         return []
 
 

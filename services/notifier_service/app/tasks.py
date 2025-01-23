@@ -99,7 +99,6 @@ def notify_user_with_ads(telegram_id, user_filters):
     Scrapes ads based on user_filters and sends them to the user.
     """
     try:
-        logging.info(f"Notifying user with ads: {telegram_id}")
         # Конструирование URL на основе фильтров пользователя
         base_url = 'https://flatfy.ua/api/realties'
         params = {
@@ -113,9 +112,8 @@ def notify_user_with_ads(telegram_id, user_filters):
             'price_min': str(int(user_filters.get('price_min')) * 40),
             'price_sqm_currency': 'UAH',
             'section_id': 2,
-            'sort': 'relevance'
+            'sort': 'insert_time'
         }
-        logging.info(f"User filters: {user_filters}")
         # Обработка 'room_count' как списка
         room_counts = user_filters.get('rooms')
         if room_counts:
@@ -125,7 +123,6 @@ def notify_user_with_ads(telegram_id, user_filters):
         else:
             params.pop('room_count', None)
 
-        logging.info(f"Params: {params}")
         # Обработка 'insert_date_min' на основе 'listing_date'
         listing_date = user_filters.get('listing_date')
         if listing_date == 'today':
@@ -141,8 +138,6 @@ def notify_user_with_ads(telegram_id, user_filters):
         else:
             insert_date_min = '1970-01-01'
         params['insert_date_min'] = insert_date_min
-
-        logging.info(f"Params after processing: {params}")
 
         # Маппинг 'city' на 'geo_id'
         city = user_filters.get('city')
@@ -172,8 +167,6 @@ def notify_user_with_ads(telegram_id, user_filters):
         geo_id = geo_id_mapping.get(city, 10009580)  # По умолчанию Киев
         params['geo_id'] = geo_id
 
-        logging.info(f"Params after processing geo: {params}")
-
         # Выполнение GET-запроса
         headers = {
             "User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:134.0) Gecko/20100101 Firefox/134.0",
@@ -181,22 +174,17 @@ def notify_user_with_ads(telegram_id, user_filters):
             "Accept-Language": "en-US,en;q=0.5",
             "Accept-Encoding": "gzip, deflate, br, zstd",
         }
-        logging.info(f"Headers: {headers}")
-        logging.info(f"Base URL: {base_url}")
-        logging.info("Sending request...")
 
         response = requests.get(base_url, params=params, headers=headers)
         if response.status_code != 200:
             logger.error(f"Не удалось получить объявления: {response.status_code}")
             return
-        logging.info("Request sent successfully.")
         data = response.json().get('data', [])[:2]
         for ad in data:
             # Извлечение URL изображения
             ad_unique_id = ad.get("id")
             image_url = None
             images = ad.get('images', [])
-            logging.info('Images are ready. Extracting image URL...')
             if images:
                 first_image_id = images[0].get('image_id')
                 image_url = f"https://market-images.lunstatic.net/lun-ua/720/720/images/{first_image_id}.webp"  # Проверьте правильность шаблона URL
@@ -206,19 +194,15 @@ def notify_user_with_ads(telegram_id, user_filters):
                 s3_image_url = _upload_image_to_s3(image_url, ad_unique_id)
 
             text = (
-                f"💰 Цена: {ad.get('price')} USD\n"
-                f"🏙️ Город: {city}\n"
-                f"📍 Адрес: {ad.get('header')}\n"
-                f"🛏️ Комнат: {ad.get('room_count')}\n"
-                f"📐 Площадь: {ad.get('area_total')} кв.м.\n"
-                f"🏢 Этаж: {ad.get('floor')} из {ad.get('floor_count')}\n"
-                f"📝 Описание: {ad.get('text')[:100]}...\n"
+                f"💰 Ціна: {int(ad.get('price'))} грн.\n"
+                f"🏙️ Місто: {city}\n"
+                f"📍 Адреса: {ad.get('header')}\n"
+                f"🛏️ Кіл-сть кімнат: {ad.get('room_count')}\n"
+                f"📐 Площа: {ad.get('area_total')} кв.м.\n"
+                f"🏢 Поверх: {ad.get('floor')} из {ad.get('floor_count')}\n"
+                f"📝 Опис: {ad.get('text')[:75]}...\n"
             )
-            logging.info('Text is ready.')
             resource_url = f"https://flatfy.ua/uk/redirect/{ad.get('id')}"
-            logging.info(f"Text: {text}")
-            logging.info(f"Image URL: {s3_image_url or image_url}")
-            logging.info(f"Resource URL: {resource_url}")
 
             # Отправляем задачу на отправку сообщения пользователю
             celery_app.send_task(
