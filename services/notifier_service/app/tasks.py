@@ -4,10 +4,23 @@ from common.celery_app import celery_app
 from common.db.models import find_users_for_ad
 from common.utils.logger import logger
 import requests
-import datetime
+from datetime import datetime, timezone, timedelta
 import logging
+import boto3
 
 TELEGRAM_SEND_TASK = "telegram_service.app.tasks.send_message_task"
+
+S3_BUCKET = "htodebucket"  # os.getenv("AWS_S3_BUCKET", "your-bucket-name")
+S3_PREFIX = "ads-images/"  # os.getenv("AWS_S3_BUCKET_PREFIX", "")
+CLOUDFRONT_DOMAIN = "https://d3h86hbbdu2c7h.cloudfront.net"  # os.getenv("AWS_CLOUDFRONT_DOMAIN")  # if you have one
+# DDOS protection
+
+s3_client = boto3.client(
+    's3',
+    aws_access_key_id="AKIAS74TMCYOZMLDIA6K",  # os.getenv("AWS_ACCESS_KEY_ID"),
+    aws_secret_access_key="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",  # os.getenv("AWS_SECRET_ACCESS_KEY"),
+    region_name="eu-west-1"  # os.getenv("AWS_DEFAULT_REGION", "us-east-1")
+)
 
 
 @celery_app.task(name="notifier_service.app.tasks.sort_and_notify_new_ads")
@@ -41,40 +54,43 @@ def _notify_user_about_ad(user_id, ad, s3_image_url):
     )
 
 
-@celery_app.task(name="notifier_service.app.tasks.sort_and_notify_new_ads")
-def sort_and_notify_new_ads(new_ads):
+def _upload_image_to_s3(image_url, ad_unique_id):
     """
-    Receives a list of newly inserted ads from the scraper,
-    checks which users want each ad, and sends them via
-    Telegram or another channel.
+    Downloads the image from `image_url` and uploads to S3.
+    Returns the final S3 (or CloudFront) URL if successful, else None.
     """
-    logging.info("Received new ads for sorting/notification...")
+    try:
+        # 1) Download image
+        resp = requests.get(image_url, timeout=10)
+        resp.raise_for_status()
+        image_data = resp.content
 
-    for ad in new_ads:
-        users_to_notify = find_users_for_ad(ad)
-        # `find_users_for_ad` is in your models.py and returns user_ids
-        logging.info(f"Ad {ad['id']} -> Notifying users: {users_to_notify}")
-        for user_id in users_to_notify:
-            _notify_user_about_ad(user_id, ad)
+        # 2) Create a unique key for S3
+        # E.g. "ads-images/<ad_id>_<image_id>.jpg"
+        image_id = image_url.split("/")[-1].split('.')[0]
+        file_extension = image_url.split(".")[-1][:4]  # naive approach, e.g. "jpg", "png", "webp"
+        s3_key = f"{S3_PREFIX}{ad_unique_id}_{image_id}.{file_extension}"
 
+        # 3) Upload to S3
+        s3_client.put_object(
+            Bucket=S3_BUCKET,
+            Key=s3_key,
+            Body=image_data,
+            ContentType="image/jpeg",  # or detect from file_extension
+            # ACL='public-read'  # or your desired ACL/policy
+        )
 
-def _notify_user_about_ad(user_id, ad):
-    """
-    Actual logic to create a message and enqueue a Celery task
-    for telegram sending or direct call if you prefer.
-    """
-    from common.celery_app import celery_app as shared_app
-    message_text = (
-        f"Новое объявление!\n"
-        f"Заголовок: {ad.get('title')}\n"
-        f"Цена: {ad.get('price')}\n"
-        # ...
-    )
-    # Here we assume you have a Telegram send task:
-    shared_app.send_task(
-        "telegram_service.app.tasks.send_message_task",
-        args=[user_id, message_text]
-    )
+        # 4) Build final URL
+        if CLOUDFRONT_DOMAIN:
+            final_url = f"{CLOUDFRONT_DOMAIN}/{s3_key}"
+        else:
+            final_url = f"https://{S3_BUCKET}.s3.amazonaws.com/{s3_key}"
+
+        return final_url
+
+    except Exception as e:
+        logger.error(f"Failed to upload image to S3: {e}")
+        return None
 
 
 @celery_app.task(name="notifier_service.app.tasks.notify_user_with_ads")
@@ -113,13 +129,13 @@ def notify_user_with_ads(telegram_id, user_filters):
         # Обработка 'insert_date_min' на основе 'listing_date'
         listing_date = user_filters.get('listing_date')
         if listing_date == 'today':
-            insert_date_min = datetime.datetime.now().strftime('%Y-%m-%d')
+            insert_date_min = datetime.now().strftime('%Y-%m-%d')
         elif listing_date == '3_days' or listing_date == 'days':  # Добавили 'days'
-            insert_date_min = (datetime.datetime.now() - datetime.timedelta(days=3)).strftime('%Y-%m-%d')
+            insert_date_min = (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d')
         elif listing_date == 'week':
-            insert_date_min = (datetime.datetime.now() - datetime.timedelta(days=7)).strftime('%Y-%m-%d')
+            insert_date_min = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
         elif listing_date == 'month':
-            insert_date_min = (datetime.datetime.now() - datetime.timedelta(days=30)).strftime('%Y-%m-%d')
+            insert_date_min = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
         elif listing_date == 'all_time':
             insert_date_min = '1970-01-01'
         else:
@@ -177,6 +193,7 @@ def notify_user_with_ads(telegram_id, user_filters):
         data = response.json().get('data', [])[:2]
         for ad in data:
             # Извлечение URL изображения
+            ad_unique_id = ad.get("id")
             image_url = None
             images = ad.get('images', [])
             logging.info('Images are ready. Extracting image URL...')
@@ -184,11 +201,14 @@ def notify_user_with_ads(telegram_id, user_filters):
                 first_image_id = images[0].get('image_id')
                 image_url = f"https://market-images.lunstatic.net/lun-ua/720/720/images/{first_image_id}.webp"  # Проверьте правильность шаблона URL
 
+            s3_image_url = None
+            if image_url:
+                s3_image_url = _upload_image_to_s3(image_url, ad_unique_id)
+
             text = (
-                f"📍 *{ad.get('title')}*\n"
-                f"💰 Цена: {ad.get('price')} UAH\n"
-                f"🏙️ Город: {ad.get('city')}\n"
-                f"📍 Адрес: {ad.get('geo')}\n"
+                f"💰 Цена: {ad.get('price')} USD\n"
+                f"🏙️ Город: {city}\n"
+                f"📍 Адрес: {ad.get('header')}\n"
                 f"🛏️ Комнат: {ad.get('room_count')}\n"
                 f"📐 Площадь: {ad.get('area_total')} кв.м.\n"
                 f"🏢 Этаж: {ad.get('floor')} из {ad.get('floor_count')}\n"
@@ -197,13 +217,13 @@ def notify_user_with_ads(telegram_id, user_filters):
             logging.info('Text is ready.')
             resource_url = f"https://flatfy.ua/uk/redirect/{ad.get('id')}"
             logging.info(f"Text: {text}")
-            logging.info(f"Image URL: {image_url}")
+            logging.info(f"Image URL: {s3_image_url or image_url}")
             logging.info(f"Resource URL: {resource_url}")
 
             # Отправляем задачу на отправку сообщения пользователю
             celery_app.send_task(
                 TELEGRAM_SEND_TASK,
-                args=[telegram_id, text, image_url, resource_url]
+                args=[telegram_id, text, s3_image_url or image_url, resource_url]
             )
 
     except Exception as e:

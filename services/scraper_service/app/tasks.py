@@ -6,7 +6,7 @@ import logging
 import random
 from time import sleep
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from common.db.database import execute_query
 from common.celery_app import celery_app  # or from .celery_app import celery_app
 
@@ -14,15 +14,16 @@ from common.celery_app import celery_app  # or from .celery_app import celery_ap
 
 logger = logging.getLogger(__name__)
 
-S3_BUCKET = os.getenv("AWS_S3_BUCKET", "your-bucket-name")
-S3_PREFIX = os.getenv("AWS_S3_BUCKET_PREFIX", "")
-CLOUDFRONT_DOMAIN = os.getenv("AWS_CLOUDFRONT_DOMAIN")  # if you have one
+S3_BUCKET = "htodebucket"  # os.getenv("AWS_S3_BUCKET", "your-bucket-name")
+S3_PREFIX = "ads-images/"  # os.getenv("AWS_S3_BUCKET_PREFIX", "")
+CLOUDFRONT_DOMAIN = "https://d3h86hbbdu2c7h.cloudfront.net"  # os.getenv("AWS_CLOUDFRONT_DOMAIN")  # if you have one
+# DDOS protection
 
 s3_client = boto3.client(
     's3',
-    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-    region_name=os.getenv("AWS_DEFAULT_REGION", "us-east-1")
+    aws_access_key_id="AKIAS74TMCYOZMLDIA6K",  # os.getenv("AWS_ACCESS_KEY_ID"),
+    aws_secret_access_key="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",  # os.getenv("AWS_SECRET_ACCESS_KEY"),
+    region_name="eu-west-1"  # os.getenv("AWS_DEFAULT_REGION", "us-east-1")
 )
 
 USER_AGENTS = [
@@ -37,6 +38,12 @@ PROXIES = [
     "http://proxy2.example:8080",
     # add more if you have them
 ]
+
+GEO_ID_MAPPING = {10000020: 'Львов', 10000060: 'Днепр', 10003908: 'Винница', 10007252: 'Житомир',
+                  10007846: 'Запорожье', 10008717: 'Ивано-Франковск', 10009570: 'Одесса', 10009580: 'Киев',
+                  10011240: 'Кропивницкий', 10012656: 'Луцк', 10013982: 'Николаев', 10018885: 'Полтава',
+                  10019894: 'Ровно', 10022820: 'Сумы', 10023304: 'Тернополь', 10023968: 'Ужгород',
+                  10024345: 'Харьков', 10024395: 'Херсон', 10024474: 'Хмельницкий'}
 
 
 def get_random_user_agent():
@@ -119,7 +126,7 @@ def map_city_to_geo_id(city: str) -> int:
 
 def _scrape_ads_for_city(geo_id: int):
     page = 1
-    cutoff_time = datetime.utcnow() - timedelta(minutes=5)
+    cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=5)
 
     while True:
         ads = _scrape_ads_from_page(geo_id, page)
@@ -130,7 +137,7 @@ def _scrape_ads_for_city(geo_id: int):
         for ad in ads:
             # parse ad's time, see if it's older than cutoff, etc.
             # insert in DB if new
-            inserted_id = _insert_ad_if_new(ad)
+            inserted_id = _insert_ad_if_new(ad, geo_id, cutoff_time)
             if inserted_id:
                 found_new = True
 
@@ -152,7 +159,7 @@ def _scrape_ads_from_page(geo_id, page):
         "page": page,
         "price_sqm_currency": "UAH",
         "section_id": 2,
-        "sort": "relevance"
+        "sort": "insert_time"
     }
     try:
         response = make_request(base_url, params=params, max_retries=5, use_proxies=False, rotate_user_agents=True)
@@ -175,10 +182,10 @@ def _upload_image_to_s3(image_url, ad_unique_id):
         image_data = resp.content
 
         # 2) Create a unique key for S3
-        # E.g. "ads-images/<ad_id>_<timestamp>.jpg"
-        timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+        # E.g. "ads-images/<ad_id>_<image_id>.jpg"
+        image_id = image_url.split("/")[-1].split('.')[0]
         file_extension = image_url.split(".")[-1][:4]  # naive approach, e.g. "jpg", "png", "webp"
-        s3_key = f"{S3_PREFIX}{ad_unique_id}_{timestamp}.{file_extension}"
+        s3_key = f"{S3_PREFIX}{ad_unique_id}_{image_id}.{file_extension}"
 
         # 3) Upload to S3
         s3_client.put_object(
@@ -186,7 +193,7 @@ def _upload_image_to_s3(image_url, ad_unique_id):
             Key=s3_key,
             Body=image_data,
             ContentType="image/jpeg",  # or detect from file_extension
-            ACL='public-read'  # or your desired ACL/policy
+            # ACL='public-read'  # or your desired ACL/policy
         )
 
         # 4) Build final URL
@@ -202,39 +209,52 @@ def _upload_image_to_s3(image_url, ad_unique_id):
         return None
 
 
-def _insert_ad_if_new(ad_data):
+def _insert_ad_if_new(ad_data, geo_id, cutoff_time):
     """
     Inserts ad into DB if it doesn't exist yet (by unique URL or ad ID).
     Returns newly inserted ad_id or None if already existed or error.
     """
-    ad_unique_id = ad_data.get("id")  # or another unique field
+
+    ad_unique_id = str(ad_data.get("id", ""))  # or another unique field
     if not ad_unique_id:
         return None
 
+    last_update_time_str = ad_data.get("download_time") # 2025-01-23T20:13:33+00:00 in the ad_data, and we should +2 hours local
+    if last_update_time_str:
+        last_update_time = datetime.fromisoformat(last_update_time_str)
+        if last_update_time < cutoff_time:
+            return None
+
     # Check if we already have this ad
     check_sql = "SELECT id FROM ads WHERE external_id = %s"
-    existing = execute_query(check_sql, [ad_unique_id], fetchone=True)
+    params = [ad_unique_id]
+    existing = execute_query(check_sql, params, fetchone=True)
     if existing:
         return None  # already have it
 
     # Optional: If the ad_data includes an image URL, upload it to S3
-    image_url = ad_data.get("image_url")
+    image_url = None
+    images = ad_data.get('images', [])
+    if images:
+        first_image_id = images[0].get('image_id')
+        image_url = f"https://market-images.lunstatic.net/lun-ua/720/720/images/{first_image_id}.webp"  # Проверьте правильность шаблона URL
+
     s3_image_url = None
     if image_url:
         s3_image_url = _upload_image_to_s3(image_url, ad_unique_id)
 
     # Insert into DB, including the S3-based URL
     insert_sql = """
-    INSERT INTO ads (external_id, title, city, price, rooms_count, insert_time, created_at, image_url)
-    VALUES (%s, %s, %s, %s, %s, %s, NOW(), %s)
+    INSERT INTO ads (external_id, title, city, price, rooms_count, insert_time, image_url)
+    VALUES (%s, %s, %s, %s, %s, %s, %s)
     RETURNING id
     """
     params = [
         ad_unique_id,
-        ad_data.get("title"),
-        ad_data.get("city"),
+        ad_data.get("title", "N/A"),
+        GEO_ID_MAPPING.get(geo_id),
         ad_data.get("price"),
-        ad_data.get("rooms_count"),
+        ad_data.get("room_count"),
         ad_data.get("insert_time"),  # parse to datetime if needed
         s3_image_url
     ]

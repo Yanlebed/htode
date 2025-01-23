@@ -84,6 +84,7 @@ services:
       AWS_DEFAULT_REGION: "us-east-1"
       AWS_S3_BUCKET: "htodebucket"
       AWS_S3_BUCKET_PREFIX: "ads-images/"
+      CLOUDFRONT_DOMAIN: "https://d3h86hbbdu2c7h.cloudfront.net"
     networks:
       - app_net
     command: celery -A scraper_service.app.celery_app worker --loglevel=info -Q scrape_queue
@@ -109,6 +110,7 @@ services:
       AWS_DEFAULT_REGION: "us-east-1"
       AWS_S3_BUCKET: "htodebucket"
       AWS_S3_BUCKET_PREFIX: "ads-images/"
+      CLOUDFRONT_DOMAIN: "https://d3h86hbbdu2c7h.cloudfront.net"
     networks:
       - app_net
     command: celery -A scraper_service.app.celery_app beat --loglevel=info
