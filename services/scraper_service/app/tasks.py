@@ -114,9 +114,24 @@ def map_city_to_geo_id(city: str) -> int:
     # Example from your existing code
     geo_id_mapping = {
         'Киев': 10009580,
-        'Харьков': 10024345,
         'Одесса': 10009570,
-        # ...
+        'Днепр': 10000060,
+        'Львов': 10000020,
+        'Винница': 10003908,
+        'Житомир': 10007252,
+        'Запорожье': 10007846,
+        'Ивано-Франковск': 10008717,
+        'Кропивницкий': 10011240,
+        'Луцк': 10012656,
+        'Николаев': 10013982,
+        'Полтава': 10018885,
+        'Ровно': 10019894,
+        'Сумы': 10022820,
+        'Тернополь': 10023304,
+        'Ужгород': 10023968,
+        'Харьков': 10024345,
+        'Херсон': 10024395,
+        'Хмельницкий': 10024474,
     }
     return geo_id_mapping.get(city, 10009580)  # default to Kyiv or something
 
@@ -216,7 +231,8 @@ def _insert_ad_if_new(ad_data, geo_id, cutoff_time):
     if not ad_unique_id:
         return None
 
-    last_update_time_str = ad_data.get("download_time") # 2025-01-23T20:13:33+00:00 in the ad_data, and we should +2 hours local
+    last_update_time_str = ad_data.get(
+        "download_time")  # 2025-01-23T20:13:33+00:00 in the ad_data, and we should +2 hours local
     if last_update_time_str:
         last_update_time = datetime.fromisoformat(last_update_time_str)
         if last_update_time < cutoff_time:

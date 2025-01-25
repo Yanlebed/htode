@@ -16,7 +16,7 @@ def send_message_task(user_id, text, image_url=None, resource_url=None):
         buttons = None
         if resource_url:
             buttons = InlineKeyboardMarkup().add(
-                InlineKeyboardButton("Подробнее", url=resource_url)
+                InlineKeyboardButton("Відкрити оголошення", url=resource_url)
             )
 
         try:
