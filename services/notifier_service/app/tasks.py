@@ -33,7 +33,7 @@ def sort_and_notify_new_ads(new_ads):
     logging.info("Received new ads for sorting/notification...")
 
     for ad in new_ads:
-        s3_image_url = ad.get('image_url')
+        s3_image_url = ad.get('image_url') # from DB
         users_to_notify = find_users_for_ad(ad)
         # `find_users_for_ad` is in your models.py and returns user_ids
         logging.info(f"Ad {ad['id']} -> Notifying users: {users_to_notify}")
@@ -43,14 +43,19 @@ def sort_and_notify_new_ads(new_ads):
 
 def _notify_user_about_ad(user_id, ad, s3_image_url):
     from common.celery_app import celery_app as shared_app
-    message_text = (
-        f"Новое объявление!\n"
-        f"Заголовок: {ad.get('title')}\n"
-        # ...
+    text = (
+        f"💰 Ціна: {int(ad.get('price'))} грн.\n"
+        f"🏙️ Місто: {ad.get('city')}\n"
+        f"📍 Адреса: {ad.get('address')}\n"
+        f"🛏️ Кіл-сть кімнат: {ad.get('rooms_count')}\n"
+        f"📐 Площа: {ad.get('square_feet')} кв.м.\n"
+        f"🏢 Поверх: {ad.get('floor')} из {ad.get('total_floors')}\n"
+        f"📝 Опис: {ad.get('description')[:75]}...\n"
     )
+
     shared_app.send_task(
         "telegram_service.app.tasks.send_message_task",
-        args=[user_id, message_text, s3_image_url, ad.get('external_url')]
+        args=[user_id, text, s3_image_url, ad.get('resource_url')]
     )
 
 
@@ -99,7 +104,6 @@ def notify_user_with_ads(telegram_id, user_filters):
     Scrapes ads based on user_filters and sends them to the user.
     """
     try:
-        # Конструирование URL на основе фильтров пользователя
         base_url = 'https://flatfy.ua/api/realties'
         params = {
             'currency': 'UAH',
@@ -114,7 +118,7 @@ def notify_user_with_ads(telegram_id, user_filters):
             'section_id': 2,
             'sort': 'insert_time'
         }
-        # Обработка 'room_count' как списка
+
         room_counts = user_filters.get('rooms')
         if room_counts:
             # flatfy.ua поддерживает несколько параметров room_count
@@ -123,23 +127,6 @@ def notify_user_with_ads(telegram_id, user_filters):
         else:
             params.pop('room_count', None)
 
-        # Обработка 'insert_date_min' на основе 'listing_date'
-        listing_date = user_filters.get('listing_date')
-        if listing_date == 'today':
-            insert_date_min = datetime.now().strftime('%Y-%m-%d')
-        elif listing_date == '3_days' or listing_date == 'days':  # Добавили 'days'
-            insert_date_min = (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d')
-        elif listing_date == 'week':
-            insert_date_min = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
-        elif listing_date == 'month':
-            insert_date_min = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
-        elif listing_date == 'all_time':
-            insert_date_min = '1970-01-01'
-        else:
-            insert_date_min = '1970-01-01'
-        params['insert_date_min'] = insert_date_min
-
-        # Маппинг 'city' на 'geo_id'
         city = user_filters.get('city')
         geo_id_mapping = {
             'Киев': 10009580,
@@ -162,12 +149,10 @@ def notify_user_with_ads(telegram_id, user_filters):
             'Харьков': 10024345,
             'Херсон': 10024395,
             'Хмельницкий': 10024474,
-            # Добавьте другие города и их geo_id
         }
-        geo_id = geo_id_mapping.get(city, 10009580)  # По умолчанию Киев
+        geo_id = geo_id_mapping.get(city, 10009580)
         params['geo_id'] = geo_id
 
-        # Выполнение GET-запроса
         headers = {
             "User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:134.0) Gecko/20100101 Firefox/134.0",
             "Accept": "*/*",
@@ -177,11 +162,10 @@ def notify_user_with_ads(telegram_id, user_filters):
 
         response = requests.get(base_url, params=params, headers=headers)
         if response.status_code != 200:
-            logger.error(f"Не удалось получить объявления: {response.status_code}")
+            logger.error(f"Не вдалося отримати оголошення: {response.status_code}")
             return
-        data = response.json().get('data', [])[:2]
+        data = response.json().get('data', [])
         for ad in data:
-            # Извлечение URL изображения
             ad_unique_id = ad.get("id")
             image_url = None
             images = ad.get('images', [])
@@ -204,7 +188,6 @@ def notify_user_with_ads(telegram_id, user_filters):
             )
             resource_url = f"https://flatfy.ua/uk/redirect/{ad.get('id')}"
 
-            # Отправляем задачу на отправку сообщения пользователю
             celery_app.send_task(
                 TELEGRAM_SEND_TASK,
                 args=[telegram_id, text, s3_image_url or image_url, resource_url]

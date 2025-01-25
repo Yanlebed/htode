@@ -2,4 +2,4 @@
 
 from common.celery_app import celery_app
 
-# Дополнительные настройки, специфичные для telegram_service, если необходимо
+# Додаткові налаштування, специфічні для telegram_service, якщо необхідно

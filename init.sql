@@ -32,5 +32,4 @@ CREATE TABLE IF NOT EXISTS user_filters (
     rooms_count INTEGER[] NOT NULL,
     price_min NUMERIC,
     price_max NUMERIC,
-    listing_date VARCHAR(50)
 );

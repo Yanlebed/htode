@@ -30,10 +30,9 @@ def update_user_filter(user_id, filters):
     rooms_count = filters.get('rooms')  # Это теперь список или None
     price_min = filters.get('price_min')
     price_max = filters.get('price_max')
-    listing_date = filters.get('listing_date')
 
     sql_upsert = """
-    INSERT INTO user_filters (user_id, property_type, city, rooms_count, price_min, price_max, listing_date)
+    INSERT INTO user_filters (user_id, property_type, city, rooms_count, price_min, price_max)
     VALUES (%s, %s, %s, %s, %s, %s, %s)
     ON CONFLICT (user_id)
     DO UPDATE SET
@@ -41,10 +40,9 @@ def update_user_filter(user_id, filters):
         city = EXCLUDED.city,
         rooms_count = EXCLUDED.rooms_count,
         price_min = EXCLUDED.price_min,
-        price_max = EXCLUDED.price_max,
-        listing_date = EXCLUDED.listing_date
+        price_max = EXCLUDED.price_max
     """
-    execute_query(sql_upsert, [user_id, property_type, city, rooms_count, price_min, price_max, listing_date])
+    execute_query(sql_upsert, [user_id, property_type, city, rooms_count, price_min, price_max])
 
 
 def get_user_filters(user_id):
@@ -57,8 +55,9 @@ def find_users_for_ad(ad):
     """
     Возвращает список user_id, которым подходит объявление.
     """
+    logging.info('Looking for users for ad: %s', ad)
     sql = """
-    SELECT u.id AS user_id, uf.property_type, uf.city, uf.rooms_count, uf.price_min, uf.price_max, uf.listing_date
+    SELECT u.id AS user_id, uf.property_type, uf.city, uf.rooms_count, uf.price_min, uf.price_max
     FROM user_filters uf
     JOIN users u ON uf.user_id = u.id
     WHERE
@@ -68,13 +67,6 @@ def find_users_for_ad(ad):
       AND (uf.rooms_count = %s OR uf.rooms_count IS NULL)
       AND (uf.price_min IS NULL OR ad.price >= uf.price_min)
       AND (uf.price_max IS NULL OR ad.price <= uf.price_max)
-      AND (
-            uf.listing_date = 'all_time'
-            OR (uf.listing_date = 'today' AND ad.insert_time >= NOW()::date)
-            OR (uf.listing_date = '3_days' AND ad.insert_time >= NOW()::date - interval '3 days')
-            OR (uf.listing_date = 'week' AND ad.insert_time >= NOW()::date - interval '7 days')
-            OR (uf.listing_date = 'month' AND ad.insert_time >= NOW()::date - interval '30 days')
-          )
     """
     # Предполагается, что в `ads` есть соответствующие поля
     # Выполните SQL-запрос с передачей параметров объявления
@@ -85,12 +77,9 @@ def find_users_for_ad(ad):
     ad_price = ad.get('price')
     ad_insert_time = ad.get('insert_time')
 
-    # Преобразование listing_date для SQL-запроса
-    # Это должно соответствовать формату, который вы используете
-    # Например: 'today', '3_days', 'week', 'month', 'all_time'
-
     # Выполняем SQL-запрос
     rows = execute_query(sql, [ad_property_type, ad_city, ad_rooms, ad_price, ad_price, ad_insert_time], fetch=True)
+    logging.info('Found %s users for ad: %s', len(rows), ad)
     return [row["user_id"] for row in rows]
 
 

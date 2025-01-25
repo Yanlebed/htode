@@ -1,14 +1,42 @@
 # services/telegram_service/app/keyboards.py
+import logging
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+SMALLER_CITIES = {
+    'Чернівці', 'Черкаси', 'Хмельницький', 'Херсон', 'Ужгород',
+    'Тернопіль', 'Суми', 'Рівне', 'Полтава', 'Миколаїв', 'Луцьк',
+    'Кропивницький', 'Вінниця', 'Житомир', 'Запоріжжя', 'Івано-Франківськ'
+    # Add others here if needed
+}
+
+BIGGER_CITIES = {'Харків', 'Дніпро', 'Одеса', 'Львів'}
+
+
+def get_price_ranges(city: str):
+    """
+    Returns a list of (min_price, max_price) tuples
+    for the given city.
+    If max_price is None, it means "more than min_price".
+    """
+    if city == "Київ":
+        # up to 15000, 15000–20000, 20000–30000, more than 30000
+        return [(0, 15000), (15000, 20000), (20000, 30000), (30000, None)]
+    elif city in BIGGER_CITIES:
+        # up to 7000, 7000–10000, 10000–15000, more than 15000
+        return [(0, 7000), (7000, 10000), (10000, 15000), (15000, None)]
+    else:
+        # Default to "smaller" city intervals
+        # up to 5000, 5000–7000, 7000–10000, more than 10000
+        return [(0, 5000), (5000, 7000), (7000, 10000), (10000, None)]
 
 
 def main_menu_keyboard():
     keyboard = InlineKeyboardMarkup()
     keyboard.add(
-        InlineKeyboardButton("Моя подписка", callback_data="menu_my_subscription"),
-        InlineKeyboardButton("Как это работает?", callback_data="menu_how_to_use"),
-        InlineKeyboardButton("Техподдержка", callback_data="menu_tech_support")
+        InlineKeyboardButton("Моя підписка", callback_data="menu_my_subscription"),
+        InlineKeyboardButton("Як це працює?", callback_data="menu_how_to_use"),
+        InlineKeyboardButton("Техпідтримка", callback_data="menu_tech_support")
     )
     return keyboard
 
@@ -16,10 +44,10 @@ def main_menu_keyboard():
 def subscription_menu_keyboard():
     keyboard = InlineKeyboardMarkup()
     keyboard.add(
-        InlineKeyboardButton("Отключить", callback_data="subs_disable"),
-        InlineKeyboardButton("Включить", callback_data="subs_enable"),
-        InlineKeyboardButton("Изменить", callback_data="subs_edit"),
-        InlineKeyboardButton("Вернуться в меню", callback_data="subs_back")
+        InlineKeyboardButton("Відключити", callback_data="subs_disable"),
+        InlineKeyboardButton("Включити", callback_data="subs_enable"),
+        InlineKeyboardButton("Редагувати", callback_data="subs_edit"),
+        InlineKeyboardButton("Назад", callback_data="subs_back")
     )
     return keyboard
 
@@ -27,8 +55,8 @@ def subscription_menu_keyboard():
 def how_to_use_keyboard():
     keyboard = InlineKeyboardMarkup()
     keyboard.add(
-        InlineKeyboardButton("Написать в техподдержку", callback_data="contact_support"),
-        InlineKeyboardButton("Вернуться в меню", callback_data="main_menu")
+        InlineKeyboardButton("Написати у техпідтримку", callback_data="contact_support"),
+        InlineKeyboardButton("Назад", callback_data="main_menu")
     )
     return keyboard
 
@@ -37,7 +65,7 @@ def tech_support_keyboard():
     # Or just go directly to chat, but here's an example
     keyboard = InlineKeyboardMarkup()
     keyboard.add(
-        InlineKeyboardButton("Вернуться в меню", callback_data="main_menu")
+        InlineKeyboardButton("Назад", callback_data="main_menu")
     )
     return keyboard
 
@@ -46,8 +74,8 @@ def property_type_keyboard():
     keyboard = InlineKeyboardMarkup(row_width=1)
     keyboard.add(
         InlineKeyboardButton("Квартира", callback_data="property_type_apartment"),
-        InlineKeyboardButton("Дом", callback_data="property_type_house"),
-        InlineKeyboardButton("Комната", callback_data="property_type_room")
+        InlineKeyboardButton("Будинок", callback_data="property_type_house"),
+        InlineKeyboardButton("Кімната", callback_data="property_type_room")
     )
     return keyboard
 
@@ -70,40 +98,40 @@ def rooms_keyboard(selected_rooms=None):
             InlineKeyboardButton(button_text, callback_data=f"rooms_{rooms}")
         )
     keyboard.add(
-        InlineKeyboardButton("Готово", callback_data="rooms_done"),
-        InlineKeyboardButton("Не важно", callback_data="rooms_any")
+        InlineKeyboardButton("Далі", callback_data="rooms_done"),
+        InlineKeyboardButton("Не важливо", callback_data="rooms_any")
     )
     return keyboard
 
 
-def price_keyboard():
+def price_keyboard(city: str):
+    intervals = get_price_ranges(city)
     keyboard = InlineKeyboardMarkup(row_width=2)
-    keyboard.add(
-        InlineKeyboardButton("До 500$", callback_data="price_0_500"),
-        InlineKeyboardButton("500$ - 1000$", callback_data="price_500_1000"),
-        InlineKeyboardButton("1000$ - 1500$", callback_data="price_1000_1500"),
-        InlineKeyboardButton("Более 1500$", callback_data="price_1500_any")
-    )
-    return keyboard
+    for (low, high) in intervals:
+        if high is None:
+            label = f"Больше {low} UAH"
+            callback_data = f"price_{low}_any"
+        else:
+            # E.g. "0-5000 UAH", "5000-7000 UAH"
+            if low == 0:
+                label = f"До {high} UAH"  # "up to X"
+            else:
+                label = f"{low}-{high} UAH"
+            callback_data = f"price_{low}_{high}"
 
+        keyboard.insert(
+            InlineKeyboardButton(label, callback_data=callback_data)
+        )
 
-def listing_date_keyboard():
-    keyboard = InlineKeyboardMarkup(row_width=1)
-    keyboard.add(
-        InlineKeyboardButton("Сегодня", callback_data="date_today"),
-        InlineKeyboardButton("Последние 3 дня", callback_data="date_3_days"),
-        InlineKeyboardButton("Последняя неделя", callback_data="date_week"),
-        InlineKeyboardButton("Последний месяц", callback_data="date_month"),
-        InlineKeyboardButton("За всё время", callback_data="date_all_time")
-    )
     return keyboard
 
 
 def confirmation_keyboard():
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
-        InlineKeyboardButton("Редактировать параметры", callback_data="edit_parameters"),
-        InlineKeyboardButton("Подписаться на поиск", callback_data="subscribe")
+        InlineKeyboardButton("Розширений пошук", callback_data="advanced_search"),
+        InlineKeyboardButton("Редагувати параметри", callback_data="edit_parameters"),
+        InlineKeyboardButton("Підписатися на пошук", callback_data="subscribe")
     )
     return keyboard
 
@@ -111,11 +139,63 @@ def confirmation_keyboard():
 def edit_parameters_keyboard():
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
-        InlineKeyboardButton("Тип недвижимости", callback_data="edit_property_type"),
-        InlineKeyboardButton("Город", callback_data="edit_city"),
-        InlineKeyboardButton("Количество комнат", callback_data="edit_rooms"),
-        InlineKeyboardButton("Диапазон цен", callback_data="edit_price"),
-        InlineKeyboardButton("Дата размещения", callback_data="edit_listing_date"),
-        InlineKeyboardButton("Отмена", callback_data="cancel_edit")
+        InlineKeyboardButton("Тип нерухомості", callback_data="edit_property_type"),
+        InlineKeyboardButton("Місто", callback_data="edit_city"),
+        InlineKeyboardButton("Кількість кімнат", callback_data="edit_rooms"),
+        InlineKeyboardButton("Діапазон цін", callback_data="edit_price"),
+        InlineKeyboardButton("Відмінити", callback_data="cancel_edit")
     )
     return keyboard
+
+
+def floor_keyboard(floor_opts=None):
+    """
+    floor_opts is a dict with boolean flags like:
+      "not_first", "not_last", "floor_max_6", "floor_max_10", "floor_max_17", "only_last"
+    We'll return an InlineKeyboard with toggles for each.
+    """
+    if floor_opts is None:
+        floor_opts = {
+            "not_first": False,
+            "not_last": False,
+            "floor_max_6": False,
+            "floor_max_10": False,
+            "floor_max_17": False,
+            "only_last": False
+        }
+
+    def mark(label, active):
+        return f"{'✅ ' if active else ''}{label}"
+
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.insert(InlineKeyboardButton(
+        mark("Не перший", floor_opts["not_first"]),
+        callback_data="toggle_floor_not_first"
+    ))
+    kb.insert(InlineKeyboardButton(
+        mark("Не останній", floor_opts["not_last"]),
+        callback_data="toggle_floor_not_last"
+    ))
+
+    kb.add(InlineKeyboardButton(
+        mark("До 6 поверху", floor_opts.get("floor_max_6", False)),
+        callback_data="toggle_floor_6"
+    ))
+    kb.insert(InlineKeyboardButton(
+        mark("До 10 поверху", floor_opts.get("floor_max_10", False)),
+        callback_data="toggle_floor_10"
+    ))
+    kb.insert(InlineKeyboardButton(
+        mark("До 17 поверху", floor_opts.get("floor_max_17", False)),
+        callback_data="toggle_floor_17"
+    ))
+
+    kb.add(InlineKeyboardButton(
+        mark("Останній", floor_opts.get("only_last", False)),
+        callback_data="toggle_floor_only_last"
+    ))
+
+    # add "Back" or "Done" button
+    kb.add(InlineKeyboardButton("Готово", callback_data="floor_done"))
+
+    return kb

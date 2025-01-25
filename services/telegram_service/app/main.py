@@ -4,14 +4,14 @@ import logging
 from aiogram import executor
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from .bot import dp
-from . import handlers  # Регистрация хендлеров
+from . import handlers  # Реєстрація хендлерів
 from aiogram.dispatcher import Dispatcher
 
-# Настройка логирования
+# Налаштування логування
 logging.basicConfig(level=logging.INFO)
 
 def main():
-    # Запускаем бота (long polling)
+    # Запускаємо бота (long polling)
     executor.start_polling(dp, skip_updates=True)
 
 if __name__ == "__main__":
