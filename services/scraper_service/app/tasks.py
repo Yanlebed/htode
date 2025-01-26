@@ -41,7 +41,8 @@ PROXIES = [
 #                   10011240: 'Кропивницкий', 10012656: 'Луцк', 10013982: 'Николаев', 10018885: 'Полтава',
 #                   10019894: 'Ровно', 10022820: 'Сумы', 10023304: 'Тернополь', 10023968: 'Ужгород',
 #                   10024345: 'Харьков', 10024395: 'Херсон', 10024474: 'Хмельницкий'}
-GEO_ID_MAPPING = {10000020: 'Львів', 10009580: 'Київ'}
+# GEO_ID_MAPPING = {10000020: 'Львів', 10009580: 'Київ'}
+GEO_ID_MAPPING = {10000020: 'Львів'}
 
 
 def get_random_user_agent():
@@ -138,7 +139,7 @@ def map_city_to_geo_id(city: str) -> int:
 
 
 def _scrape_ads_for_city(geo_id: int):
-    property_types = {'apartment': 2, 'house': 4}
+    property_types = {'apartment': 2}#, 'house': 4}
     cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=5)
 
     for property_type, section_id in property_types.items():
@@ -224,6 +225,12 @@ def _upload_image_to_s3(image_url, ad_unique_id):
         return None
 
 
+def insert_ad_images(ad_id, image_urls):
+    sql = "INSERT INTO ad_images (ad_id, image_url) VALUES (%s, %s)"
+    for url in image_urls:
+        execute_query(sql, (ad_id, url))
+
+
 def _insert_ad_if_new(ad_data, geo_id, property_type, cutoff_time):
     """
     Inserts ad into DB if it doesn't exist yet (by unique URL or ad ID).
@@ -251,20 +258,22 @@ def _insert_ad_if_new(ad_data, geo_id, property_type, cutoff_time):
         return None  # already have it
 
     # Optional: If the ad_data includes an image URL, upload it to S3
-    image_url = None
     images = ad_data.get('images', [])
-    if images:
-        first_image_id = images[0].get('image_id')
-        image_url = f"https://market-images.lunstatic.net/lun-ua/720/720/images/{first_image_id}.webp"  # Проверьте правильность шаблона URL
+    uploaded_image_urls = []  # list of S3 URLs
+    for image_info in images:
+        image_id = image_info.get("image_id")
+        if image_id:
+            original_url = f"https://market-images.lunstatic.net/lun-ua/720/720/images/{image_id}.webp"
+            s3_url = _upload_image_to_s3(original_url, ad_unique_id)
+            if s3_url:
+                uploaded_image_urls.append(s3_url)
 
-    s3_image_url = None
-    if image_url:
-        s3_image_url = _upload_image_to_s3(image_url, ad_unique_id)
+    logging.info('Inserting ad into DB!!!')
 
     # Insert into DB, including the S3-based URL
     insert_sql = """
-    INSERT INTO ads (external_id, property_type, city, address, price, square_feet, rooms_count, floor, total_floors, insert_time, image_url, description, resource_url)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    INSERT INTO ads (external_id, property_type, city, address, price, square_feet, rooms_count, floor, total_floors, insert_time, description, resource_url)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT (external_id) DO UPDATE
   SET property_type = EXCLUDED.property_type,
       city = EXCLUDED.city,
@@ -275,7 +284,6 @@ ON CONFLICT (external_id) DO UPDATE
       floor = EXCLUDED.floor,
       total_floors = EXCLUDED.total_floors,
       insert_time = EXCLUDED.insert_time,
-      image_url = EXCLUDED.image_url,
       description = EXCLUDED.description,
       resource_url = EXCLUDED.resource_url
       RETURNING id;
@@ -291,12 +299,12 @@ ON CONFLICT (external_id) DO UPDATE
         ad_data.get("floor"),
         ad_data.get("floor_count"),
         ad_data.get("insert_time"),
-        s3_image_url,
         ad_data.get("text"),
         ad_data.get("resource_url")
     ]
 
     row = execute_query(insert_sql, params, fetchone=True)
+    insert_ad_images(ad_unique_id, uploaded_image_urls)
     return row["id"] if row else None
 
 
@@ -361,8 +369,8 @@ def initial_30_day_scrape():
 
 
 def scrape_30_days_for_city(geo_id):
-    cutoff_date = datetime.now(timezone.utc) - timedelta(days=2)
-    property_types = {'apartment': 2, 'house': 4}
+    cutoff_date = datetime.now(timezone.utc) - timedelta(days=1)
+    property_types = {'apartment': 2}#, 'house': 4}
     for property_type, section_id in property_types.items():
         page_number = 1
         while True:
@@ -436,20 +444,21 @@ def insert_ad(ad_data, property_type, geo_id):
     ad_unique_id = ad_data.get("id")
     city = GEO_ID_MAPPING.get(geo_id)
     resource_url = f"https://flatfy.ua/uk/redirect/{ad_unique_id}"
-
-    image_url = None
     images = ad_data.get('images', [])
-    if images:
-        first_image_id = images[0].get('image_id')
-        image_url = f"https://market-images.lunstatic.net/lun-ua/720/720/images/{first_image_id}.webp"
+    uploaded_image_urls = []  # list of S3 URLs
+    for image_info in images:
+        image_id = image_info.get("image_id")
+        if image_id:
+            original_url = f"https://market-images.lunstatic.net/lun-ua/720/720/images/{image_id}.webp"
+            s3_url = _upload_image_to_s3(original_url, ad_unique_id)
+            if s3_url:
+                uploaded_image_urls.append(s3_url)
 
-    s3_image_url = None
-    if image_url:
-        s3_image_url = _upload_image_to_s3(image_url, ad_unique_id)
+    logging.info('Inserting ad into DB...')
 
     insert_sql = """
-        INSERT INTO ads (external_id, property_type, city, address, price, square_feet, rooms_count, floor, total_floors, insert_time, image_url, description, resource_url)
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO ads (external_id, property_type, city, address, price, square_feet, rooms_count, floor, total_floors, insert_time, description, resource_url)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     ON CONFLICT (external_id) DO UPDATE
       SET property_type = EXCLUDED.property_type,
           city = EXCLUDED.city,
@@ -460,9 +469,9 @@ def insert_ad(ad_data, property_type, geo_id):
           floor = EXCLUDED.floor,
           total_floors = EXCLUDED.total_floors,
           insert_time = EXCLUDED.insert_time,
-          image_url = EXCLUDED.image_url,
           description = EXCLUDED.description,
           resource_url = EXCLUDED.resource_url
+    RETURNING id
         """
     params = [
         ad_unique_id,
@@ -475,8 +484,10 @@ def insert_ad(ad_data, property_type, geo_id):
         ad_data.get("floor"),
         ad_data.get("floor_count"),
         ad_data.get("insert_time"),
-        s3_image_url,
         ad_data.get("text"),
         resource_url
     ]
-    execute_query(insert_sql, params)
+    row = execute_query(insert_sql, params, fetchone=True)
+    ad_id = row["id"]  # this is the internal ads.id
+    insert_ad_images(ad_id, uploaded_image_urls)
+    # insert_ad_images(ad_unique_id, uploaded_image_urls)

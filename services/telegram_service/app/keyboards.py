@@ -75,7 +75,6 @@ def property_type_keyboard():
     keyboard.add(
         InlineKeyboardButton("Квартира", callback_data="property_type_apartment"),
         InlineKeyboardButton("Будинок", callback_data="property_type_house"),
-        InlineKeyboardButton("Кімната", callback_data="property_type_room")
     )
     return keyboard
 

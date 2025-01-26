@@ -15,7 +15,6 @@ CREATE TABLE IF NOT EXISTS ads (
     rooms_count INTEGER NOT NULL,
     city VARCHAR(255) NOT NULL,
     insert_time TIMESTAMP,
-    image_url TEXT,
     address TEXT,
     square_feet NUMERIC,
     floor INTEGER,
@@ -23,6 +22,13 @@ CREATE TABLE IF NOT EXISTS ads (
     description TEXT,
     resource_url TEXT
 );
+
+CREATE TABLE IF NOT EXISTS ad_images (
+  id SERIAL PRIMARY KEY,
+  ad_id BIGINT REFERENCES ads(id) ON DELETE CASCADE,
+  image_url TEXT NOT NULL
+);
+
 
 CREATE TABLE IF NOT EXISTS user_filters (
     id SERIAL PRIMARY KEY,

@@ -287,7 +287,7 @@ async def process_basic_params(callback_query: types.CallbackQuery, state: FSMCo
     # Получение всех данных из состояния
     user_data = await state.get_data()
     property_type = user_data.get('property_type')
-    mapping_property = {"apartment": "Квартира", "house": "Будинок", "room": "Кімната"}
+    mapping_property = {"apartment": "Квартира", "house": "Будинок"}
     ua_lang_property_type = mapping_property.get(property_type, "")
 
     city = user_data.get('city')
@@ -380,7 +380,8 @@ def fetch_ads_for_period(filters, days, limit=3):
         ORDER BY insert_time DESC
         LIMIT {limit}
     """
-
+    logging.info('SQL: %s', sql)
+    logging.info('Params: %s', params)
     rows = execute_query(sql, params, fetch=True)
     return rows
 
@@ -397,6 +398,14 @@ def build_ad_text(ad_row):
         f"📝 Опис: {ad_row.get('description')[:75]}...\n"
     )
     return text
+
+
+def get_ad_images(ad):
+    ad_id = ad.get('id')
+    sql_check = "SELECT * FROM ad_images WHERE ad_id = %s"
+    rows = execute_query(sql_check, [ad_id], fetch=True)
+    if rows:
+        return [row["image_url"] for row in rows]
 
 
 @dp.callback_query_handler(Text(startswith="subscribe"), state=FilterStates.waiting_for_confirmation)
@@ -421,6 +430,9 @@ async def subscribe(callback_query: types.CallbackQuery, state: FSMContext):
         'price_max': user_data.get('price_max'),
     }
 
+    logging.info('Filters')
+    logging.info(filters)
+
     # Збереження фільтрів у базі даних
     update_user_filter(user_db_id, filters)
 
@@ -429,6 +441,7 @@ async def subscribe(callback_query: types.CallbackQuery, state: FSMContext):
 
     # 2) Now do the multi-step check in local DB
     #    We'll define a helper function below or inline.
+    logging.info('Fetch ads for period')
     final_ads = []
     for days_limit in [1, 3, 7, 14, 30]:
         ads = fetch_ads_for_period(filters, days_limit, limit=3)
@@ -445,6 +458,7 @@ async def subscribe(callback_query: types.CallbackQuery, state: FSMContext):
         )
         # Send them (as 3 separate messages, or combine them)
         for ad in final_ads:
+            s3_image_links = get_ad_images(ad)
             text = build_ad_text(ad)
             # await callback_query.message.answer(text)
 
@@ -452,13 +466,13 @@ async def subscribe(callback_query: types.CallbackQuery, state: FSMContext):
             # For example, 'image_url' might be `ad.get("image_url")`
             # or 's3_image_url'.
             # 'resource_url' might be "https://flatfy.ua/uk/redirect/..."
-            image_url = ad.get("image_url")
             resource_url = ad.get("resource_url")
 
             # Now dispatch the Celery task:
             celery_app.send_task(
-                "telegram_service.app.tasks.send_message_task",
-                args=[telegram_id, text, image_url, resource_url]
+                # "telegram_service.app.tasks.send_message_task",
+                "telegram_service.app.tasks.send_ad_with_photos",
+                args=[telegram_id, text, s3_image_links, resource_url]
             )
     else:
         # We never found 3 ads even in last 30 days
@@ -697,7 +711,7 @@ async def set_without_broker(callback_query: types.CallbackQuery, state: FSMCont
 
 def build_full_summary(data: dict) -> str:
     # property_type_apartment, property_type_house, property_type_room
-    mapping_property = {"apartment": "Квартира", "house": "Будинок", "room": "Кімната"}
+    mapping_property = {"apartment": "Квартира", "house": "Будинок"}
     property_type = data.get("property_type", "")
     ua_lang_property_type = mapping_property.get(property_type, "")
 

@@ -2,13 +2,16 @@
 
 from common.celery_app import celery_app
 from common.db.models import find_users_for_ad
+from common.db.database import execute_query
 from common.utils.logger import logger
 import requests
 from datetime import datetime, timezone, timedelta
 import logging
 import boto3
 
-TELEGRAM_SEND_TASK = "telegram_service.app.tasks.send_message_task"
+# TELEGRAM_SEND_TASK = "telegram_service.app.tasks.send_message_task"
+TELEGRAM_SEND_TASK = "telegram_service.app.tasks.send_ad_with_photos"
+
 
 S3_BUCKET = "htodebucket"  # os.getenv("AWS_S3_BUCKET", "your-bucket-name")
 S3_PREFIX = "ads-images/"  # os.getenv("AWS_S3_BUCKET_PREFIX", "")
@@ -22,6 +25,12 @@ s3_client = boto3.client(
     region_name="eu-west-1"  # os.getenv("AWS_DEFAULT_REGION", "us-east-1")
 )
 
+def get_ad_images(ad):
+    ad_id = ad.get('id')
+    sql_check = "SELECT * FROM ad_images WHERE ad_id = %s"
+    rows = execute_query(sql_check, [ad_id], fetch=True)
+    if rows:
+        return [row["image_url"] for row in rows]
 
 @celery_app.task(name="notifier_service.app.tasks.sort_and_notify_new_ads")
 def sort_and_notify_new_ads(new_ads):
@@ -33,15 +42,15 @@ def sort_and_notify_new_ads(new_ads):
     logging.info("Received new ads for sorting/notification...")
 
     for ad in new_ads:
-        s3_image_url = ad.get('image_url') # from DB
+        s3_image_urls = get_ad_images(ad)
         users_to_notify = find_users_for_ad(ad)
         # `find_users_for_ad` is in your models.py and returns user_ids
         logging.info(f"Ad {ad['id']} -> Notifying users: {users_to_notify}")
         for user_id in users_to_notify:
-            _notify_user_about_ad(user_id, ad, s3_image_url)
+            _notify_user_about_ad(user_id, ad, s3_image_urls)
 
 
-def _notify_user_about_ad(user_id, ad, s3_image_url):
+def _notify_user_about_ad(user_id, ad, s3_image_urls):
     from common.celery_app import celery_app as shared_app
     text = (
         f"💰 Ціна: {int(ad.get('price'))} грн.\n"
@@ -54,8 +63,9 @@ def _notify_user_about_ad(user_id, ad, s3_image_url):
     )
 
     shared_app.send_task(
-        "telegram_service.app.tasks.send_message_task",
-        args=[user_id, text, s3_image_url, ad.get('resource_url')]
+        # "telegram_service.app.tasks.send_message_task",
+        "telegram_service.app.tasks.send_ad_with_photos",
+        args=[user_id, text, s3_image_urls, ad.get('resource_url')]
     )
 
 
@@ -104,6 +114,7 @@ def notify_user_with_ads(telegram_id, user_filters):
     Scrapes ads based on user_filters and sends them to the user.
     """
     try:
+        logging.info('Starting to notify user with ads...')
         base_url = 'https://flatfy.ua/api/realties'
         params = {
             'currency': 'UAH',
@@ -118,7 +129,7 @@ def notify_user_with_ads(telegram_id, user_filters):
             'section_id': 2,
             'sort': 'insert_time'
         }
-
+        logging.info('Params: ' + str(params))
         room_counts = user_filters.get('rooms')
         if room_counts:
             # flatfy.ua поддерживает несколько параметров room_count
@@ -149,6 +160,7 @@ def notify_user_with_ads(telegram_id, user_filters):
             'Херсон': 10024395,
             'Хмельницький': 10024474,
         }
+        logging.info('City: ' + city)
         geo_id = geo_id_mapping.get(city, 10009580)
         params['geo_id'] = geo_id
 
@@ -164,18 +176,21 @@ def notify_user_with_ads(telegram_id, user_filters):
             logger.error(f"Не вдалося отримати оголошення: {response.status_code}")
             return
         data = response.json().get('data', [])
+        logging.info('Received data.')
         for ad in data:
             ad_unique_id = ad.get("id")
-            image_url = None
+            logging.info('Ad id is: ' + ad_unique_id)
             images = ad.get('images', [])
-            if images:
-                first_image_id = images[0].get('image_id')
-                image_url = f"https://market-images.lunstatic.net/lun-ua/720/720/images/{first_image_id}.webp"  # Проверьте правильность шаблона URL
-
-            s3_image_url = None
-            if image_url:
-                s3_image_url = _upload_image_to_s3(image_url, ad_unique_id)
-
+            logging.info('Images received.')
+            uploaded_image_urls = []  # list of S3 URLs
+            for image_info in images:
+                image_id = image_info.get("image_id")
+                if image_id:
+                    original_url = f"https://market-images.lunstatic.net/lun-ua/720/720/images/{image_id}.webp"
+                    s3_url = _upload_image_to_s3(original_url, ad_unique_id)
+                    if s3_url:
+                        uploaded_image_urls.append(s3_url)
+            logging.info('Uploaded images.')
             text = (
                 f"💰 Ціна: {int(ad.get('price'))} грн.\n"
                 f"🏙️ Місто: {city}\n"
@@ -189,7 +204,7 @@ def notify_user_with_ads(telegram_id, user_filters):
 
             celery_app.send_task(
                 TELEGRAM_SEND_TASK,
-                args=[telegram_id, text, s3_image_url or image_url, resource_url]
+                args=[telegram_id, text, uploaded_image_urls, resource_url]
             )
 
     except Exception as e:
