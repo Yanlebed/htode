@@ -33,7 +33,7 @@ def update_user_filter(user_id, filters):
 
     sql_upsert = """
     INSERT INTO user_filters (user_id, property_type, city, rooms_count, price_min, price_max)
-    VALUES (%s, %s, %s, %s, %s, %s, %s)
+    VALUES (%s, %s, %s, %s, %s, %s)
     ON CONFLICT (user_id)
     DO UPDATE SET
         property_type = EXCLUDED.property_type,

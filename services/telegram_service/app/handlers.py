@@ -37,9 +37,11 @@ async def start_command(message: types.Message, state: FSMContext):
     user_db_id = get_or_create_user(telegram_id)  # Отримуємо внутрішній id користувача
 
     await message.answer(
-        "Привіт! Я бот з пошуку оголошень.\n"
-        "У вас зараз активний безкоштовний період 7 днів.\n"
-        "Давайте налаштуємо ваші параметри пошуку.",
+        "Привіт!👋 Я бот з пошуку оголошень.\n"
+        "Зі мною легко і швидко знайти квартиру, будинок або кімнату для оренди.\n"
+        "У тебе зараз активний безкоштовний період 7 днів.\n"
+        "Давайте налаштуємо твої параметри пошуку.\n"
+        "Обери те, що тебе цікавить:\n",
         reply_markup=property_type_keyboard()
     )
     await FilterStates.waiting_for_property_type.set()
@@ -77,10 +79,10 @@ async def my_subscription_handler(callback_query: types.CallbackQuery):
     subscription_data = get_subscription_data_for_user(user_id)
     subscription_valid_until = get_subscription_until_for_user(user_id)
     text = f"""Деталі підписки:
-     - Місто: {subscription_data['city']}
-     - Тип нерухомості: {subscription_data['property_type']}
-     - Кількість кімнат: {subscription_data['rooms_count']}
-     - Ціна: {subscription_data['price_min']}-{subscription_data['price_max']}
+     - 🏙️ Місто: {subscription_data['city']}
+     - 🏷 Тип нерухомості: {subscription_data['property_type']}
+     - 🛏️ Кількість кімнат: {subscription_data['rooms_count']}
+     - 💰 Ціна: {subscription_data['price_min']}-{subscription_data['price_max']}
 
      Підписка активна до {subscription_valid_until}
      """
@@ -185,7 +187,7 @@ async def process_property_type(callback_query: types.CallbackQuery, state: FSMC
     await state.update_data(property_type=property_type)
 
     await callback_query.message.answer(
-        "Оберіть місто:",
+        "🏙️ Оберіть місто:",
         reply_markup=city_keyboard(AVAILABLE_CITIES)
     )
     await FilterStates.waiting_for_city.set()
@@ -201,7 +203,7 @@ async def process_city(callback_query: types.CallbackQuery, state: FSMContext):
     await state.update_data(city=city)
 
     await callback_query.message.answer(
-        "Виберіть кількість кімнат (можна обрати декілька):",
+        "🛏️ Виберіть кількість кімнат (можна обрати декілька):",
         reply_markup=rooms_keyboard()
     )
     await FilterStates.waiting_for_rooms.set()
@@ -220,7 +222,7 @@ async def process_rooms(callback_query: types.CallbackQuery, state: FSMContext):
             await callback_query.message.answer("Ви не обрали кількість кімнат.")
             return
         await callback_query.message.answer(
-            "Виберіть діапазон цін:",
+            "💰 Виберіть діапазон цін (грн):",
             reply_markup=price_keyboard(city=city)
         )
         await FilterStates.waiting_for_price.set()
@@ -228,7 +230,7 @@ async def process_rooms(callback_query: types.CallbackQuery, state: FSMContext):
     elif data == 'rooms_any':
         await state.update_data(rooms=None)
         await callback_query.message.answer(
-            "Виберіть діапазон цін:",
+            "💰 Виберіть діапазон цін (грн):",
             reply_markup=price_keyboard(city=city)
         )
         await FilterStates.waiting_for_price.set()
@@ -279,13 +281,15 @@ async def process_price(callback_query: types.CallbackQuery, state: FSMContext):
     await callback_query.answer()
 
 
-
-@dp.callback_query_handler(lambda c: c.data and c.data.startswith('confirmation_'), state=FilterStates.waiting_for_basic_params)
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith('confirmation_'),
+                           state=FilterStates.waiting_for_basic_params)
 async def process_basic_params(callback_query: types.CallbackQuery, state: FSMContext):
     # Получение всех данных из состояния
-    logging.info('process_basic_params: state: %s', await state.get_data())
     user_data = await state.get_data()
-    property_type = user_data.get('property_type').capitalize()
+    property_type = user_data.get('property_type')
+    mapping_property = {"apartment": "Квартира", "house": "Будинок", "room": "Кімната"}
+    ua_lang_property_type = mapping_property.get(property_type, "")
+
     city = user_data.get('city')
     rooms = ', '.join(map(str, user_data.get('rooms'))) if user_data.get('rooms') else 'Не важливо'
 
@@ -293,25 +297,25 @@ async def process_basic_params(callback_query: types.CallbackQuery, state: FSMCo
     price_min = user_data.get('price_min')
     price_max = user_data.get('price_max')
     if price_min and price_max:
-        price_range = f"{price_min}-{price_max} грн."
+        price_range = f"{price_min}-{price_max}"
     elif price_min and not price_max:
-        price_range = f"Більше {price_min} грн."
+        price_range = f"Більше {price_min}"
     elif not price_min and price_max:
-        price_range = f"До {price_max} грн."
+        price_range = f"До {price_max}"
     else:
         price_range = "Не важливо"
 
     summary = (
         f"**Обрані параметри пошуку:**\n"
-        f"Тип нерухомості: {property_type}\n"
-        f"Місто: {city}\n"
-        f"Кількість кімнат: {rooms}\n"
-        f"Діапазон цін: {price_range}\n"
+        f"🏷 Тип нерухомості: {ua_lang_property_type}\n"
+        f"🏙️ Місто: {city}\n"
+        f"🛏️ Кількість кімнат: {rooms}\n"
+        f"💰 Діапазон цін: {price_range} грн.\n"
     )
 
     # Екранування спеціальних символів у повідомленні Markdown
     from aiogram.utils.markdown import escape_md
-    summary_escaped = escape_md(summary)
+    summary_escaped = escape_md(summary).replace('\\', '')
 
     await callback_query.message.answer(
         summary_escaped,
@@ -325,10 +329,74 @@ async def process_basic_params(callback_query: types.CallbackQuery, state: FSMCo
 @dp.callback_query_handler(Text(startswith="edit_parameters"), state=FilterStates.waiting_for_confirmation)
 async def edit_parameters(callback_query: types.CallbackQuery, state: FSMContext):
     await callback_query.message.answer(
-        "Выберите параметр для редактирования:",
+        "Оберіть параметр для редагування:",
         reply_markup=edit_parameters_keyboard()
     )
     await callback_query.answer()
+
+
+def fetch_ads_for_period(filters, days, limit=3):
+    """
+    Query your local ads table, matching the user’s filters,
+    for ads from the last `days` days. Return up to `limit` ads.
+    """
+    # We assume you have a function `execute_query(sql, params, fetch=True)`
+    where_clauses = []
+    params = []
+
+    if filters.get('city'):
+        where_clauses.append("city = %s")
+        params.append(filters['city'])
+
+    if filters.get('property_type'):
+        where_clauses.append("property_type = %s")
+        params.append(filters['property_type'])
+
+    if filters.get('rooms') is not None:
+        # filters['rooms'] is a list, so let's match any in that list
+        # E.g. rooms_count is stored as integer in "ads" table
+        # We'll check "rooms_count = ANY(...)"
+        where_clauses.append("rooms_count = ANY(%s)")
+        params.append(filters['rooms'])
+
+    if filters.get('price_min') is not None:
+        where_clauses.append("price >= %s")
+        params.append(filters['price_min'])
+
+    if filters.get('price_max') is not None:
+        where_clauses.append("price <= %s")
+        params.append(filters['price_max'])
+
+    # Now add the time window
+    where_clauses.append("insert_time >= NOW() - interval '%s day'")
+    params.append(days)
+
+    # Build final WHERE
+    where_sql = " AND ".join(where_clauses)
+    sql = f"""
+        SELECT *
+        FROM ads
+        WHERE {where_sql}
+        ORDER BY insert_time DESC
+        LIMIT {limit}
+    """
+
+    rows = execute_query(sql, params, fetch=True)
+    return rows
+
+
+def build_ad_text(ad_row):
+    # For example:
+    text = (
+        f"💰 Ціна: {int(ad_row.get('price'))} грн.\n"
+        f"🏙️ Місто: {ad_row.get('city')}\n"
+        f"📍 Адреса: {ad_row.get('address')}\n"
+        f"🛏️ Кіл-сть кімнат: {ad_row.get('rooms_count')}\n"
+        f"📐 Площа: {ad_row.get('square_feet')} кв.м.\n"
+        f"🏢 Поверх: {ad_row.get('floor')} из {ad_row.get('total_floors')}\n"
+        f"📝 Опис: {ad_row.get('description')[:75]}...\n"
+    )
+    return text
 
 
 @dp.callback_query_handler(Text(startswith="subscribe"), state=FilterStates.waiting_for_confirmation)
@@ -356,12 +424,58 @@ async def subscribe(callback_query: types.CallbackQuery, state: FSMContext):
     # Збереження фільтрів у базі даних
     update_user_filter(user_db_id, filters)
 
+    # 1) Let user know subscription is set
     await callback_query.message.answer("Ви успішно підписалися на пошук оголошень!")
-    await callback_query.message.answer("А поки будуть з’являтися нові оголошення, ось вам оголошення за сьогодні:")
+
+    # 2) Now do the multi-step check in local DB
+    #    We'll define a helper function below or inline.
+    final_ads = []
+    for days_limit in [1, 3, 7, 14, 30]:
+        ads = fetch_ads_for_period(filters, days_limit, limit=3)
+        if len(ads) >= 3:
+            final_ads = ads
+            # We found enough ads => break out
+            break
+
+    if final_ads:
+        # We found >=3 ads in last days_limit
+        message_ending = 'день' if days_limit == 1 else 'днів'
+        await callback_query.message.answer(
+            f"Ось вам актуальні оголошення за останні {days_limit} {message_ending}:"
+        )
+        # Send them (as 3 separate messages, or combine them)
+        for ad in final_ads:
+            text = build_ad_text(ad)
+            # await callback_query.message.answer(text)
+
+            # We assume 'image_url' and 'resource_url' exist in your DB row.
+            # For example, 'image_url' might be `ad.get("image_url")`
+            # or 's3_image_url'.
+            # 'resource_url' might be "https://flatfy.ua/uk/redirect/..."
+            image_url = ad.get("image_url")
+            resource_url = ad.get("resource_url")
+
+            # Now dispatch the Celery task:
+            celery_app.send_task(
+                "telegram_service.app.tasks.send_message_task",
+                args=[telegram_id, text, image_url, resource_url]
+            )
+    else:
+        # We never found 3 ads even in last 30 days
+        await callback_query.message.answer(
+            "Ваші параметри фільтру настільки унікальні, що майже немає оголошень навіть за останній місяць.\n"
+            "Спробуйте розширити параметри пошуку або зачекайте. Ми сповістимо, щойно з’являться нові оголошення."
+        )
+
+    # 3) Optionally say: "Ми також будемо надсилати всі майбутні..."
+    await callback_query.message.answer("Ми будемо надсилати вам нові оголошення, щойно вони з’являтимуться!")
+
+    # 4) End the state
     await state.finish()
     await callback_query.answer()
 
-    # Надсилання завдання notify_user_with_ads через загальний Celery екземпляр
+    # 5) Optional: send a task to do further real-time scraping or notification
+    #    (Though you just gave them "existing" ads from the DB.)
     celery_app.send_task(
         'notifier_service.app.tasks.notify_user_with_ads',
         args=[telegram_id, filters]
@@ -370,20 +484,19 @@ async def subscribe(callback_query: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query_handler(Text(startswith="edit_"), state=FilterStates.waiting_for_confirmation)
 async def handle_edit(callback_query: types.CallbackQuery, state: FSMContext):
-    logging.info('handle_edit: callback_query: %s', callback_query)
     edit_field = callback_query.data.split('_', 1)[1]
     user_data = await state.get_data()
     city = user_data.get('city')
 
     if edit_field == "property_type":
         await callback_query.message.answer(
-            "Оберіть тип нерухомості:",
+            "🏷 Оберіть тип нерухомості:",
             reply_markup=property_type_keyboard()
         )
         await FilterStates.waiting_for_property_type.set()
     elif edit_field == "city":
         await callback_query.message.answer(
-            "Оберіть місто:",
+            "🏙️ Оберіть місто:",
             reply_markup=city_keyboard(AVAILABLE_CITIES)
         )
         await FilterStates.waiting_for_city.set()
@@ -391,19 +504,19 @@ async def handle_edit(callback_query: types.CallbackQuery, state: FSMContext):
         user_data = await state.get_data()
         selected_rooms = user_data.get('rooms', [])
         await callback_query.message.answer(
-            "Виберіть кількість кімнат (можна вибрати декілька):",
+            "🛏️ Виберіть кількість кімнат (можна вибрати декілька):",
             reply_markup=rooms_keyboard(selected_rooms)
         )
         await FilterStates.waiting_for_rooms.set()
     elif edit_field == "price":
         await callback_query.message.answer(
-            "Виберіть діапазон цін:",
+            "💰 Виберіть діапазон цін (грн):",
             reply_markup=price_keyboard(city=city)
         )
         await FilterStates.waiting_for_price.set()
     elif edit_field == "floor":
         # call your function to handle floor editing
-        await callback_query.message.answer("!!!Налаштуйте поверх:", reply_markup=floor_keyboard())
+        await callback_query.message.answer("🏢 Налаштуйте поверх:", reply_markup=floor_keyboard())
         # optionally change state, etc.
     elif edit_field == "cancel_edit":
         await callback_query.message.answer("Редагування скасовано.", reply_markup=confirmation_keyboard())
@@ -534,22 +647,22 @@ async def set_last_floor(callback_query: types.CallbackQuery, state: FSMContext)
 async def edit_pets_allowed_handler(callback_query: types.CallbackQuery, state: FSMContext):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(
-        InlineKeyboardButton("Так (yes)", callback_data="pets_allowed_yes"),
-        InlineKeyboardButton("Ні (no)", callback_data="pets_allowed_no"),
-        InlineKeyboardButton("Деякі (some)", callback_data="pets_allowed_some"),
+        InlineKeyboardButton("Так", callback_data="pets_allowed_yes"),
+        InlineKeyboardButton("Ні", callback_data="pets_allowed_no"),
     )
     keyboard.add(InlineKeyboardButton("До списку параметрів", callback_data="return_to_advanced_menu"))
 
-    await callback_query.message.answer("Чи дозволені тварини?", reply_markup=keyboard)
+    await callback_query.message.answer("🐶🐈🐹 Чи дозволено з тваринами?", reply_markup=keyboard)
     await callback_query.answer()
 
 
 @dp.callback_query_handler(lambda c: c.data.startswith("pets_allowed_"), state="*")
 async def set_pets_allowed(callback_query: types.CallbackQuery, state: FSMContext):
     value = callback_query.data.split("_")[-1]  # yes / no / some
+    mapped_values = {'yes': 'Так', 'no': 'Ні'}
+    ua_lang_value = mapped_values.get(value)
     await state.update_data(pets_allowed_full=value)
-
-    await callback_query.message.answer(f"Обрано: {value}")
+    await callback_query.message.answer(f'Обрано: "{ua_lang_value}"')
     await show_advanced_options(callback_query.message, state)
     await callback_query.answer()
 
@@ -577,17 +690,25 @@ async def set_without_broker(callback_query: types.CallbackQuery, state: FSMCont
         await state.update_data(without_broker=None)  # or just remove param
         text = "Усі оголошення"
 
-    await callback_query.message.answer(text)
+    await callback_query.message.answer(f'Обрано: "{text}"')
     await show_advanced_options(callback_query.message, state)
     await callback_query.answer()
 
 
 def build_full_summary(data: dict) -> str:
+    # property_type_apartment, property_type_house, property_type_room
+    mapping_property = {"apartment": "Квартира", "house": "Будинок", "room": "Кімната"}
     property_type = data.get("property_type", "")
+    ua_lang_property_type = mapping_property.get(property_type, "")
+
     city = data.get("city", "")
     rooms = data.get("rooms", [])  # list
-    price_min = data.get("price_min")
-    price_max = data.get("price_max")
+    price_min = data.get("price_min", "")
+    price_max = data.get("price_max", "")
+    logging.info('price_min: ')
+    logging.info(price_min)
+    logging.info('price_max: ')
+    logging.info(price_max)
 
     floor_max = data.get("floor_max")
     is_not_first_floor = data.get("is_not_first_floor")
@@ -597,40 +718,39 @@ def build_full_summary(data: dict) -> str:
 
     # build lines
     lines = []
-    lines.append(f"Тип нерухомості: {property_type}")
-    lines.append(f"Місто: {city}")
-    lines.append(f"Кімнат: {', '.join(map(str, rooms)) if rooms else 'Не важливо'}")
+    lines.append(f"🏷 Тип нерухомості: {ua_lang_property_type}")
+    lines.append(f"🏙️ Місто: {city}")
+    lines.append(f"🛏️ Кількість кімнат: {', '.join(map(str, rooms)) if rooms else 'Не важливо'}")
 
     # Price range
     if price_min and price_max:
-        lines.append(f"Ціновий діапазон: {price_min} - {price_max} UAH")
+        price_range = f"від {price_min} до {price_max}"
+        lines.append(f"💰 Ціновий діапазон: {price_range} грн")
     elif price_min and not price_max:
-        lines.append(f"Від {price_min} UAH")
+        lines.append(f"від {price_min} грн")
     elif price_max and not price_min:
-        lines.append(f"До {price_max} UAH")
+        lines.append(f"до {price_max} грн")
     else:
-        lines.append("Ціна: не важливо")
+        lines.append("💰 Ціна: не важливо")
 
     # ADVANCED
     if floor_max:
-        lines.append(f"Поверхи до: {floor_max}")
+        lines.append(f"🏢 Поверхи до: {floor_max}")
     if is_not_first_floor == "yes":
-        lines.append("Не перший поверх")
+        lines.append("🏢 Не перший поверх")
     elif is_not_first_floor == "no":
-        lines.append("Перший поверх дозволено")
+        lines.append("🏢 Перший поверх дозволено")
 
     if last_floor == "yes":
-        lines.append("Тільки останній поверх")
+        lines.append("🏢 Тільки останній поверх")
     elif last_floor == "no":
-        lines.append("Останній поверх виключено")
+        lines.append("🏢 Не останній поверх")
 
     if pets_allowed_full:
-        lines.append(f"Тварини: {pets_allowed_full}")
+        lines.append("🐶🐈🐹 Дозволено з тваринами")
 
     if without_broker == "owner":
-        lines.append("Тільки від власника")
-    else:
-        lines.append("Усі оголошення (брокери + власники)")
+        lines.append("😎 Тільки від власника")
 
     return "**Поточні параметри пошуку**\n" + "\n".join(lines)
 
@@ -656,7 +776,6 @@ async def advanced_done_handler(callback_query: types.CallbackQuery, state: FSMC
 
 @dp.callback_query_handler(lambda c: c.data == "edit_floor", state="*")
 async def edit_floor_handler(callback_query: types.CallbackQuery, state: FSMContext):
-    logging.info('in edit_floor_handler')
     user_data = await state.get_data()
     floor_opts = user_data.get("floor_opts", {
         "not_first": False,
@@ -669,14 +788,13 @@ async def edit_floor_handler(callback_query: types.CallbackQuery, state: FSMCont
     await state.update_data(floor_opts=floor_opts)
 
     kb = floor_keyboard(floor_opts)
-    await callback_query.message.answer("Налаштуйте поверх:", reply_markup=kb)
+    await callback_query.message.answer("🏢 Налаштуйте поверх:", reply_markup=kb)
     await callback_query.answer()
 
 
 @dp.callback_query_handler(lambda c: c.data.startswith("toggle_floor_"), state="*")
 async def toggle_floor_callback(callback_query: types.CallbackQuery, state: FSMContext):
     # e.g. toggle_floor_not_first, toggle_floor_only_last, toggle_floor_6 ...
-    logging.info('in toggle_floor_callback')
     choice = callback_query.data.split("_", 2)[-1]  # "not_first", "not_last", "only_last", "6", "10", "17"
     user_data = await state.get_data()
     floor_opts = user_data.get("floor_opts", {
@@ -709,7 +827,7 @@ async def toggle_floor_callback(callback_query: types.CallbackQuery, state: FSMC
 
     try:
         await callback_query.message.edit_text(
-            "Налаштуйте поверх:",
+            "🏢 Налаштуйте поверх:",
             reply_markup=kb
         )
     except MessageNotModified:
@@ -759,7 +877,7 @@ async def floor_done_handler(callback_query: types.CallbackQuery, state: FSMCont
     await state.update_data(**advanced_data)
 
     # Return to advanced menu or summary
-    await callback_query.message.answer("Зміни збережено.")
+    await callback_query.message.answer("💾 Зміни збережено.")
     # e.g. show advanced menu again
     # or show final summary
 
@@ -779,5 +897,3 @@ async def unsubscribe_callback(callback_query: types.CallbackQuery, state: FSMCo
 
     await callback_query.message.answer("Ви відписалися від розсилки оголошень.")
     await callback_query.answer()
-
-

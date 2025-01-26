@@ -36,11 +36,12 @@ PROXIES = [
     "http://proxy2.example:8080",
 ]
 
-GEO_ID_MAPPING = {10000020: 'Львов', 10000060: 'Днепр', 10003908: 'Винница', 10007252: 'Житомир',
-                  10007846: 'Запорожье', 10008717: 'Ивано-Франковск', 10009570: 'Одесса', 10009580: 'Киев',
-                  10011240: 'Кропивницкий', 10012656: 'Луцк', 10013982: 'Николаев', 10018885: 'Полтава',
-                  10019894: 'Ровно', 10022820: 'Сумы', 10023304: 'Тернополь', 10023968: 'Ужгород',
-                  10024345: 'Харьков', 10024395: 'Херсон', 10024474: 'Хмельницкий'}
+# GEO_ID_MAPPING = {10000020: 'Львов', 10000060: 'Днепр', 10003908: 'Винница', 10007252: 'Житомир',
+#                   10007846: 'Запорожье', 10008717: 'Ивано-Франковск', 10009570: 'Одесса', 10009580: 'Киев',
+#                   10011240: 'Кропивницкий', 10012656: 'Луцк', 10013982: 'Николаев', 10018885: 'Полтава',
+#                   10019894: 'Ровно', 10022820: 'Сумы', 10023304: 'Тернополь', 10023968: 'Ужгород',
+#                   10024345: 'Харьков', 10024395: 'Херсон', 10024474: 'Хмельницкий'}
+GEO_ID_MAPPING = {10000020: 'Львів', 10009580: 'Київ'}
 
 
 def get_random_user_agent():
@@ -113,53 +114,55 @@ def fetch_new_ads():
 def map_city_to_geo_id(city: str) -> int:
     # Example from your existing code
     geo_id_mapping = {
-        'Киев': 10009580,
-        'Одесса': 10009570,
-        'Днепр': 10000060,
-        'Львов': 10000020,
-        'Винница': 10003908,
+        'Київ': 10009580,
+        'Харків': 10000050,
+        'Одеса': 10009570,
+        'Дніпро': 10000060,
+        'Львів': 10000020,
+        'Вінниця': 10003908,
         'Житомир': 10007252,
-        'Запорожье': 10007846,
-        'Ивано-Франковск': 10008717,
-        'Кропивницкий': 10011240,
-        'Луцк': 10012656,
-        'Николаев': 10013982,
+        'Запоріжжя': 10007846,
+        'Івано-Франківськ': 10008717,
+        'Кропивницький': 10011240,
+        'Луцьк': 10012656,
+        'Миколаїв': 10013982,
         'Полтава': 10018885,
-        'Ровно': 10019894,
-        'Сумы': 10022820,
-        'Тернополь': 10023304,
+        'Рівне': 10019894,
+        'Суми': 10022820,
+        'Тернопіль': 10023304,
         'Ужгород': 10023968,
-        'Харьков': 10024345,
         'Херсон': 10024395,
-        'Хмельницкий': 10024474,
+        'Хмельницький': 10024474,
     }
     return geo_id_mapping.get(city, 10009580)  # default to Kyiv or something
 
 
 def _scrape_ads_for_city(geo_id: int):
-    page = 1
+    property_types = {'apartment': 2, 'house': 4}
     cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=5)
 
-    while True:
-        ads = _scrape_ads_from_page(geo_id, page)
-        if not ads:
-            break
+    for property_type, section_id in property_types.items():
+        page = 1
+        while True:
+            ads = _scrape_ads_from_page(geo_id, section_id, page)
+            if not ads:
+                break
 
-        found_new = False
-        for ad in ads:
-            # parse ad's time, see if it's older than cutoff, etc.
-            # insert in DB if new
-            inserted_id = _insert_ad_if_new(ad, geo_id, cutoff_time)
-            if inserted_id:
-                found_new = True
+            found_new = False
+            for ad in ads:
+                # parse ad's time, see if it's older than cutoff, etc.
+                # insert in DB if new
+                inserted_id = _insert_ad_if_new(ad, geo_id, property_type, cutoff_time)
+                if inserted_id:
+                    found_new = True
 
-        if not found_new:
-            # if none were inserted or they're older than cutoff
-            break
-        page += 1
+            if not found_new:
+                # if none were inserted or they're older than cutoff
+                break
+            page += 1
 
 
-def _scrape_ads_from_page(geo_id, page):
+def _scrape_ads_from_page(geo_id, section_id, page):
     base_url = "https://flatfy.ua/api/realties"
     params = {
         "currency": "UAH",
@@ -170,7 +173,7 @@ def _scrape_ads_from_page(geo_id, page):
         "lang": "uk",
         "page": page,
         "price_sqm_currency": "UAH",
-        "section_id": 2,
+        "section_id": section_id,
         "sort": "insert_time"
     }
     try:
@@ -178,7 +181,7 @@ def _scrape_ads_from_page(geo_id, page):
         data = response.json()
         return data.get("data", [])
     except Exception as e:
-        logging.error(f"Failed to scrape page {page} for geo_id {geo_id}: {e}")
+        logging.error(f"Failed to scrape page {page} for section_id {section_id} and geo_id {geo_id}: {e}")
         return []
 
 
@@ -221,13 +224,15 @@ def _upload_image_to_s3(image_url, ad_unique_id):
         return None
 
 
-def _insert_ad_if_new(ad_data, geo_id, cutoff_time):
+def _insert_ad_if_new(ad_data, geo_id, property_type, cutoff_time):
     """
     Inserts ad into DB if it doesn't exist yet (by unique URL or ad ID).
     Returns newly inserted ad_id or None if already existed or error.
     """
 
     ad_unique_id = str(ad_data.get("id", ""))  # or another unique field
+    city = GEO_ID_MAPPING.get(geo_id)
+
     if not ad_unique_id:
         return None
 
@@ -258,19 +263,39 @@ def _insert_ad_if_new(ad_data, geo_id, cutoff_time):
 
     # Insert into DB, including the S3-based URL
     insert_sql = """
-    INSERT INTO ads (external_id, title, city, price, rooms_count, insert_time, image_url)
-    VALUES (%s, %s, %s, %s, %s, %s, %s)
-    RETURNING id
+    INSERT INTO ads (external_id, property_type, city, address, price, square_feet, rooms_count, floor, total_floors, insert_time, image_url, description, resource_url)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+ON CONFLICT (external_id) DO UPDATE
+  SET property_type = EXCLUDED.property_type,
+      city = EXCLUDED.city,
+      address = EXCLUDED.address,
+      price = EXCLUDED.price,
+      square_feet = EXCLUDED.square_feet,
+      rooms_count = EXCLUDED.rooms_count,
+      floor = EXCLUDED.floor,
+      total_floors = EXCLUDED.total_floors,
+      insert_time = EXCLUDED.insert_time,
+      image_url = EXCLUDED.image_url,
+      description = EXCLUDED.description,
+      resource_url = EXCLUDED.resource_url
+      RETURNING id;
     """
     params = [
         ad_unique_id,
-        ad_data.get("title", "N/A"),
-        GEO_ID_MAPPING.get(geo_id),
+        property_type,
+        city,
+        ad_data.get("header"),
         ad_data.get("price"),
+        ad_data.get("area_total"),
         ad_data.get("room_count"),
-        ad_data.get("insert_time"),  # parse to datetime if needed
-        s3_image_url
+        ad_data.get("floor"),
+        ad_data.get("floor_count"),
+        ad_data.get("insert_time"),
+        s3_image_url,
+        ad_data.get("text"),
+        ad_data.get("resource_url")
     ]
+
     row = execute_query(insert_sql, params, fetchone=True)
     return row["id"] if row else None
 
@@ -309,3 +334,149 @@ def handle_new_records(ad_ids):
     )
 
     logger.info("Dispatched new ads to the Notifier for sorting & user matching.")
+
+
+def is_initial_load_done():
+    # Check if the ads table has at least one row
+    sql = "SELECT COUNT(*) as cnt FROM ads"
+    row = execute_query(sql, fetchone=True)
+    count = row["cnt"]
+    return count > 0
+
+
+@celery_app.task(name="scraper_service.app.tasks.initial_30_day_scrape")
+def initial_30_day_scrape():
+    if is_initial_load_done():
+        logging.info("Initial load is already done. Skipping.")
+        return
+
+    for city_id, city_name in GEO_ID_MAPPING.items():
+        logging.info(">>> Starting initial 30-day scrape for " + city_name + " <<<")
+        scrape_30_days_for_city(city_id)
+
+    logging.info("Initial data load completed.")
+
+    # Optionally, mark initial load as done in the DB
+    # e.g., INSERT INTO meta_settings(key, value) VALUES ('initial_load_done', 'true');
+
+
+def scrape_30_days_for_city(geo_id):
+    cutoff_date = datetime.now(timezone.utc) - timedelta(days=2)
+    property_types = {'apartment': 2, 'house': 4}
+    for property_type, section_id in property_types.items():
+        page_number = 1
+        while True:
+            # 1) Do a request
+            data = fetch_page(geo_id, section_id, page_number)
+            if not data:
+                break
+
+            any_newer = False
+            for ad in data:
+                ad_time = parse_date(ad["insert_time"])  # 2025-01-26T10:13:14+00:00
+                if ad_time >= cutoff_date:
+                    # Insert or update DB
+                    insert_ad(ad, property_type, geo_id)
+                    any_newer = True
+                else:
+                    # This ad is older than 30 days
+                    any_newer = False
+                    break
+
+            if not any_newer:
+                break
+
+            page_number += 1
+            sleep(1)  # 1 request per second to avoid overloading the source
+
+
+def fetch_page(geo_id, section_id, page_number):
+    # Implement the logic to fetch a page of ads for a city
+    # Return a list of ad dicts or []
+    try:
+        base_url = 'https://flatfy.ua/api/realties'
+        params = {
+            'geo_id': geo_id,
+            'currency': 'UAH',
+            'group_collapse': 1,
+            'has_eoselia': 'false',
+            'is_without_fee': 'false',
+            'lang': 'uk',
+            'page': page_number,
+            'price_sqm_currency': 'UAH',
+            'section_id': section_id,
+            'sort': 'insert_time'
+        }
+        headers = {
+            "User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:134.0) Gecko/20100101 Firefox/134.0",
+            "Accept": "*/*",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Accept-Encoding": "gzip, deflate, br, zstd",
+        }
+        logger.info(f"Fetching page {page_number} for geo_id {geo_id} and section_id {section_id}...")
+        response = requests.get(base_url, params=params, headers=headers)
+        if response.status_code != 200:
+            logger.error(f"Не вдалося отримати оголошення: {response.status_code}")
+            return
+        data = response.json().get('data', [])
+        return data
+    except Exception as e:
+        logger.error(f"Failed to fetch page {page_number} for geo_id {geo_id}: {e}")
+        return []
+
+
+def parse_date(date_str):
+    # Parse the date string into a datetime object
+    # Example implementation:
+    return datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S+00:00").replace(tzinfo=timezone.utc)
+
+
+def insert_ad(ad_data, property_type, geo_id):
+    # Insert the ad into the ads table
+    ad_unique_id = ad_data.get("id")
+    city = GEO_ID_MAPPING.get(geo_id)
+    resource_url = f"https://flatfy.ua/uk/redirect/{ad_unique_id}"
+
+    image_url = None
+    images = ad_data.get('images', [])
+    if images:
+        first_image_id = images[0].get('image_id')
+        image_url = f"https://market-images.lunstatic.net/lun-ua/720/720/images/{first_image_id}.webp"
+
+    s3_image_url = None
+    if image_url:
+        s3_image_url = _upload_image_to_s3(image_url, ad_unique_id)
+
+    insert_sql = """
+        INSERT INTO ads (external_id, property_type, city, address, price, square_feet, rooms_count, floor, total_floors, insert_time, image_url, description, resource_url)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    ON CONFLICT (external_id) DO UPDATE
+      SET property_type = EXCLUDED.property_type,
+          city = EXCLUDED.city,
+          address = EXCLUDED.address,
+          price = EXCLUDED.price,
+          square_feet = EXCLUDED.square_feet,
+          rooms_count = EXCLUDED.rooms_count,
+          floor = EXCLUDED.floor,
+          total_floors = EXCLUDED.total_floors,
+          insert_time = EXCLUDED.insert_time,
+          image_url = EXCLUDED.image_url,
+          description = EXCLUDED.description,
+          resource_url = EXCLUDED.resource_url
+        """
+    params = [
+        ad_unique_id,
+        property_type,
+        city,
+        ad_data.get("header"),
+        ad_data.get("price"),
+        ad_data.get("area_total"),
+        ad_data.get("room_count"),
+        ad_data.get("floor"),
+        ad_data.get("floor_count"),
+        ad_data.get("insert_time"),
+        s3_image_url,
+        ad_data.get("text"),
+        resource_url
+    ]
+    execute_query(insert_sql, params)
