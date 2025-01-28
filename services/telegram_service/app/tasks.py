@@ -6,11 +6,12 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, MediaGroup
 from common.celery_app import celery_app
 from .bot import bot
 
+logger = logging.getLogger(__name__)
+
 
 @celery_app.task(name="telegram_service.app.tasks.send_message_task")
 def send_message_task(user_id, text, image_url=None, resource_url=None):
     async def send():
-        logger = logging.getLogger(__name__)
         logger.info(f"Sending message to user {user_id}...")
 
         # Build an inline keyboard if resource_url is present
@@ -48,7 +49,6 @@ def send_message_task(user_id, text, image_url=None, resource_url=None):
 @celery_app.task(name="telegram_service.app.tasks.send_ad_with_photos")
 def send_ad_with_photos(user_id, text, image_urls, resource_url=None):
     async def send(message_text):
-        logger = logging.getLogger(__name__)
         logger.info(f"Sending message with photos to user {user_id}...")
 
         # If there's a resource_url, incorporate it into the text

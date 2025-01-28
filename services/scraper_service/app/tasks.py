@@ -7,6 +7,8 @@ from time import sleep
 import requests
 from datetime import datetime, timedelta, timezone
 from common.db.database import execute_query
+from common.utils.s3_utils import _upload_image_to_s3
+
 from common.celery_app import celery_app
 
 # You might have some config with base URLs or any other relevant settings
@@ -182,47 +184,8 @@ def _scrape_ads_from_page(geo_id, section_id, page):
         data = response.json()
         return data.get("data", [])
     except Exception as e:
-        logging.error(f"Failed to scrape page {page} for section_id {section_id} and geo_id {geo_id}: {e}")
+        logger.error(f"Failed to scrape page {page} for section_id {section_id} and geo_id {geo_id}: {e}")
         return []
-
-
-def _upload_image_to_s3(image_url, ad_unique_id):
-    """
-    Downloads the image from `image_url` and uploads to S3.
-    Returns the final S3 (or CloudFront) URL if successful, else None.
-    """
-    try:
-        # 1) Download image
-        resp = requests.get(image_url, timeout=10)
-        resp.raise_for_status()
-        image_data = resp.content
-
-        # 2) Create a unique key for S3
-        # E.g. "ads-images/<ad_id>_<image_id>.jpg"
-        image_id = image_url.split("/")[-1].split('.')[0]
-        file_extension = image_url.split(".")[-1][:4]  # naive approach, e.g. "jpg", "png", "webp"
-        s3_key = f"{S3_PREFIX}{ad_unique_id}_{image_id}.{file_extension}"
-
-        # 3) Upload to S3
-        s3_client.put_object(
-            Bucket=S3_BUCKET,
-            Key=s3_key,
-            Body=image_data,
-            ContentType="image/jpeg",  # or detect from file_extension
-            # ACL='public-read'  # or your desired ACL/policy
-        )
-
-        # 4) Build final URL
-        if CLOUDFRONT_DOMAIN:
-            final_url = f"{CLOUDFRONT_DOMAIN}/{s3_key}"
-        else:
-            final_url = f"https://{S3_BUCKET}.s3.amazonaws.com/{s3_key}"
-
-        return final_url
-
-    except Exception as e:
-        logger.error(f"Failed to upload image to S3: {e}")
-        return None
 
 
 def insert_ad_images(ad_id, image_urls):
@@ -268,7 +231,7 @@ def _insert_ad_if_new(ad_data, geo_id, property_type, cutoff_time):
             if s3_url:
                 uploaded_image_urls.append(s3_url)
 
-    logging.info('Inserting ad into DB!!!')
+    logger.info('Inserting ad into DB!!!')
 
     # Insert into DB, including the S3-based URL
     insert_sql = """
@@ -355,14 +318,14 @@ def is_initial_load_done():
 @celery_app.task(name="scraper_service.app.tasks.initial_30_day_scrape")
 def initial_30_day_scrape():
     if is_initial_load_done():
-        logging.info("Initial load is already done. Skipping.")
+        logger.info("Initial load is already done. Skipping.")
         return
 
     for city_id, city_name in GEO_ID_MAPPING.items():
-        logging.info(">>> Starting initial 30-day scrape for " + city_name + " <<<")
+        logger.info(">>> Starting initial 30-day scrape for " + city_name + " <<<")
         scrape_30_days_for_city(city_id)
 
-    logging.info("Initial data load completed.")
+    logger.info("Initial data load completed.")
 
     # Optionally, mark initial load as done in the DB
     # e.g., INSERT INTO meta_settings(key, value) VALUES ('initial_load_done', 'true');
@@ -454,7 +417,7 @@ def insert_ad(ad_data, property_type, geo_id):
             if s3_url:
                 uploaded_image_urls.append(s3_url)
 
-    logging.info('Inserting ad into DB...')
+    logger.info('Inserting ad into DB...')
 
     insert_sql = """
         INSERT INTO ads (external_id, property_type, city, address, price, square_feet, rooms_count, floor, total_floors, insert_time, description, resource_url)

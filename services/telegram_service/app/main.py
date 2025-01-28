@@ -4,7 +4,7 @@ import logging
 from aiogram import executor
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from .bot import dp
-from . import handlers  # Реєстрація хендлерів
+from .handlers import menu_handlers, basic_handlers, advanced_handlers  # Реєстрація хендлерів
 from aiogram.dispatcher import Dispatcher
 
 # Налаштування логування

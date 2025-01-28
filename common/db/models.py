@@ -4,16 +4,18 @@ from .database import execute_query
 import datetime
 import logging
 
+logger = logging.getLogger(__name__)
+
 
 def get_or_create_user(telegram_id):
-    logging.info("Getting user with telegram id: %s", telegram_id)
+    logger.info("Getting user with telegram id: %s", telegram_id)
     sql_check = "SELECT id FROM users WHERE telegram_id = %s"
     row = execute_query(sql_check, [telegram_id], fetchone=True)
     if row:
-        logging.info("Found user with telegram id: %s", telegram_id)
+        logger.info("Found user with telegram id: %s", telegram_id)
         return row['id']
 
-    logging.info("Creating user with telegram id: %s", telegram_id)
+    logger.info("Creating user with telegram id: %s", telegram_id)
     free_until = (datetime.datetime.now() + datetime.timedelta(days=7)).isoformat()
     sql_insert = """
     INSERT INTO users (telegram_id, free_until)
@@ -55,7 +57,7 @@ def find_users_for_ad(ad):
     """
     Возвращает список user_id, которым подходит объявление.
     """
-    logging.info('Looking for users for ad: %s', ad)
+    logger.info('Looking for users for ad: %s', ad)
     sql = """
     SELECT u.id AS user_id, uf.property_type, uf.city, uf.rooms_count, uf.price_min, uf.price_max
     FROM user_filters uf
@@ -79,7 +81,7 @@ def find_users_for_ad(ad):
 
     # Выполняем SQL-запрос
     rows = execute_query(sql, [ad_property_type, ad_city, ad_rooms, ad_price, ad_price, ad_insert_time], fetch=True)
-    logging.info('Found %s users for ad: %s', len(rows), ad)
+    logger.info('Found %s users for ad: %s', len(rows), ad)
     return [row["user_id"] for row in rows]
 
 
@@ -92,6 +94,7 @@ def enable_subscription_for_user(user_id):
     sql = "UPDATE users SET subscription_until = NOW() + interval '30 days' WHERE id = %s"
     execute_query(sql, [user_id])
 
+
 def get_subscription_data_for_user(user_id):
     sql = "SELECT * FROM user_filters WHERE user_id = %s"
     row = execute_query(sql, [user_id], fetchone=True)
@@ -99,6 +102,7 @@ def get_subscription_data_for_user(user_id):
         return row
     else:
         return None
+
 
 def get_subscription_until_for_user(user_id):
     sql = "SELECT subscription_until FROM users WHERE id = %s"

@@ -1,5 +1,4 @@
 # services/telegram_service/app/keyboards.py
-import logging
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
