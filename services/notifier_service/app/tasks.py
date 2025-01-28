@@ -2,25 +2,23 @@
 
 from common.celery_app import celery_app
 from common.db.models import find_users_for_ad
-from common.utils.logger import logger
+from common.db.database import execute_query
+from common.utils.s3_utils import _upload_image_to_s3
 import requests
-from datetime import datetime, timezone, timedelta
 import logging
-import boto3
 
-TELEGRAM_SEND_TASK = "telegram_service.app.tasks.send_message_task"
+# TELEGRAM_SEND_TASK = "telegram_service.app.tasks.send_message_task"
+TELEGRAM_SEND_TASK = "telegram_service.app.tasks.send_ad_with_photos"
 
-S3_BUCKET = "htodebucket"  # os.getenv("AWS_S3_BUCKET", "your-bucket-name")
-S3_PREFIX = "ads-images/"  # os.getenv("AWS_S3_BUCKET_PREFIX", "")
-CLOUDFRONT_DOMAIN = "https://d3h86hbbdu2c7h.cloudfront.net"  # os.getenv("AWS_CLOUDFRONT_DOMAIN")  # if you have one
-# DDOS protection
+logger = logging.getLogger(__name__)
 
-s3_client = boto3.client(
-    's3',
-    aws_access_key_id="AKIAS74TMCYOZMLDIA6K",  # os.getenv("AWS_ACCESS_KEY_ID"),
-    aws_secret_access_key="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",  # os.getenv("AWS_SECRET_ACCESS_KEY"),
-    region_name="eu-west-1"  # os.getenv("AWS_DEFAULT_REGION", "us-east-1")
-)
+
+def get_ad_images(ad):
+    ad_id = ad.get('id')
+    sql_check = "SELECT * FROM ad_images WHERE ad_id = %s"
+    rows = execute_query(sql_check, [ad_id], fetch=True)
+    if rows:
+        return [row["image_url"] for row in rows]
 
 
 @celery_app.task(name="notifier_service.app.tasks.sort_and_notify_new_ads")
@@ -30,18 +28,18 @@ def sort_and_notify_new_ads(new_ads):
     checks which users want each ad, and sends them via
     Telegram or another channel.
     """
-    logging.info("Received new ads for sorting/notification...")
+    logger.info("Received new ads for sorting/notification...")
 
     for ad in new_ads:
-        s3_image_url = ad.get('image_url') # from DB
+        s3_image_urls = get_ad_images(ad)
         users_to_notify = find_users_for_ad(ad)
         # `find_users_for_ad` is in your models.py and returns user_ids
-        logging.info(f"Ad {ad['id']} -> Notifying users: {users_to_notify}")
+        logger.info(f"Ad {ad['id']} -> Notifying users: {users_to_notify}")
         for user_id in users_to_notify:
-            _notify_user_about_ad(user_id, ad, s3_image_url)
+            _notify_user_about_ad(user_id, ad, s3_image_urls)
 
 
-def _notify_user_about_ad(user_id, ad, s3_image_url):
+def _notify_user_about_ad(user_id, ad, s3_image_urls):
     from common.celery_app import celery_app as shared_app
     text = (
         f"💰 Ціна: {int(ad.get('price'))} грн.\n"
@@ -54,48 +52,10 @@ def _notify_user_about_ad(user_id, ad, s3_image_url):
     )
 
     shared_app.send_task(
-        "telegram_service.app.tasks.send_message_task",
-        args=[user_id, text, s3_image_url, ad.get('resource_url')]
+        # "telegram_service.app.tasks.send_message_task",
+        "telegram_service.app.tasks.send_ad_with_photos",
+        args=[user_id, text, s3_image_urls, ad.get('resource_url')]
     )
-
-
-def _upload_image_to_s3(image_url, ad_unique_id):
-    """
-    Downloads the image from `image_url` and uploads to S3.
-    Returns the final S3 (or CloudFront) URL if successful, else None.
-    """
-    try:
-        # 1) Download image
-        resp = requests.get(image_url, timeout=10)
-        resp.raise_for_status()
-        image_data = resp.content
-
-        # 2) Create a unique key for S3
-        # E.g. "ads-images/<ad_id>_<image_id>.jpg"
-        image_id = image_url.split("/")[-1].split('.')[0]
-        file_extension = image_url.split(".")[-1][:4]  # naive approach, e.g. "jpg", "png", "webp"
-        s3_key = f"{S3_PREFIX}{ad_unique_id}_{image_id}.{file_extension}"
-
-        # 3) Upload to S3
-        s3_client.put_object(
-            Bucket=S3_BUCKET,
-            Key=s3_key,
-            Body=image_data,
-            ContentType="image/jpeg",  # or detect from file_extension
-            # ACL='public-read'  # or your desired ACL/policy
-        )
-
-        # 4) Build final URL
-        if CLOUDFRONT_DOMAIN:
-            final_url = f"{CLOUDFRONT_DOMAIN}/{s3_key}"
-        else:
-            final_url = f"https://{S3_BUCKET}.s3.amazonaws.com/{s3_key}"
-
-        return final_url
-
-    except Exception as e:
-        logger.error(f"Failed to upload image to S3: {e}")
-        return None
 
 
 @celery_app.task(name="notifier_service.app.tasks.notify_user_with_ads")
@@ -104,6 +64,7 @@ def notify_user_with_ads(telegram_id, user_filters):
     Scrapes ads based on user_filters and sends them to the user.
     """
     try:
+        logger.info('Starting to notify user with ads...')
         base_url = 'https://flatfy.ua/api/realties'
         params = {
             'currency': 'UAH',
@@ -118,7 +79,7 @@ def notify_user_with_ads(telegram_id, user_filters):
             'section_id': 2,
             'sort': 'insert_time'
         }
-
+        logger.info('Params: ' + str(params))
         room_counts = user_filters.get('rooms')
         if room_counts:
             # flatfy.ua поддерживает несколько параметров room_count
@@ -129,27 +90,27 @@ def notify_user_with_ads(telegram_id, user_filters):
 
         city = user_filters.get('city')
         geo_id_mapping = {
-            'Киев': 10009580,
-            'Харьков': 10000050,
-            'Одесса': 10009570,
-            'Днепр': 10000060,
-            'Львов': 10000020,
-            'Винница': 10003908,
+            'Київ': 10009580,
+            'Харків': 10000050,
+            'Одеса': 10009570,
+            'Дніпро': 10000060,
+            'Львів': 10000020,
+            'Вінниця': 10003908,
             'Житомир': 10007252,
-            'Запорожье': 10007846,
-            'Ивано-Франковск': 10008717,
-            'Кропивницкий': 10011240,
-            'Луцк': 10012656,
-            'Николаев': 10013982,
+            'Запоріжжя': 10007846,
+            'Івано-Франківськ': 10008717,
+            'Кропивницький': 10011240,
+            'Луцьк': 10012656,
+            'Миколаїв': 10013982,
             'Полтава': 10018885,
-            'Ровно': 10019894,
-            'Сумы': 10022820,
-            'Тернополь': 10023304,
+            'Рівне': 10019894,
+            'Суми': 10022820,
+            'Тернопіль': 10023304,
             'Ужгород': 10023968,
-            'Харьков': 10024345,
             'Херсон': 10024395,
-            'Хмельницкий': 10024474,
+            'Хмельницький': 10024474,
         }
+        logger.info('City: ' + city)
         geo_id = geo_id_mapping.get(city, 10009580)
         params['geo_id'] = geo_id
 
@@ -165,18 +126,21 @@ def notify_user_with_ads(telegram_id, user_filters):
             logger.error(f"Не вдалося отримати оголошення: {response.status_code}")
             return
         data = response.json().get('data', [])
+        logger.info('Received data.')
         for ad in data:
             ad_unique_id = ad.get("id")
-            image_url = None
+            logger.info('Ad id is: ' + ad_unique_id)
             images = ad.get('images', [])
-            if images:
-                first_image_id = images[0].get('image_id')
-                image_url = f"https://market-images.lunstatic.net/lun-ua/720/720/images/{first_image_id}.webp"  # Проверьте правильность шаблона URL
-
-            s3_image_url = None
-            if image_url:
-                s3_image_url = _upload_image_to_s3(image_url, ad_unique_id)
-
+            logger.info('Images received.')
+            uploaded_image_urls = []  # list of S3 URLs
+            for image_info in images:
+                image_id = image_info.get("image_id")
+                if image_id:
+                    original_url = f"https://market-images.lunstatic.net/lun-ua/720/720/images/{image_id}.webp"
+                    s3_url = _upload_image_to_s3(original_url, ad_unique_id)
+                    if s3_url:
+                        uploaded_image_urls.append(s3_url)
+            logger.info('Uploaded images.')
             text = (
                 f"💰 Ціна: {int(ad.get('price'))} грн.\n"
                 f"🏙️ Місто: {city}\n"
@@ -190,7 +154,7 @@ def notify_user_with_ads(telegram_id, user_filters):
 
             celery_app.send_task(
                 TELEGRAM_SEND_TASK,
-                args=[telegram_id, text, s3_image_url or image_url, resource_url]
+                args=[telegram_id, text, uploaded_image_urls, resource_url]
             )
 
     except Exception as e:

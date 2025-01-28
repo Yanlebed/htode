@@ -1,3 +1,5 @@
+# common/config.py
+
 import os
 
 # Можно читать ENV или .env

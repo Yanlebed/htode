@@ -116,6 +116,44 @@ services:
     command: celery -A scraper_service.app.celery_app beat --loglevel=info
 
 
+  scraper_init_service:
+    container_name: scraper_init_service
+    build:
+      context: .
+      dockerfile: services/scraper_service/Dockerfile
+    depends_on:
+      - redis
+      - postgres
+      - scraper_worker_service
+    environment:
+      REDIS_URL: "redis://redis:6379/0"
+      DB_HOST: "postgres"
+      DB_PORT: "5432"
+      DB_NAME: "mydb"
+      DB_USER: "myuser"
+      DB_PASS: "mypass"
+      AWS_ACCESS_KEY_ID: "AKIAS74TMCYOZMLDIA6K"
+      AWS_SECRET_ACCESS_KEY: "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"
+      AWS_DEFAULT_REGION: "us-east-1"
+      AWS_S3_BUCKET: "htodebucket"
+      AWS_S3_BUCKET_PREFIX: "ads-images/"
+      CLOUDFRONT_DOMAIN: "https://d3h86hbbdu2c7h.cloudfront.net"
+    networks:
+      - app_net
+    command: >
+      sh -c "
+        echo 'Waiting for postgres to be ready...';
+        until pg_isready -h postgres -p 5432 -U myuser; do
+          sleep 1;
+        done;
+        echo 'Postgres is ready. Triggering initial data scrape...';
+        celery -A scraper_service.app.celery_app call scraper_service.app.tasks.initial_30_day_scrape;
+        echo 'Initial data scrape task triggered. Exiting.';
+      "
+    # Optional: Restart policy to prevent restarting after completion
+    restart: "no"
+
+
   notifier_service:
     container_name: notifier_service
     build:

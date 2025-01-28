@@ -1,5 +1,4 @@
 # services/telegram_service/app/keyboards.py
-import logging
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -71,19 +70,25 @@ def tech_support_keyboard():
 
 
 def property_type_keyboard():
-    keyboard = InlineKeyboardMarkup(row_width=1)
+    keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
         InlineKeyboardButton("Квартира", callback_data="property_type_apartment"),
         InlineKeyboardButton("Будинок", callback_data="property_type_house"),
-        InlineKeyboardButton("Кімната", callback_data="property_type_room")
     )
     return keyboard
 
 
+def grouped(iterable, n):
+    return zip(*[iter(iterable)] * n)
+
+
 def city_keyboard(cities):
-    keyboard = InlineKeyboardMarkup(row_width=1)
-    for city in cities:
-        keyboard.add(InlineKeyboardButton(city, callback_data=f"city_{city.lower()}"))
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    for city_1, city_2 in grouped(cities, 2):
+        keyboard.add(
+            InlineKeyboardButton(city_1, callback_data=f"city_{city_1.lower()}"),
+            InlineKeyboardButton(city_2, callback_data=f"city_{city_2.lower()}"),
+        )
     return keyboard
 
 
@@ -99,7 +104,7 @@ def rooms_keyboard(selected_rooms=None):
         )
     keyboard.add(
         InlineKeyboardButton("Далі", callback_data="rooms_done"),
-        InlineKeyboardButton("Не важливо", callback_data="rooms_any")
+        InlineKeyboardButton("Пропустити", callback_data="rooms_any")
     )
     return keyboard
 
@@ -109,14 +114,14 @@ def price_keyboard(city: str):
     keyboard = InlineKeyboardMarkup(row_width=2)
     for (low, high) in intervals:
         if high is None:
-            label = f"Больше {low} UAH"
+            label = f"Більше {low}"
             callback_data = f"price_{low}_any"
         else:
             # E.g. "0-5000 UAH", "5000-7000 UAH"
             if low == 0:
-                label = f"До {high} UAH"  # "up to X"
+                label = f"До {high}"  # "up to X"
             else:
-                label = f"{low}-{high} UAH"
+                label = f"{low}-{high}"
             callback_data = f"price_{low}_{high}"
 
         keyboard.insert(
@@ -130,8 +135,8 @@ def confirmation_keyboard():
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
         InlineKeyboardButton("Розширений пошук", callback_data="advanced_search"),
-        InlineKeyboardButton("Редагувати параметри", callback_data="edit_parameters"),
-        InlineKeyboardButton("Підписатися на пошук", callback_data="subscribe")
+        InlineKeyboardButton("Редагувати", callback_data="edit_parameters"),
+        InlineKeyboardButton("Підписатися", callback_data="subscribe")
     )
     return keyboard
 
@@ -143,7 +148,10 @@ def edit_parameters_keyboard():
         InlineKeyboardButton("Місто", callback_data="edit_city"),
         InlineKeyboardButton("Кількість кімнат", callback_data="edit_rooms"),
         InlineKeyboardButton("Діапазон цін", callback_data="edit_price"),
-        InlineKeyboardButton("Відмінити", callback_data="cancel_edit")
+        InlineKeyboardButton("Поверх", callback_data="edit_floor"),
+        InlineKeyboardButton("З тваринами?", callback_data="pets_allowed"),
+        InlineKeyboardButton("Від власника?", callback_data="without_broker"),
+        InlineKeyboardButton("Відмінити", callback_data="cancel_edit"),
     )
     return keyboard
 
