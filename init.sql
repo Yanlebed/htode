@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS ads (
     property_type VARCHAR(50) NOT NULL,
     price NUMERIC NOT NULL,
     rooms_count INTEGER NOT NULL,
-    city VARCHAR(255) NOT NULL,
+    city BIGINT NOT NULL,
     insert_time TIMESTAMP,
     address TEXT,
     square_feet NUMERIC,
@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS user_filters (
     id SERIAL PRIMARY KEY,
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     property_type VARCHAR(50) NOT NULL,
-    city VARCHAR(255),
+    city BIGINT,
     rooms_count INTEGER[] NOT NULL,
     price_min NUMERIC,
     price_max NUMERIC

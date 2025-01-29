@@ -10,6 +10,7 @@ from ..states.basis_states import FilterStates
 from common.db.models import update_user_filter, disable_subscription_for_user, \
     enable_subscription_for_user, get_subscription_data_for_user, get_subscription_until_for_user
 from common.db.database import execute_query
+from common.config import GEO_ID_MAPPING, get_key_by_value
 from common.celery_app import celery_app
 from ..keyboards import (
     main_menu_keyboard,
@@ -259,9 +260,10 @@ def get_ad_images(ad):
 
 def build_ad_text(ad_row):
     # For example:
+    city_name = GEO_ID_MAPPING.get(ad_row.get('city'))
     text = (
         f"💰 Ціна: {int(ad_row.get('price'))} грн.\n"
-        f"🏙️ Місто: {ad_row.get('city')}\n"
+        f"🏙️ Місто: {city_name}\n"
         f"📍 Адреса: {ad_row.get('address')}\n"
         f"🛏️ Кіл-сть кімнат: {ad_row.get('rooms_count')}\n"
         f"📐 Площа: {ad_row.get('square_feet')} кв.м.\n"
@@ -279,10 +281,12 @@ def fetch_ads_for_period(filters, days, limit=3):
     # We assume you have a function `execute_query(sql, params, fetch=True)`
     where_clauses = []
     params = []
+    city = filters.get('city')
 
-    if filters.get('city'):
+    if city:
         where_clauses.append("city = %s")
-        params.append(filters['city'])
+        geo_id = get_key_by_value(city, GEO_ID_MAPPING)
+        params.append(geo_id)
 
     if filters.get('property_type'):
         where_clauses.append("property_type = %s")

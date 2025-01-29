@@ -3,7 +3,7 @@
 from .database import execute_query
 import datetime
 import logging
-
+from common.config import GEO_ID_MAPPING, get_key_by_value
 logger = logging.getLogger(__name__)
 
 
@@ -29,6 +29,7 @@ def get_or_create_user(telegram_id):
 def update_user_filter(user_id, filters):
     property_type = filters.get('property_type')
     city = filters.get('city')
+    geo_id = get_key_by_value(city, GEO_ID_MAPPING)
     rooms_count = filters.get('rooms')  # Это теперь список или None
     price_min = filters.get('price_min')
     price_max = filters.get('price_max')
@@ -44,7 +45,7 @@ def update_user_filter(user_id, filters):
         price_min = EXCLUDED.price_min,
         price_max = EXCLUDED.price_max
     """
-    execute_query(sql_upsert, [user_id, property_type, city, rooms_count, price_min, price_max])
+    execute_query(sql_upsert, [user_id, property_type, geo_id, rooms_count, price_min, price_max])
 
 
 def get_user_filters(user_id):

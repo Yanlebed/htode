@@ -4,6 +4,7 @@ from common.celery_app import celery_app
 from common.db.models import find_users_for_ad
 from common.db.database import execute_query
 from common.utils.s3_utils import _upload_image_to_s3
+from common.config import GEO_ID_MAPPING, get_key_by_value
 import requests
 import logging
 
@@ -89,29 +90,8 @@ def notify_user_with_ads(telegram_id, user_filters):
             params.pop('room_count', None)
 
         city = user_filters.get('city')
-        geo_id_mapping = {
-            'Київ': 10009580,
-            'Харків': 10000050,
-            'Одеса': 10009570,
-            'Дніпро': 10000060,
-            'Львів': 10000020,
-            'Вінниця': 10003908,
-            'Житомир': 10007252,
-            'Запоріжжя': 10007846,
-            'Івано-Франківськ': 10008717,
-            'Кропивницький': 10011240,
-            'Луцьк': 10012656,
-            'Миколаїв': 10013982,
-            'Полтава': 10018885,
-            'Рівне': 10019894,
-            'Суми': 10022820,
-            'Тернопіль': 10023304,
-            'Ужгород': 10023968,
-            'Херсон': 10024395,
-            'Хмельницький': 10024474,
-        }
         logger.info('City: ' + city)
-        geo_id = geo_id_mapping.get(city, 10009580)
+        geo_id = get_key_by_value(city, GEO_ID_MAPPING)
         params['geo_id'] = geo_id
 
         headers = {

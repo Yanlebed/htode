@@ -8,7 +8,7 @@ import requests
 from datetime import datetime, timedelta, timezone
 from common.db.database import execute_query
 from common.utils.s3_utils import _upload_image_to_s3
-
+from common.config import GEO_ID_MAPPING, GEO_ID_MAPPING_FOR_INITIAL_RUN, get_key_by_value
 from common.celery_app import celery_app
 
 # You might have some config with base URLs or any other relevant settings
@@ -37,14 +37,6 @@ PROXIES = [
     "http://proxy1.example:8080",
     "http://proxy2.example:8080",
 ]
-
-# GEO_ID_MAPPING = {10000020: 'Львов', 10000060: 'Днепр', 10003908: 'Винница', 10007252: 'Житомир',
-#                   10007846: 'Запорожье', 10008717: 'Ивано-Франковск', 10009570: 'Одесса', 10009580: 'Киев',
-#                   10011240: 'Кропивницкий', 10012656: 'Луцк', 10013982: 'Николаев', 10018885: 'Полтава',
-#                   10019894: 'Ровно', 10022820: 'Сумы', 10023304: 'Тернополь', 10023968: 'Ужгород',
-#                   10024345: 'Харьков', 10024395: 'Херсон', 10024474: 'Хмельницкий'}
-# GEO_ID_MAPPING = {10000020: 'Львів', 10009580: 'Київ'}
-GEO_ID_MAPPING = {10000020: 'Львів'}
 
 
 def get_random_user_agent():
@@ -110,38 +102,12 @@ def fetch_new_ads():
 
     distinct_cities = [r["city"] for r in rows if r["city"]]
     for city in distinct_cities:
-        geo_id = map_city_to_geo_id(city)
+        geo_id = get_key_by_value(city, GEO_ID_MAPPING)
         _scrape_ads_for_city(geo_id)
 
 
-def map_city_to_geo_id(city: str) -> int:
-    # Example from your existing code
-    geo_id_mapping = {
-        'Київ': 10009580,
-        'Харків': 10000050,
-        'Одеса': 10009570,
-        'Дніпро': 10000060,
-        'Львів': 10000020,
-        'Вінниця': 10003908,
-        'Житомир': 10007252,
-        'Запоріжжя': 10007846,
-        'Івано-Франківськ': 10008717,
-        'Кропивницький': 10011240,
-        'Луцьк': 10012656,
-        'Миколаїв': 10013982,
-        'Полтава': 10018885,
-        'Рівне': 10019894,
-        'Суми': 10022820,
-        'Тернопіль': 10023304,
-        'Ужгород': 10023968,
-        'Херсон': 10024395,
-        'Хмельницький': 10024474,
-    }
-    return geo_id_mapping.get(city, 10009580)  # default to Kyiv or something
-
-
 def _scrape_ads_for_city(geo_id: int):
-    property_types = {'apartment': 2}#, 'house': 4}
+    property_types = {'apartment': 2}  # , 'house': 4}
     cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=5)
 
     for property_type, section_id in property_types.items():
@@ -201,7 +167,6 @@ def _insert_ad_if_new(ad_data, geo_id, property_type, cutoff_time):
     """
 
     ad_unique_id = str(ad_data.get("id", ""))  # or another unique field
-    city = GEO_ID_MAPPING.get(geo_id)
 
     if not ad_unique_id:
         return None
@@ -254,7 +219,7 @@ ON CONFLICT (external_id) DO UPDATE
     params = [
         ad_unique_id,
         property_type,
-        city,
+        geo_id,
         ad_data.get("header"),
         ad_data.get("price"),
         ad_data.get("area_total"),
@@ -321,7 +286,7 @@ def initial_30_day_scrape():
         logger.info("Initial load is already done. Skipping.")
         return
 
-    for city_id, city_name in GEO_ID_MAPPING.items():
+    for city_id, city_name in GEO_ID_MAPPING_FOR_INITIAL_RUN.items():
         logger.info(">>> Starting initial 30-day scrape for " + city_name + " <<<")
         scrape_30_days_for_city(city_id)
 
@@ -333,7 +298,7 @@ def initial_30_day_scrape():
 
 def scrape_30_days_for_city(geo_id):
     cutoff_date = datetime.now(timezone.utc) - timedelta(days=1)
-    property_types = {'apartment': 2}#, 'house': 4}
+    property_types = {'apartment': 2}  # , 'house': 4}
     for property_type, section_id in property_types.items():
         page_number = 1
         while True:
@@ -358,7 +323,7 @@ def scrape_30_days_for_city(geo_id):
                 break
 
             page_number += 1
-            sleep(1)  # 1 request per second to avoid overloading the source
+            # sleep(1)  # 1 request per second to avoid overloading the source
 
 
 def fetch_page(geo_id, section_id, page_number):
@@ -405,7 +370,6 @@ def parse_date(date_str):
 def insert_ad(ad_data, property_type, geo_id):
     # Insert the ad into the ads table
     ad_unique_id = ad_data.get("id")
-    city = GEO_ID_MAPPING.get(geo_id)
     resource_url = f"https://flatfy.ua/uk/redirect/{ad_unique_id}"
     images = ad_data.get('images', [])
     uploaded_image_urls = []  # list of S3 URLs
@@ -439,7 +403,7 @@ def insert_ad(ad_data, property_type, geo_id):
     params = [
         ad_unique_id,
         property_type,
-        city,
+        geo_id,
         ad_data.get("header"),
         ad_data.get("price"),
         ad_data.get("area_total"),

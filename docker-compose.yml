@@ -4,11 +4,17 @@ services:
   redis:
     image: redis:7
     container_name: my_redis
-    command: [ "redis-server", "--appendonly", "yes" ]
     ports:
       - "6379:6379"
     networks:
       - app_net
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+    command: [ "redis-server", "--appendonly", "yes" ]
+
 
   postgres:
     image: postgres:14
@@ -24,6 +30,11 @@ services:
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - app_net
+    healthcheck:
+      test: [ "CMD", "pg_isready", "-h", "postgres" ]
+      interval: 5s
+      timeout: 2s
+      retries: 5
 
   telegram_service:
     container_name: telegram_service
@@ -31,8 +42,10 @@ services:
       context: .
       dockerfile: services/telegram_service/Dockerfile
     depends_on:
-      - redis
-      - postgres
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
       REDIS_URL: "redis://redis:6379/0"
       DB_HOST: "postgres"
@@ -49,8 +62,10 @@ services:
     networks:
       - app_net
     depends_on:
-      - redis
-      - postgres
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
       REDIS_URL: "redis://redis:6379/0"
       DB_HOST: "postgres"
@@ -70,8 +85,10 @@ services:
       context: .
       dockerfile: services/scraper_service/Dockerfile
     depends_on:
-      - redis
-      - postgres
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
       REDIS_URL: "redis://redis:6379/0"
       DB_HOST: "postgres"
@@ -96,8 +113,10 @@ services:
       context: .
       dockerfile: services/scraper_service/Dockerfile
     depends_on:
-      - redis
-      - postgres
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
       REDIS_URL: "redis://redis:6379/0"
       DB_HOST: "postgres"
@@ -122,9 +141,12 @@ services:
       context: .
       dockerfile: services/scraper_service/Dockerfile
     depends_on:
-      - redis
-      - postgres
-      - scraper_worker_service
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      scraper_worker_service:
+        condition: service_started
     environment:
       REDIS_URL: "redis://redis:6379/0"
       DB_HOST: "postgres"
