@@ -2,29 +2,32 @@
 
 import boto3
 import logging
+import os
 import random
 from time import sleep
 import requests
 from datetime import datetime, timedelta, timezone
 from common.db.database import execute_query
 from common.utils.s3_utils import _upload_image_to_s3
-from common.config import GEO_ID_MAPPING, GEO_ID_MAPPING_FOR_INITIAL_RUN, get_key_by_value
+from common.utils.req_utils import fetch_ads_flatfy
+from common.config import GEO_ID_MAPPING_FOR_INITIAL_RUN
+from common.db.models import store_ad_phones
 from common.celery_app import celery_app
 
 # You might have some config with base URLs or any other relevant settings
 
 logger = logging.getLogger(__name__)
 
-S3_BUCKET = "htodebucket"  # os.getenv("AWS_S3_BUCKET", "your-bucket-name")
-S3_PREFIX = "ads-images/"  # os.getenv("AWS_S3_BUCKET_PREFIX", "")
-CLOUDFRONT_DOMAIN = "https://d3h86hbbdu2c7h.cloudfront.net"  # os.getenv("AWS_CLOUDFRONT_DOMAIN")  # if you have one
+S3_BUCKET = os.getenv("AWS_S3_BUCKET", "htodebucket")
+S3_PREFIX = os.getenv("AWS_S3_BUCKET_PREFIX", "ads-images/")
+CLOUDFRONT_DOMAIN = os.getenv("AWS_CLOUDFRONT_DOMAIN", "https://d3h86hbbdu2c7h.cloudfront.net")  # if you have one
 # DDOS protection
 
 s3_client = boto3.client(
     's3',
-    aws_access_key_id="AKIAS74TMCYOZMLDIA6K",  # os.getenv("AWS_ACCESS_KEY_ID"),
-    aws_secret_access_key="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",  # os.getenv("AWS_SECRET_ACCESS_KEY"),
-    region_name="eu-west-1"  # os.getenv("AWS_DEFAULT_REGION", "us-east-1")
+    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID", "AKIAS74TMCYOZMLDIA6K"),
+    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY", "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"),
+    region_name=os.getenv("AWS_DEFAULT_REGION", "eu-west-1")
 )
 
 USER_AGENTS = [
@@ -102,8 +105,8 @@ def fetch_new_ads():
 
     distinct_cities = [r["city"] for r in rows if r["city"]]
     for city in distinct_cities:
-        geo_id = get_key_by_value(city, GEO_ID_MAPPING)
-        _scrape_ads_for_city(geo_id)
+        logger.info(f"Fetching new ads for city: {city}")
+        _scrape_ads_for_city(city)
 
 
 def _scrape_ads_for_city(geo_id: int):
@@ -165,7 +168,7 @@ def _insert_ad_if_new(ad_data, geo_id, property_type, cutoff_time):
     Inserts ad into DB if it doesn't exist yet (by unique URL or ad ID).
     Returns newly inserted ad_id or None if already existed or error.
     """
-
+    # TODO: redo ads insertion because lots of them won't be from flatfy
     ad_unique_id = str(ad_data.get("id", ""))  # or another unique field
 
     if not ad_unique_id:
@@ -196,7 +199,8 @@ def _insert_ad_if_new(ad_data, geo_id, property_type, cutoff_time):
             if s3_url:
                 uploaded_image_urls.append(s3_url)
 
-    logger.info('Inserting ad into DB!!!')
+    logger.info(f'Inserting ad into DB!!! {ad_data}')
+    resource_url = f"https://flatfy.ua/uk/redirect/{ad_data.get('id')}"
 
     # Insert into DB, including the S3-based URL
     insert_sql = """
@@ -228,10 +232,11 @@ ON CONFLICT (external_id) DO UPDATE
         ad_data.get("floor_count"),
         ad_data.get("insert_time"),
         ad_data.get("text"),
-        ad_data.get("resource_url")
+        resource_url
     ]
 
     row = execute_query(insert_sql, params, fetchone=True)
+    store_ad_phones(resource_url, row["id"])
     insert_ad_images(ad_unique_id, uploaded_image_urls)
     return row["id"] if row else None
 
@@ -301,21 +306,28 @@ def scrape_30_days_for_city(geo_id):
     property_types = {'apartment': 2}  # , 'house': 4}
     for property_type, section_id in property_types.items():
         page_number = 1
+        ads_qty = 0
         while True:
+            if ads_qty > 10:
+                break
             # 1) Do a request
-            data = fetch_page(geo_id, section_id, page_number)
+            data = fetch_ads_flatfy(
+                geo_id=geo_id,
+                page=page_number,
+                section_id=section_id,
+                # Possibly no price_min/price_max because you're scraping all?
+            )
             if not data:
                 break
 
             any_newer = False
             for ad in data:
-                ad_time = parse_date(ad["insert_time"])  # 2025-01-26T10:13:14+00:00
+                ad_time = parse_date(ad["insert_time"])
                 if ad_time >= cutoff_date:
-                    # Insert or update DB
+                    ads_qty += 1
                     insert_ad(ad, property_type, geo_id)
                     any_newer = True
                 else:
-                    # This ad is older than 30 days
                     any_newer = False
                     break
 
@@ -323,43 +335,6 @@ def scrape_30_days_for_city(geo_id):
                 break
 
             page_number += 1
-            # sleep(1)  # 1 request per second to avoid overloading the source
-
-
-def fetch_page(geo_id, section_id, page_number):
-    # Implement the logic to fetch a page of ads for a city
-    # Return a list of ad dicts or []
-    try:
-        base_url = 'https://flatfy.ua/api/realties'
-        params = {
-            'geo_id': geo_id,
-            'currency': 'UAH',
-            'group_collapse': 1,
-            'has_eoselia': 'false',
-            'is_without_fee': 'false',
-            'lang': 'uk',
-            'page': page_number,
-            'price_sqm_currency': 'UAH',
-            'section_id': section_id,
-            'sort': 'insert_time'
-        }
-        headers = {
-            "User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:134.0) Gecko/20100101 Firefox/134.0",
-            "Accept": "*/*",
-            "Accept-Language": "en-US,en;q=0.5",
-            "Accept-Encoding": "gzip, deflate, br, zstd",
-        }
-        logger.info(f"Fetching page {page_number} for geo_id {geo_id} and section_id {section_id}...")
-        response = requests.get(base_url, params=params, headers=headers)
-        if response.status_code != 200:
-            logger.error(f"Не вдалося отримати оголошення: {response.status_code}")
-            return
-        data = response.json().get('data', [])
-        return data
-    except Exception as e:
-        logger.error(f"Failed to fetch page {page_number} for geo_id {geo_id}: {e}")
-        return []
-
 
 def parse_date(date_str):
     # Parse the date string into a datetime object
@@ -380,8 +355,6 @@ def insert_ad(ad_data, property_type, geo_id):
             s3_url = _upload_image_to_s3(original_url, ad_unique_id)
             if s3_url:
                 uploaded_image_urls.append(s3_url)
-
-    logger.info('Inserting ad into DB...')
 
     insert_sql = """
         INSERT INTO ads (external_id, property_type, city, address, price, square_feet, rooms_count, floor, total_floors, insert_time, description, resource_url)
@@ -414,7 +387,10 @@ def insert_ad(ad_data, property_type, geo_id):
         ad_data.get("text"),
         resource_url
     ]
+    logger.info('services/scraper_service/app/tasks:insert_ad: Inserting ad into DB...')
+    logger.info(f'services/scraper_service/app/tasks:insert_ad: Params of ad to insert {params}')
     row = execute_query(insert_sql, params, fetchone=True)
     ad_id = row["id"]  # this is the internal ads.id
+    store_ad_phones(resource_url, ad_id)
     insert_ad_images(ad_id, uploaded_image_urls)
     # insert_ad_images(ad_unique_id, uploaded_image_urls)
