@@ -2,20 +2,50 @@
 
 FROM python:3.10-slim
 
+# 1) Install system dependencies needed by Chromium/Playwright
+#    (list may vary depending on your environment):
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libnss3 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libgbm1 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    libgtk-3-0 \
+    libasound2 \
+    wget \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Копируем общие модули
+# 2) Copy your shared "common" folder (which includes phone_parser, etc.)
 COPY common /app/common
 
-# Копируем код конкретного сервиса
+# 3) Copy your specific service code
 COPY services/notifier_service/app /app/app
 
-# Устанавливаем зависимости
+# 4) Copy requirements and install
 COPY services/notifier_service/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Устанавливаем PYTHONPATH
+# 5) Install Playwright + Browsers
+#    A) pip install playwright (whatever version you like)
+#    B) Then run "playwright install --with-deps chromium"
+RUN pip install --no-cache-dir playwright==1.36.0
+RUN playwright install --with-deps chromium
+
+# Optionally, you can set an environment variable so Playwright knows
+#   where to store the browser binaries, or if you want them in the final image
+# e.g.: ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+# 6) Set PYTHONPATH
 ENV PYTHONPATH=/app/common
 
-# Запуск Celery worker
+# 7) Final command (Celery worker for the Notifier queue)
 CMD ["celery", "-A", "app.tasks", "worker", "--loglevel=info", "--queues=notify_queue"]

@@ -1,6 +1,8 @@
 # services/telegram_service/app/keyboards.py
+import logging
 
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from common.config import GEO_ID_MAPPING
 
 SMALLER_CITIES = {
     'Чернівці', 'Черкаси', 'Хмельницький', 'Херсон', 'Ужгород',
@@ -10,6 +12,8 @@ SMALLER_CITIES = {
 }
 
 BIGGER_CITIES = {'Харків', 'Дніпро', 'Одеса', 'Львів'}
+
+logger = logging.getLogger(__name__)
 
 
 def get_price_ranges(city: str):
@@ -31,40 +35,60 @@ def get_price_ranges(city: str):
 
 
 def main_menu_keyboard():
-    keyboard = InlineKeyboardMarkup()
-    keyboard.add(
-        InlineKeyboardButton("Моя підписка", callback_data="menu_my_subscription"),
-        InlineKeyboardButton("Як це працює?", callback_data="menu_how_to_use"),
-        InlineKeyboardButton("Техпідтримка", callback_data="menu_tech_support")
+    """
+    Shows the main menu with 3 buttons:
+    - Моя підписка
+    - Як це працює?
+    - Техпідтримка
+    """
+    keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.row(
+        KeyboardButton("📝 Мої підписки"),  # change
+        KeyboardButton("🤔 Як це працює?"),
+        KeyboardButton("🧑‍💻 Техпідтримка"),
     )
     return keyboard
 
 
 def subscription_menu_keyboard():
-    keyboard = InlineKeyboardMarkup()
-    keyboard.add(
-        InlineKeyboardButton("Відключити", callback_data="subs_disable"),
-        InlineKeyboardButton("Включити", callback_data="subs_enable"),
-        InlineKeyboardButton("Редагувати", callback_data="subs_edit"),
-        InlineKeyboardButton("Назад", callback_data="subs_back")
+    """
+    Sub-menu for "Моя підписка"
+    - Відключити
+    - Включити
+    - Редагувати
+    - Назад
+    """
+    keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.row(
+        KeyboardButton("🛑 Відключити"),
+        KeyboardButton("✅ Включити")
+    )
+    keyboard.row(
+        KeyboardButton("✏️ Редагувати"),
+        KeyboardButton("↪️ Назад")
     )
     return keyboard
 
 
 def how_to_use_keyboard():
-    keyboard = InlineKeyboardMarkup()
+    """
+    Sub-menu for 'Як це працює?'
+    Possibly includes a 'Назад' button to return to the main menu
+    """
+    keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
     keyboard.add(
-        InlineKeyboardButton("Написати у техпідтримку", callback_data="contact_support"),
-        InlineKeyboardButton("Назад", callback_data="main_menu")
+        KeyboardButton("↪️ Назад")
     )
     return keyboard
 
 
 def tech_support_keyboard():
-    # Or just go directly to chat, but here's an example
-    keyboard = InlineKeyboardMarkup()
+    """
+    Sub-menu for 'Техпідтримка'
+    """
+    keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
     keyboard.add(
-        InlineKeyboardButton("Назад", callback_data="main_menu")
+        KeyboardButton("↪️ Назад")
     )
     return keyboard
 
@@ -206,4 +230,92 @@ def floor_keyboard(floor_opts=None):
     # add "Back" or "Done" button
     kb.add(InlineKeyboardButton("Готово", callback_data="floor_done"))
 
+    return kb
+
+
+def subscriptions_keyboard():
+    """
+    Sub-menu for 'Як це працює?'
+    Possibly includes a 'Назад' button to return to the main menu
+    """
+    keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.row(
+        KeyboardButton("➕ Додати підписку"),
+        KeyboardButton("🗑 Видалити підписку")
+    )
+    keyboard.row(
+        KeyboardButton("✏️ Редагувати"),
+        KeyboardButton("↪️ Назад")
+    )
+    return keyboard
+
+
+# Then you define a flow for “Додати.”
+# Possibly ask the user step-by-step for property type, city, etc., or do an inline approach.
+
+
+def make_subscriptions_page_kb(user_id, page, subscriptions, total_count, per_page=5):
+    """
+    subscriptions: list of rows from DB
+    total_count: total # of subscriptions
+    page: current page index
+    per_page: items per page
+    """
+
+    kb = InlineKeyboardMarkup()
+
+    # 1) Add each subscription as a separate button:
+    for sub in subscriptions:
+        logger.info(f"sub: {sub}")
+        sub_id = sub["id"]
+        city = GEO_ID_MAPPING.get(sub['city'])
+        mapping_property = {"apartment": "квартира", "house": "будинок"}
+        ua_lang_property_type = mapping_property.get(sub['property_type'], "")
+        rooms_list = sub["rooms_count"]
+        rooms = []
+        for el in rooms_list:
+            rooms += str(el)
+        rooms = '-'.join(rooms)
+        price_min = sub["price_min"] / 1000
+        price_max = sub["price_max"] / 1000
+        paused_str = "(Призупинена)" if sub["is_paused"] else ""
+        button_text = f"м.{city}, {ua_lang_property_type}, {rooms} к., {price_min}-{price_max} тис.грн.,{paused_str}"
+        # callback_data = "sub_open:<sub_id>:<page>"
+        kb.add(InlineKeyboardButton(button_text, callback_data=f"sub_open:{sub_id}:{page}"))
+
+    # 2) Build the navigation row (Prev / Next) if needed
+    max_pages = (total_count - 1) // per_page  # integer division
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton("<< Prev", callback_data=f"subs_page:{page - 1}"))
+    if page < max_pages:
+        nav_row.append(InlineKeyboardButton("Next >>", callback_data=f"subs_page:{page + 1}"))
+
+    if nav_row:
+        kb.row(*nav_row)
+
+    # Optionally add a "Close" or "Back" button
+    kb.add(InlineKeyboardButton("Закрити", callback_data="subs_close"))
+    return kb
+
+
+def support_category_keyboard():
+    """A reply keyboard that asks the user to choose a support category."""
+    kb = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    kb.add(KeyboardButton("Оплата"))
+    kb.add(KeyboardButton("Технічні проблеми"))
+    kb.add(KeyboardButton("Інше"))
+    kb.add(KeyboardButton("Назад"))
+    return kb
+
+
+def support_redirect_keyboard(template_data: str):
+    """
+    Build an inline keyboard with a button that opens the support chat.
+    We use Telegram deep linking to pass some template data via the start parameter.
+    """
+    # For testing, if your support bot is @bookly_beekly, the deep link URL is:
+    url = f"https://t.me/bookly_beekly?start={template_data}"
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("Перейти до техпідтримки", url=url))
     return kb

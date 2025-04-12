@@ -42,3 +42,17 @@ GEO_ID_MAPPING_FOR_INITIAL_RUN = {10012684: 'Львів'}
 
 def get_key_by_value(value, geo_id_mapping):
     return next((k for k, v in geo_id_mapping.items() if v == value), None)
+
+
+def build_ad_text(ad_row):
+    # For example:
+    city_name = GEO_ID_MAPPING.get(ad_row.get('city'))
+    text = (
+        f"💰 Ціна: {int(ad_row.get('price'))} грн.\n"
+        f"🏙️ Місто: {city_name}\n"
+        f"📍 Адреса: {ad_row.get('address')}\n"
+        f"🛏️ Кіл-сть кімнат: {ad_row.get('rooms_count')}\n"
+        f"📐 Площа: {ad_row.get('square_feet')} кв.м.\n"
+        f"🏢 Поверх: {ad_row.get('floor')} из {ad_row.get('total_floors')}\n"
+    )
+    return text

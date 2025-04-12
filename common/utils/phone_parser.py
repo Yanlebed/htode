@@ -1,89 +1,69 @@
+# phone_parser.py
+
 import os
-import logging
 import re
 import json
+import urllib.parse
+import logging
+import random
+import asyncio
 import jmespath
-import requests
-from bs4 import BeautifulSoup
 from dataclasses import dataclass
 from typing import List, Optional
+from bs4 import BeautifulSoup
+import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from playwright.async_api import async_playwright, Page, Browser
 
-# ---------------------------
-# Configuration & Constants
-# ---------------------------
-
-# Read sensitive configuration from environment variables
-ZENROWS_API_KEY = os.getenv("ZENROWS_API_KEY", "a5087ace5e20caa2bf41149f93e308fddee387b1")
-ZENROWS_ENDPOINT = "https://api.zenrows.com/v1/"
-
-# Domain-specific URL templates
-OLX_PHONE_LINK = "https://www.olx.ua/api/v1/offers/{}/limited-phones/"
-REAL_ESTATE_LVIV_UA_LINK = "https://www.real-estate.lviv.ua/en/ajax_show_phone_object/{}"
-
-# Request timeout
-REQUEST_TIMEOUT = 30
-
-# ---------------------------
-# Logging Configuration
-# ---------------------------
+try:
+    from fake_useragent import UserAgent
+except ImportError:
+    UserAgent = None
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-# ---------------------------
-# Precompiled Regular Expressions
-# ---------------------------
-
-SKU_REGEX = re.compile(r'"sku":"(.*?)"')
-REDIRECT_LINK_REGEX = re.compile(r'a class="redirect-link" href="(.*?)"')
-TELEPHONE_REGEX_REAL_ESTATE = re.compile(r'tel:(.*?)\\u0022')
-LUN_PHONE_REGEX = re.compile(r'"phones\\":\[\\"8(.*)\\"],\\"geoEntities')
-RIELTOR_PHONE_REGEX = re.compile(r'"tel:(.*?)"')
-FAKTOR24_PHONE_REGEX = re.compile(r'"tel:(.*?)" id="phoneDisplay"')
-
-
-# ---------------------------
-# Data Class for Results
-# ---------------------------
-
+# ===========================
+# Data structure
+# ===========================
 @dataclass
 class ExtractionResult:
     phone_numbers: List[str]
     viber_link: Optional[str] = None
 
+# ===========================
+# Domain-specific constants
+# ===========================
+OLX_PHONE_LINK = "https://www.olx.ua/api/v1/offers/{}/limited-phones/"
+REAL_ESTATE_LVIV_UA_LINK = "https://www.real-estate.lviv.ua/en/ajax_show_phone_object/{}"
+REQUEST_TIMEOUT = 30  # seconds
 
-# ---------------------------
-# Requests Session with Retries
-# ---------------------------
+SKU_REGEX = re.compile(r'"sku":"(.*?)"')
+TELEPHONE_REGEX_REAL_ESTATE = re.compile(r'tel:(.*?)\\u0022')
+LUN_PHONE_REGEX = re.compile(r'"phones\\":\[\\"8(.*)\\"],\\"geoEntities')
+RIELTOR_PHONE_REGEX = re.compile(r'"tel:(.*?)"')
+FAKTOR24_PHONE_REGEX = re.compile(r'"tel:(.*?)" id="phoneDisplay"')
 
-def get_requests_session() -> requests.Session:
-    session = requests.Session()
-    retry_strategy = Retry(
-        total=3,
-        backoff_factor=1,
-        status_forcelist=[502, 503, 504],
-        allowed_methods=["HEAD", "GET", "OPTIONS"]
-    )
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-    return session
+# ===========================
+# ZenRows fallback
+# ===========================
+ZENROWS_API_KEY = os.getenv("ZENROWS_API_KEY", "YOUR_DEFAULT_KEY")
+ZENROWS_ENDPOINT = "https://api.zenrows.com/v1/"
 
-
-session = get_requests_session()
-
-
-# ---------------------------
-# Helper Functions
-# ---------------------------
+def parse_proxy(proxy_url: str):
+    parsed = urllib.parse.urlparse(proxy_url)
+    return {
+        "server": f"{parsed.scheme}://{parsed.hostname}:{parsed.port}",
+        "username": parsed.username,
+        "password": parsed.password
+    }
 
 def fetch_with_zenrows(url: str, js_render: bool = True) -> str:
     """
-    Fetch HTML content from a URL using the ZenRows API.
+    Synchronous fallback using ZenRows.
     """
-    logger.info(f"[ZenRows] Fetching {url} with js_render={js_render}")
+    logger.info(f"[ZenRows fallback] GET {url}, js_render={js_render}")
     params = {
         "apikey": ZENROWS_API_KEY,
         "url": url,
@@ -91,190 +71,389 @@ def fetch_with_zenrows(url: str, js_render: bool = True) -> str:
         "js_render": "true" if js_render else "false",
     }
     try:
-        resp = session.get(ZENROWS_ENDPOINT, params=params, timeout=REQUEST_TIMEOUT)
+        resp = requests.get(ZENROWS_ENDPOINT, params=params, timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
-    except requests.exceptions.RequestException as e:
-        logger.exception(f"Error fetching URL via ZenRows: {url}")
+        return resp.text
+    except Exception as e:
+        logger.exception(f"ZenRows request error: {url}")
         raise e
-    return resp.text
+
+# ===========================
+# Bright Data pool
+# ===========================
+# BRIGHTDATA_POOL_ENV = os.getenv("BRIGHTDATA_PROXY_POOL", "")
+# BRIGHTDATA_PROXIES = [x.strip() for x in BRIGHTDATA_POOL_ENV.split(",") if x.strip()]
+BRIGHTDATA_PROXIES = [
+    'http://brd-customer-hl_668fd6e0-zone-datacenter_proxy1:7g6edg65pwp8@brd.superproxy.io:33335',
+    'http://brd-customer-hl_668fd6e0-zone-datacenter_proxy2:y6ft4jxbcvjm@brd.superproxy.io:33335',
+    'http://brd-customer-hl_668fd6e0-zone-datacenter_proxy3:c9swm7yi5xhd@brd.superproxy.io:33335'
+]
+# ===========================
+# Retry-enabled session
+# ===========================
+def get_requests_session() -> requests.Session:
+    s = requests.Session()
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[502, 503, 504],
+        allowed_methods=["HEAD", "GET", "OPTIONS"]
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    s.mount("https://", adapter)
+    s.mount("http://", adapter)
+    return s
+
+session = get_requests_session()
+
+def get_random_desktop_user_agent() -> str:
+    if UserAgent:
+        try:
+            ua = UserAgent()
+            desktop_browsers = ['chrome', 'firefox', 'safari', 'opera']
+            return getattr(ua, random.choice(desktop_browsers))
+        except:
+            logger.exception("Failed generating random UA, fallback.")
+    return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.51 Safari/537.36"
+
+"""
+def get_random_desktop_user_agent() -> str:
+    fallback = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " \
+               "(KHTML, like Gecko) Chrome/99.0.4844.51 Safari/537.36"
+    if UserAgent:
+        try:
+            ua = UserAgent()
+            desktop_browsers = ['chrome', 'firefox', 'safari', 'opera']
+            # randomly choose a browser key
+            browser = random.choice(desktop_browsers)
+            # Access the list of user agents for that browser from the underlying data
+            user_agents = ua.data.get(browser, [])
+            # filter out any user agents that contain mobile identifiers
+            desktop_agents = [agent for agent in user_agents if not any(keyword in agent for keyword in ['Mobile', 'Android', 'iPhone'])]
+            if desktop_agents:
+                return random.choice(desktop_agents)
+            else:
+                logger.warning(f"No desktop user agents found for browser {browser}.")
+        except Exception:
+            logger.exception("Failed generating random UA, fallback.")
+    return fallback
+"""
 
 
-def _extract_redirect_link(html: str) -> Optional[str]:
-    """
-    Extracts the first redirect link from HTML using a regex pattern.
-    """
-    matches = REDIRECT_LINK_REGEX.findall(html)
-    return matches[0] if matches else None
-
-
-# ---------------------------
-# Domain-Specific Processors
-# ---------------------------
-
-def _process_olx_redirect(response_text: str) -> ExtractionResult:
-    """
-    Processes OLX pages by extracting the SKU and then fetching the phone data.
-    """
-    logger.info("Processing OLX redirect page content.")
-    if "It seems like a dead end" in response_text:
-        logger.info("OLX indicates the ad is no longer available.")
-        return ExtractionResult(phone_numbers=[])
-
-    sku_matches = SKU_REGEX.findall(response_text)
-    if not sku_matches:
-        logger.info("SKU not found in OLX response.")
-        return ExtractionResult(phone_numbers=[])
-
-    ad_sku = sku_matches[0]
-    olx_api_url = OLX_PHONE_LINK.format(ad_sku)
-    logger.info(f"OLX SKU: {ad_sku}, fetching phone API at {olx_api_url}")
-
+# ===========================
+# Domain-Specific fallback parse
+# ===========================
+def _parse_real_estate_lviv(ad_link: str) -> ExtractionResult:
+    logger.info("Parsing real-estate.lviv.ua data.")
+    ad_id_part = ad_link.split("/")[-1].split("-")[0]
+    link_ = REAL_ESTATE_LVIV_UA_LINK.format(ad_id_part)
     try:
-        api_response = fetch_with_zenrows(olx_api_url, js_render=False)
-        data_json = json.loads(api_response)
-        phone_number = jmespath.search("data.phones[0]", data_json)
-        if phone_number:
-            logger.info(f"Found OLX phone: {phone_number}")
-            return ExtractionResult(phone_numbers=[phone_number])
-        else:
-            logger.info("No phone found in OLX JSON response.")
-            return ExtractionResult(phone_numbers=[])
-    except requests.exceptions.RequestException:
-        logger.exception("Error fetching OLX phone API.")
-        return ExtractionResult(phone_numbers=[])
+        r = session.get(link_, timeout=REQUEST_TIMEOUT)
+        r.raise_for_status()
+        matches = TELEPHONE_REGEX_REAL_ESTATE.findall(r.text)
+        if matches:
+            phones = [p.replace('(', '').replace(')', '').replace(' ', '') for p in matches]
+            return ExtractionResult(phones, None)
+        return ExtractionResult([], None)
     except Exception:
-        logger.exception("Unexpected error processing OLX redirect.")
-        return ExtractionResult(phone_numbers=[])
+        logger.exception("Error fetching real-estate.lviv.ua phone link.")
+        return ExtractionResult([], None)
 
-
-def _process_real_estate_lviv(ad_link: str) -> ExtractionResult:
-    """
-    Extracts phone numbers from real-estate.lviv.ua pages using regex.
-    """
-    logger.info("Processing real-estate.lviv.ua data.")
-    real_estate_lviv_ad_id = ad_link.split("/")[-1].split("-")[0]
-    r_e_phone_link = REAL_ESTATE_LVIV_UA_LINK.format(real_estate_lviv_ad_id)
-    try:
-        resp = session.get(r_e_phone_link, timeout=REQUEST_TIMEOUT)
-        resp.raise_for_status()
-    except requests.exceptions.RequestException:
-        logger.exception(f"Error fetching real-estate.lviv.ua URL: {r_e_phone_link}")
-        return ExtractionResult(phone_numbers=[])
-
-    phone_matches = TELEPHONE_REGEX_REAL_ESTATE.findall(resp.text)
-    if phone_matches:
-        result = [el.replace('(', '').replace(')', '').replace(' ', '') for el in phone_matches]
-        logger.info(f"Found real-estate.lviv.ua phones: {result}")
-        return ExtractionResult(phone_numbers=result)
-    else:
-        logger.info("No phone found in real-estate.lviv.ua response.")
-        return ExtractionResult(phone_numbers=[])
-
-
-def _process_lun(response_text: str) -> ExtractionResult:
-    """
-    Extracts phone numbers from lun.ua pages using regex.
-    """
-    logger.info("Processing lun.ua page content.")
-    matches = LUN_PHONE_REGEX.findall(response_text)
+def _parse_lun(html: str) -> ExtractionResult:
+    logger.info("Parsing lun.ua content.")
+    matches = LUN_PHONE_REGEX.findall(html)
     if matches:
-        final_phone = matches[0]
-        logger.info(f"Found lun.ua phone: {final_phone}")
-        return ExtractionResult(phone_numbers=[final_phone])
-    else:
-        logger.info("No phone numbers found in lun.ua response.")
-        return ExtractionResult(phone_numbers=[])
+        return ExtractionResult([matches[0]], None)
+    return ExtractionResult([], None)
 
+def _parse_rieltor(html: str) -> ExtractionResult:
+    logger.info("Parsing rieltor.ua content.")
+    telephones = RIELTOR_PHONE_REGEX.findall(html)
+    if telephones:
+        return ExtractionResult([telephones[0]], None)
+    return ExtractionResult([], None)
 
-def _process_rieltor(response_text: str) -> ExtractionResult:
+def _parse_faktor24(html: str) -> ExtractionResult:
+    logger.info("Parsing faktor24.com content.")
+    telephones = FAKTOR24_PHONE_REGEX.findall(html)
+    if telephones:
+        return ExtractionResult([telephones[0]], None)
+    return ExtractionResult([], None)
+
+def _fallback_parse(html: str) -> ExtractionResult:
+    logger.info("Fallback parse for unknown domain.")
+    soup = BeautifulSoup(html, "lxml")
+    phone_nums, viber_link = [], None
+
+    container = soup.find("div", class_="offer-view-rieltor-action")
+    if container:
+        contacts = container.find("div", attrs={"data-jss": "ovContacts"})
+        if contacts:
+            for link_ in contacts.find_all("a"):
+                href = link_.get("href")
+                if href and href.startswith("tel:"):
+                    phone_nums.append(href)
+        viber_a = container.find("a", id=lambda x: x and "send-viber" in x)
+        if viber_a:
+            viber_link = viber_a.get("href")
+
+    return ExtractionResult(phone_nums, viber_link)
+
+# ===========================
+# OLX phone fetch with JS fetch
+# w/ fallback to extra bright data attempts if 400
+# ===========================
+async def olx_js_fetch_phone(page: Page, sku: str, attempts: int = 3) -> Optional[str]:
     """
-    Processes rieltor.ua pages (stub implementation) to extract phone numbers.
+    Attempts to fetch OLX phone data from the same page context up to `attempts`.
+    If 400 => next attempt, if still fail => None
     """
-    logger.info("Processing rieltor.ua page content.")
-    telephone_data = RIELTOR_PHONE_REGEX.findall(response_text)
-    if telephone_data:
-        logger.info(f"Found rieltor.ua phone: {telephone_data[0]}")
-        return ExtractionResult(phone_numbers=[telephone_data[0]])
+    phone_url = OLX_PHONE_LINK.format(sku)
+    logger.info(f"OLX phone fetch via JS: {phone_url}")
+    for i in range(1, attempts + 1):
+        try:
+            js_script = f"""
+            (async () => {{
+                const resp = await fetch("{phone_url}");
+                const status_ = resp.status;
+                if (!resp.ok) {{
+                  return {{ status: status_, data: null }};
+                }}
+                const jd = await resp.json();
+                return {{ status: status_, data: jd }};
+            }})();
+            """
+            result = await page.evaluate(js_script)
+            if not result:
+                logger.warning(f"Attempt {i}: No result from OLX fetch.")
+                continue
+
+            st = result.get("status", 0)
+            if st == 400:
+                logger.warning(f"OLX phone API => 400 on attempt {i}")
+                if i == attempts:
+                    return None
+                else:
+                    continue
+            elif st != 200:
+                logger.warning(f"OLX phone => {st}, returning None.")
+                return None
+
+            data_ = result.get("data", {})
+            phone = jmespath.search("data.phones[0]", data_)
+            return phone
+        except Exception as e:
+            logger.exception(f"OLX phone fetch error attempt {i}: {e}")
+            if i == attempts:
+                return None
+    return None
+
+async def olx_js_fetch_phone_via_proxies(browser: Browser, resource_url: str, sku: str) -> Optional[str]:
+    """
+    If normal OLX fetch fails, do 3 attempts with random bright data proxies.
+    Each attempt => new context => fetch w/ same JS script
+    """
+    if not BRIGHTDATA_PROXIES:
+        logger.warning("No bright data proxies available for OLX fallback.")
+        return None
+
+    for attempt_ in range(1, 4):
+        random_proxy = random.choice(BRIGHTDATA_PROXIES)
+        proxy_config = parse_proxy(random_proxy)
+        logger.info(f"OLX phone fallback via bright data proxy attempt {attempt_} => {random_proxy}")
+        try:
+            ua = get_random_desktop_user_agent()
+            context = await browser.new_context(
+                user_agent=ua,
+                java_script_enabled=True,
+                proxy=proxy_config
+            )
+            page = await context.new_page()
+            await page.goto(resource_url, wait_until="networkidle", timeout=REQUEST_TIMEOUT*1000)
+            phone = await olx_js_fetch_phone(page, sku, attempts=1)
+            await context.close()
+            if phone:
+                logger.info(f"Success with bright data proxy => {phone}")
+                return phone
+        except Exception as e:
+            logger.exception(f"Proxy fallback attempt {attempt_} => error: {e}")
+    logger.warning("All proxy fallback attempts for OLX phone => fail.")
+    return None
+
+async def parse_olx_playwright(html: str, page: Page, browser: Browser, resource_url: str) -> ExtractionResult:
+    """
+    1) parse HTML => find SKU
+    2) attempt phone fetch in same page context
+    3) if still fail => bright data fallback
+    """
+    if "It seems like a dead end" in html:
+        logger.info("OLX indicates ad is no longer available.")
+        return ExtractionResult([], None)
+
+    match = SKU_REGEX.findall(html)
+    if not match:
+        logger.warning("No SKU found in OLX content.")
+        return ExtractionResult([], None)
+
+    sku = match[0]
+    logger.info(f"Parsed OLX SKU => {sku}")
+    phone = await olx_js_fetch_phone(page, sku, attempts=3)
+    if phone:
+        logger.info(f"OLX phone => {phone}")
+        return ExtractionResult([phone], None)
+
+    # fallback => bright data
+    phone_via_proxy = await olx_js_fetch_phone_via_proxies(browser, resource_url, sku)
+    if phone_via_proxy:
+        logger.info(f"OLX phone after bright data => {phone_via_proxy}")
+        return ExtractionResult([phone_via_proxy], None)
+
+    # final => no phone
+    return ExtractionResult([], None)
+
+# ===========================
+# Main domain parse
+# ===========================
+async def _domain_parse_final(html: str, original_url: str, page: Page, browser: Browser) -> ExtractionResult:
+    soup = BeautifulSoup(html, "lxml")
+    canonical_tag = soup.find("link", rel="canonical")
+    canonical_url = canonical_tag["href"] if canonical_tag else original_url
+    if canonical_url == original_url:
+        logger.warning("canonical_url == original_url")
+        logger.warning(html)
+        # canonical_url = soup.find("a", class_="redirect-link")["href"]
+        # logger.warning(f"new canonical_url {canonical_url}")
+    logger.info(f"Canonical for {original_url}: {canonical_url}")
+
+    if "olx.ua" in canonical_url:
+        return await parse_olx_playwright(html, page, browser, original_url)
+    elif "real-estate.lviv.ua" in canonical_url:
+        return _parse_real_estate_lviv(canonical_url)
+    elif "rieltor.ua" in canonical_url:
+        return _parse_rieltor(html)
+    elif "lun.ua" in canonical_url:
+        return _parse_lun(html)
+    elif "faktor24.com" in canonical_url:
+        return _parse_faktor24(html)
     else:
-        logger.info("No phone numbers found in rieltor.ua response.")
-        return ExtractionResult(phone_numbers=[])
+        logger.warning("Unknown domain => fallback parse.")
+        return _fallback_parse(html)
 
-def _process_faktor24(response_text: str) -> ExtractionResult:
-    logger.info("Processing faktor24.com page content.")
-    telephone_data = FAKTOR24_PHONE_REGEX.findall(response_text)
-    if telephone_data:
-        logger.info(f"Found faktor24.com phone: {telephone_data[0]}")
-        return ExtractionResult(phone_numbers=[telephone_data[0]])
-    else:
-        logger.info("No phone numbers found in faktor24.com response.")
-        return ExtractionResult(phone_numbers=[])
+# ===========================
+# Page fetch
+# ===========================
+async def _playwright_fetch_page(url: str, browser: Browser, proxy: Optional[str], attempts: int=3) -> str:
+    """
+    Up to `attempts` times, random UA. If fail => raise.
+    """
+    for i in range(1, attempts+1):
+        ua = get_random_desktop_user_agent()
+        proxy_settings = None
+        if proxy:
+            logger.info(f"Using proxy => {proxy}")
+            proxy_settings = {"server": proxy}
 
+        logger.info(f"[Playwright] Attempt {i}/{attempts} for {url} with UA={ua}, proxy={bool(proxy)}")
+        context = await browser.new_context(
+            user_agent=ua,
+            java_script_enabled=True,
+            proxy=proxy_settings
+        )
+        page = await context.new_page()
 
-# ---------------------------
-# Main Extraction Function
-# ---------------------------
+        try:
+            await page.goto(url, wait_until="networkidle", timeout=REQUEST_TIMEOUT*1000)
+            content = await page.content()
+            await context.close()
+            return content
+        except Exception as e:
+            logger.exception(f"Attempt {i} error => {e}")
+            await context.close()
+            await asyncio.sleep(1)
+    raise Exception(f"Failed to load {url} after {attempts} attempts, proxy={proxy}")
+
+# ===========================
+# Async main fetch
+# ===========================
+async def _extract_phone_numbers_async(resource_url: str) -> ExtractionResult:
+    """
+    1) 3 attempts no-proxy
+    2) 3 attempts random bright data proxies
+    3) fallback ZenRows
+    """
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+
+        # 1) no-proxy (3 attempts)
+        try:
+            html_np = await _playwright_fetch_page(resource_url, browser, None, attempts=5)
+            # parse domain => need page context to do OLX phone
+            ctx_np = await browser.new_context(java_script_enabled=True)
+            page_np = await ctx_np.new_page()
+            await page_np.goto(resource_url, wait_until="networkidle", timeout=REQUEST_TIMEOUT*1000)
+            result_np = await _domain_parse_final(html_np, resource_url, page_np, browser)
+            await ctx_np.close()
+            return result_np
+        except Exception as e:
+            logger.warning(f"No-proxy stage failed for {resource_url}. {e}")
+
+        # 2) bright data proxies
+        if BRIGHTDATA_PROXIES:
+            logger.info("Trying bright data proxy approach (3 attempts, random from pool).")
+            for att_ in range(1, 4):
+                proxy_ = random.choice(BRIGHTDATA_PROXIES)
+                try:
+                    html_px = await _playwright_fetch_page(resource_url, browser, proxy_, attempts=len(BRIGHTDATA_PROXIES))
+                    ctx_px = await browser.new_context(java_script_enabled=True, proxy={"server": proxy_})
+                    page_px = await ctx_px.new_page()
+                    await page_px.goto(resource_url, wait_until="networkidle", timeout=REQUEST_TIMEOUT*1000)
+                    # if resp.status != 200:
+                    #     logger.warning(f"Failed to fetch bright data proxy for {resource_url}. {resp.status}")
+                    #     logger.warning("Let's try with another proxy.")
+                    #     continue
+                    res_px = await _domain_parse_final(html_px, resource_url, page_px, browser)
+                    await ctx_px.close()
+                    return res_px
+                except:
+                    logger.warning(f"Bright data attempt {att_} => fail for {proxy_}")
+            logger.warning("All bright data attempts => fail.")
+        else:
+            logger.warning("No BRIGHTDATA_PROXY_POOL => skipping proxy stage.")
+
+        # 3) fallback => ZenRows
+        logger.info("Falling back to ZenRows approach.")
+        try:
+            zen_html = fetch_with_zenrows(resource_url, js_render=False)
+            ctx_z = await browser.new_context(java_script_enabled=False)
+            page_z = await ctx_z.new_page()  # not actually loaded => we'll parse offline
+            res_z = await _domain_parse_final(zen_html, resource_url, page_z, browser)
+            await ctx_z.close()
+            return res_z
+        except:
+            logger.exception("ZenRows fallback => error.")
+            return ExtractionResult([], None)
+
 
 def extract_phone_numbers_from_resource(resource_url: str) -> ExtractionResult:
     """
-    Fetches a resource URL via ZenRows and extracts phone numbers using
-    domain-specific logic. Falls back to BeautifulSoup parsing if the domain
-    is unknown.
-
-    Args:
-        resource_url (str): The initial URL to fetch.
-
-    Returns:
-        ExtractionResult: An object containing a list of phone numbers and
-                          an optional Viber link.
+    Synchronous function:
+      phones, viber = extract_phone_numbers_from_resource(url).phone_numbers, .viber_link
     """
-    logger.info(f"[ZenRows] extract_phone_numbers_from_resource -> {resource_url}")
+    logger.info(f"extract_phone_numbers_from_resource => {resource_url}")
     try:
-        html_content = fetch_with_zenrows(resource_url, js_render=False)
+        return asyncio.run(_extract_phone_numbers_async(resource_url))
     except Exception:
-        logger.exception(f"ZenRows request failed for {resource_url}")
-        return ExtractionResult(phone_numbers=[])
+        logger.exception("All final attempts => fail.")
+        return ExtractionResult([], None)
 
-    redirect_link = _extract_redirect_link(html_content)
-    if redirect_link:
-        logger.info(f"Redirect link found: {redirect_link}")
-        try:
-            html_content = fetch_with_zenrows(redirect_link, js_render=False)
-        except Exception:
-            logger.exception(f"ZenRows request failed for redirect link: {redirect_link}")
-            return ExtractionResult(phone_numbers=[])
-    else:
-        logger.info(f"No redirect link found for resource_url: {resource_url}")
 
-    # Domain-specific extraction based on known patterns in HTML or redirect URL.
-    if "olx.ua" in html_content:
-        logger.info("Detected OLX domain.")
-        return _process_olx_redirect(html_content)
-    elif "real-estate.lviv.ua" in html_content:
-        logger.info("Detected real-estate.lviv.ua domain.")
-        return _process_real_estate_lviv(redirect_link if redirect_link else resource_url)
-    elif "rieltor.ua" in html_content and redirect_link and "rieltor.ua" in redirect_link:
-        logger.info("Detected rieltor.ua domain.")
-        return _process_rieltor(html_content)
-    elif "lun.ua" in html_content and redirect_link and "lun.ua" in redirect_link:
-        logger.info("Detected lun.ua domain.")
-        return _process_lun(html_content)
-    elif "faktor24.com" in redirect_link:
-        logger.info("Detected faktor24.com domain.")
-        return _process_faktor24(html_content)
-    else:
-        logger.warning("Unknown domain. Attempting fallback parse with BeautifulSoup.")
-        soup = BeautifulSoup(html_content, "lxml")
-        phone_numbers = []
-        viber_link = None
-        container = soup.find("div", class_="offer-view-rieltor-action")
-        if container:
-            contacts = container.find("div", attrs={"data-jss": "ovContacts"})
-            if contacts:
-                for link_ in contacts.find_all("a"):
-                    href = link_.get("href")
-                    if href and href.startswith("tel:"):
-                        phone_numbers.append(href)
-            viber_a = container.find("a", id=lambda x: x and "send-viber" in x)
-            if viber_a:
-                viber_link = viber_a.get("href")
-        return ExtractionResult(phone_numbers=phone_numbers, viber_link=viber_link)
+if __name__ == "__main__":
+    # example usage
+    os.environ["BRIGHTDATA_PROXY_POOL"] = "http://user:pass@proxy1:port,http://user:pass@proxy2:port"
+    test_urls = [
+        "https://flatfy.ua/uk/redirect/2614567152",  # might cause OLX 400
+        "https://flatfy.ua/uk/redirect/2614223824",  # might timeout
+    ]
+    for u in test_urls:
+        result = extract_phone_numbers_from_resource(u)
+        print(f"\nURL: {u}\nPhones: {result.phone_numbers}\nViber: {result.viber_link}")

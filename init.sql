@@ -37,9 +37,41 @@ CREATE TABLE IF NOT EXISTS user_filters (
     city BIGINT,
     rooms_count INTEGER[] NOT NULL,
     price_min NUMERIC,
-    price_max NUMERIC
+    price_max NUMERIC,
+    is_paused BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 -- Add the unique constraint so that ON CONFLICT(user_id) works
 ALTER TABLE user_filters
   ADD CONSTRAINT user_filters_user_id_unique UNIQUE (user_id);
+
+CREATE TABLE subscriptions (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    property_type VARCHAR(50),
+    city BIGINT,
+    rooms_count INTEGER[],
+    price_min NUMERIC,
+    price_max NUMERIC,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+
+CREATE TABLE favorite_ads (
+    id SERIAL PRIMARY KEY,
+    user_id INT REFERENCES users(id) ON DELETE CASCADE,
+    ad_id BIGINT REFERENCES ads(id) ON DELETE CASCADE,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Possibly you add a unique constraint so user cannot favorite the same ad multiple times
+ALTER TABLE favorite_ads
+  ADD CONSTRAINT unique_favorite_per_user UNIQUE (user_id, ad_id);
+
+
+CREATE TABLE IF NOT EXISTS ad_phones (
+    id SERIAL PRIMARY KEY,
+    ad_id BIGINT REFERENCES ads(id) ON DELETE CASCADE,
+    phone TEXT,          -- For phone numbers (e.g., "tel: +380663866058")
+    viber_link TEXT      -- For a Viber chat link if available
+);

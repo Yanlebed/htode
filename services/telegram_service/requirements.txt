@@ -8,3 +8,5 @@ python-dotenv==0.21.1
 loguru==0.6.0
 httpx==0.24.0
 boto3
+playwright
+beautifulsoup4

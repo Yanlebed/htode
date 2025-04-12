@@ -3,7 +3,7 @@
 import logging
 from aiogram import executor
 from .bot import dp
-from .handlers import menu_handlers, basic_handlers, advanced_handlers  # Реєстрація хендлерів
+from .handlers import menu_handlers, basic_handlers, advanced_handlers, subscription, support, favorites  # Реєстрація хендлерів
 
 # Налаштування логування
 logging.basicConfig(level=logging.INFO)

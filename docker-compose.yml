@@ -195,6 +195,18 @@ services:
       - app_net
     command: celery -A app.celery_app.celery_app worker --loglevel=info -Q notify_queue
 
+
+  mini_webapp_service:
+    container_name: mini_webapp
+    build:
+      context: services/webapps
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    networks:
+      - app_net
+    command: python /app/mini_webapp.py
+
 networks:
   app_net:
     driver: bridge

@@ -7,16 +7,15 @@ from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters import Text
 from ..bot import dp, bot
 from ..states.basis_states import FilterStates
-from common.db.models import update_user_filter, disable_subscription_for_user, \
-    enable_subscription_for_user, get_subscription_data_for_user, get_subscription_until_for_user
+from common.db.models import update_user_filter, start_free_subscription_of_user
 from common.db.database import execute_query
-from common.config import GEO_ID_MAPPING, get_key_by_value
+from common.config import GEO_ID_MAPPING, get_key_by_value, build_ad_text
 from common.celery_app import celery_app
 from ..keyboards import (
     main_menu_keyboard,
-    subscription_menu_keyboard,
     how_to_use_keyboard,
-    tech_support_keyboard
+    tech_support_keyboard,
+    edit_parameters_keyboard
 )
 
 logger = logging.getLogger(__name__)
@@ -30,58 +29,22 @@ async def show_main_menu(message: types.Message):
     )
 
 
-@dp.callback_query_handler(lambda c: c.data == 'menu_my_subscription')
-async def my_subscription_handler(callback_query: types.CallbackQuery):
-    # You can fetch subscription status from DB:
-    user_id = callback_query.from_user.id
-    subscription_data = get_subscription_data_for_user(user_id)
-    subscription_valid_until = get_subscription_until_for_user(user_id)
-    text = f"""Деталі підписки:
-     - 🏙️ Місто: {subscription_data['city']}
-     - 🏷 Тип нерухомості: {subscription_data['property_type']}
-     - 🛏️ Кількість кімнат: {subscription_data['rooms_count']}
-     - 💰 Ціна: {subscription_data['price_min']}-{subscription_data['price_max']}
+# @dp.message_handler(lambda msg: msg.text == "✏️ Редагувати")
+# async def handle_edit_subscription(message: types.Message):
+#     user_id = message.from_user.id
+#     # Show some custom flow or re-run the filter states
+#     await message.answer(
+#         "Давайте відредагуємо параметри. (Тут реалізуйте логіку вибору міста / кімнат...)",
+#         # Possibly a different keyboard or re-use subscription_menu
+#     )
 
-     Підписка активна до {subscription_valid_until}
-     """
-    await bot.send_message(
-        chat_id=callback_query.message.chat.id,
-        text=text,
-        reply_markup=subscription_menu_keyboard()
+@dp.message_handler(lambda msg: msg.text == "✏️ Редагувати")
+async def edit_parameters(callback_query: types.CallbackQuery, state: FSMContext):
+    await callback_query.message.answer(
+        "Оберіть параметр для редагування:",
+        reply_markup=edit_parameters_keyboard()
     )
-
-
-@dp.callback_query_handler(lambda c: c.data == 'subs_disable')
-async def disable_subscription_handler(callback_query: types.CallbackQuery):
-    user_id = callback_query.from_user.id
-    # Call your DB method to disable subscription
-    disable_subscription_for_user(user_id)
-    await bot.send_message(
-        chat_id=callback_query.message.chat.id,
-        text="Ваша підписка відключена.",
-        reply_markup=main_menu_keyboard()
-    )
-
-
-@dp.callback_query_handler(lambda c: c.data == 'subs_enable')
-async def enable_subscription_handler(callback_query: types.CallbackQuery):
-    user_id = callback_query.from_user.id
-    enable_subscription_for_user(user_id)
-    await bot.send_message(
-        chat_id=callback_query.message.chat.id,
-        text="Ваша підписка включена.",
-        reply_markup=main_menu_keyboard()
-    )
-
-
-@dp.callback_query_handler(lambda c: c.data == 'subs_edit')
-async def edit_subscription_handler(callback_query: types.CallbackQuery):
-    user_id = callback_query.from_user.id
-    await bot.send_message(
-        chat_id=callback_query.message.chat.id,
-        text="Давайте відредагуємо параметри вашої підписки.",
-        # Maybe show some filters, etc.
-    )
+    await callback_query.answer()
 
 
 @dp.callback_query_handler(lambda c: c.data == 'subs_back')
@@ -141,10 +104,11 @@ async def back_to_main_menu_handler(callback_query: types.CallbackQuery):
 @dp.callback_query_handler(Text(startswith="subscribe"), state=FilterStates.waiting_for_confirmation)
 async def subscribe(callback_query: types.CallbackQuery, state: FSMContext):
     user_data = await state.get_data()
-    logger.info('subscribe: user_data: %s', user_data)
+    # logger.info('subscribe: user_data: %s', user_data)
     user_db_id = user_data.get('user_db_id')  # Отримуємо внутрішній ID користувача
     telegram_id = user_data.get('telegram_id')
-    logger.info('User DB ID: %s', user_db_id)
+    # logger.info('User DB ID: %s', user_db_id)
+    # logger.info('Telegram ID: %s', telegram_id)
 
     if not user_db_id:
         await callback_query.message.answer("Ошибка: Не удалось определить вашего пользователя.")
@@ -165,7 +129,10 @@ async def subscribe(callback_query: types.CallbackQuery, state: FSMContext):
 
     # Збереження фільтрів у базі даних
     update_user_filter(user_db_id, filters)
-
+    logger.info('Filters updated')
+    logger.info(filters)
+    start_free_subscription_of_user(user_db_id)
+    logger.info('Free subscription started')
     # 1) Let user know subscription is set
     await callback_query.message.answer("Ви успішно підписалися на пошук оголошень!")
 
@@ -175,7 +142,7 @@ async def subscribe(callback_query: types.CallbackQuery, state: FSMContext):
     final_ads = []
     for days_limit in [1, 3, 7, 14, 30]:
         ads = fetch_ads_for_period(filters, days_limit, limit=3)
-        if len(ads) >= 3:
+        if len(ads) >= 1:
             final_ads = ads
             # We found enough ads => break out
             break
@@ -188,7 +155,7 @@ async def subscribe(callback_query: types.CallbackQuery, state: FSMContext):
         )
         # Send them (as 3 separate messages, or combine them)
         for ad in final_ads:
-            s3_image_links = get_ad_images(ad)
+            s3_image_links = get_ad_images(ad)[0]
             text = build_ad_text(ad)
             # await callback_query.message.answer(text)
 
@@ -197,12 +164,18 @@ async def subscribe(callback_query: types.CallbackQuery, state: FSMContext):
             # or 's3_image_url'.
             # 'resource_url' might be "https://flatfy.ua/uk/redirect/..."
             resource_url = ad.get("resource_url")
+            # ad_id = ad.get("id")
+            ad_external_id = ad.get("external_id")
+            ad_id = ad.get("id")
 
+            logger.info(f"services/telegram_service/app/handlers/menu_handlers:subscribe- Ad {ad}")
             # Now dispatch the Celery task:
+            args_for_celery = [telegram_id, text, s3_image_links, resource_url, ad_id, ad_external_id]
+            logger.info(
+                f"services/telegram_service/app/handlers/menu_handlers:subscribe. args_for_celery task send_ad_with_extra_buttons - {args_for_celery}")
             celery_app.send_task(
-                # "telegram_service.app.tasks.send_message_task",
-                "telegram_service.app.tasks.send_ad_with_photos",
-                args=[telegram_id, text, s3_image_links, resource_url]
+                "telegram_service.app.tasks.send_ad_with_extra_buttons",
+                args=args_for_celery
             )
     else:
         # We never found 3 ads even in last 30 days
@@ -211,8 +184,8 @@ async def subscribe(callback_query: types.CallbackQuery, state: FSMContext):
             "Спробуйте розширити параметри пошуку або зачекайте. Ми сповістимо, щойно з’являться нові оголошення."
         )
 
-    # 3) Optionally say: "Ми також будемо надсилати всі майбутні..."
-    await callback_query.message.answer("Ми будемо надсилати вам нові оголошення, щойно вони з’являтимуться!")
+    # # 3) Optionally say: "Ми також будемо надсилати всі майбутні..."
+    # await callback_query.message.answer("Ми будемо надсилати вам нові оголошення, щойно вони з’являтимуться!")
 
     # 4) End the state
     await state.finish()
@@ -223,6 +196,11 @@ async def subscribe(callback_query: types.CallbackQuery, state: FSMContext):
     celery_app.send_task(
         'notifier_service.app.tasks.notify_user_with_ads',
         args=[telegram_id, filters]
+    )
+
+    await callback_query.message.answer(
+        "Ми будемо надсилати вам нові оголошення, щойно вони з’являтимуться!",
+        reply_markup=main_menu_keyboard()
     )
 
 
@@ -256,21 +234,6 @@ def get_ad_images(ad):
     rows = execute_query(sql_check, [ad_id], fetch=True)
     if rows:
         return [row["image_url"] for row in rows]
-
-
-def build_ad_text(ad_row):
-    # For example:
-    city_name = GEO_ID_MAPPING.get(ad_row.get('city'))
-    text = (
-        f"💰 Ціна: {int(ad_row.get('price'))} грн.\n"
-        f"🏙️ Місто: {city_name}\n"
-        f"📍 Адреса: {ad_row.get('address')}\n"
-        f"🛏️ Кіл-сть кімнат: {ad_row.get('rooms_count')}\n"
-        f"📐 Площа: {ad_row.get('square_feet')} кв.м.\n"
-        f"🏢 Поверх: {ad_row.get('floor')} из {ad_row.get('total_floors')}\n"
-        f"📝 Опис: {ad_row.get('description')[:75]}...\n"
-    )
-    return text
 
 
 def fetch_ads_for_period(filters, days, limit=3):
@@ -324,3 +287,58 @@ def fetch_ads_for_period(filters, days, limit=3):
     logger.info('Params: %s', params)
     rows = execute_query(sql, params, fetch=True)
     return rows
+
+
+@dp.message_handler(lambda msg: msg.text == "🤔 Як це працює?")
+async def handle_how_to_use(message: types.Message):
+    text = (
+        "Як використовувати:\n\n"
+        "1. Налаштуйте параметри фільтра.\n"
+        "2. Увімкніть передплату.\n"
+        "3. Отримуйте сповіщення.\n\n"
+        "Якщо у вас є додаткові питання, зверніться до служби підтримки!"
+    )
+    await message.answer(
+        text,
+        reply_markup=how_to_use_keyboard()
+    )
+
+
+# @dp.message_handler(lambda msg: msg.text == "🧑‍💻 Техпідтримка")
+# async def handle_tech_support(message: types.Message):
+#     await message.answer(
+#         "Служба підтримки. Введіть своє питання.",
+#         reply_markup=tech_support_keyboard()
+#     )
+
+
+@dp.message_handler(lambda msg: msg.text == "↪️ Назад")
+async def handle_back(message: types.Message):
+    """
+    Simple universal 'Back' handler that returns to the main menu.
+    Or you can differentiate if you have multiple sub-levels.
+    """
+    await message.answer(
+        "Повертаємося в головне меню.",
+        reply_markup=main_menu_keyboard()
+    )
+
+
+@dp.message_handler(commands=['menu'])
+async def cmd_start(message: types.Message, state: FSMContext):
+    """
+    Sends the main menu keyboard when the user starts or uses /menu.
+    """
+    await message.answer(
+        "Головне меню:",
+        reply_markup=main_menu_keyboard()
+    )
+
+
+@dp.message_handler(lambda msg: msg.text == "➕ Додати підписку")
+async def edit_parameters(callback_query: types.CallbackQuery, state: FSMContext):
+    await callback_query.message.answer(
+        "Оберіть параметр для редагування:",
+        reply_markup=edit_parameters_keyboard()
+    )
+    await callback_query.answer()

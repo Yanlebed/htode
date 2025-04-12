@@ -19,3 +19,11 @@ celery_app.conf.update(
     timezone='UTC',
     enable_utc=True,
 )
+
+# celery_app.conf.beat_schedule = {
+#     'subscription-reminders-daily': {
+#         'task': 'telegram_service.app.tasks.send_subscription_reminders',
+#         'schedule': crontab(hour=10, minute=0),
+#     },
+# }
+# # TODO: check for crontab

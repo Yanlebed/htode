@@ -1,9 +1,12 @@
 # common/db/models.py
+import time
 
 from .database import execute_query
 import datetime
 import logging
 from common.config import GEO_ID_MAPPING, get_key_by_value
+from common.utils.phone_parser import extract_phone_numbers_from_resource
+
 logger = logging.getLogger(__name__)
 
 
@@ -48,6 +51,24 @@ def update_user_filter(user_id, filters):
     execute_query(sql_upsert, [user_id, property_type, geo_id, rooms_count, price_min, price_max])
 
 
+def start_free_subscription_of_user(user_id):
+    logger.info('Starting free subscription for user %s', user_id)
+    sql = "UPDATE users SET free_until = NOW() + interval '7 days' WHERE id = %s"
+    execute_query(sql, [user_id])
+    time.sleep(2)
+    logger.info('Checking if subscription is active for user %s', user_id)
+    select_sql = "SELECT * FROM users WHERE id = %s"
+    rows = execute_query(select_sql, [user_id], fetch=True)
+    if rows:
+        row = rows[0]
+        logger.info('Free subscription for user %s: %s', user_id, row)
+    else:
+        logger.info('Free subscription for user %s: None', user_id)
+        select_all_sql = 'SELECT * FROM users'
+        rows = execute_query(select_all_sql, fetch=True)
+        logger.info('All users: %s', rows)
+
+
 def get_user_filters(user_id):
     sql = "SELECT * FROM user_filters WHERE user_id = %s"
     rows = execute_query(sql, [user_id], fetch=True)
@@ -55,6 +76,7 @@ def get_user_filters(user_id):
 
 
 def find_users_for_ad(ad):
+    # TODO: If is_paused = TRUE, you skip it when searching for active subscriptions (like in find_users_for_ad, or wherever you want to ignore paused ones).
     """
     Возвращает список user_id, которым подходит объявление.
     """
@@ -105,10 +127,182 @@ def get_subscription_data_for_user(user_id):
         return None
 
 
-def get_subscription_until_for_user(user_id):
-    sql = "SELECT subscription_until FROM users WHERE id = %s"
-    row = execute_query(sql, [user_id], fetchone=True)
-    if row:
-        return row['subscription_until']
+def round_date(date_item):
+    from datetime import datetime, timedelta
+
+    # Round up to the next day
+    dt_rounded = date_item + timedelta(days=1)
+
+    # Format in Ukrainian
+    months_ukr = {
+        1: "січня", 2: "лютого", 3: "березня", 4: "квітня", 5: "травня", 6: "червня",
+        7: "липня", 8: "серпня", 9: "вересня", 10: "жовтня", 11: "листопада", 12: "грудня"
+    }
+
+    formatted_date = f"{dt_rounded.day} {months_ukr[dt_rounded.month]} {dt_rounded.year}р."
+    print(formatted_date)
+    return formatted_date
+
+
+def get_subscription_until_for_user(user_id, free=False):
+    sql = "SELECT subscription_until FROM users WHERE id = %s" if not free else "SELECT free_until FROM users WHERE id = %s"
+    rows = execute_query(sql, [user_id], fetchone=True)
+    if rows:
+        # result = [row.get('free_until') or row.get('subscription_until') for row in rows]
+        logger.info('Subscription until for user %s: %s', user_id, rows)
+        date_obj = rows.get('free_until') or rows.get('subscription_until')
+        logger.info('Subscription until for user %s: %s', user_id, date_obj)
+        result = round_date(date_obj)
+        logger.info('Subscription until for user %s: %s', user_id, result)
+        return result
     else:
+        logger.info('Subscription until for user %s: None', user_id)
         return None
+
+
+def get_db_user_id_by_telegram_id(telegram_id):
+    sql = "SELECT id FROM users WHERE telegram_id = %s"
+    row = execute_query(sql, [telegram_id], fetchone=True)
+    return row["id"] if row else None
+
+
+def add_subscription(user_id, property_type, city_id, rooms_count, price_min, price_max):
+    """
+    Adds a new subscription row for this user.
+    We assume you already checked that the user doesn't exceed 20 subscriptions.
+    """
+    # First, ensure the user has < 20
+    sql_count = "SELECT COUNT(*) as cnt FROM user_filters WHERE user_id = %s"
+    row = execute_query(sql_count, [user_id], fetchone=True)
+    if row["cnt"] >= 20:
+        raise ValueError("You already have 20 subscriptions, cannot add more.")
+
+    sql_insert = """
+    INSERT INTO user_filters (user_id, property_type, city, rooms_count, price_min, price_max)
+    VALUES (%s, %s, %s, %s, %s, %s)
+    RETURNING id
+    """
+    sub = execute_query(sql_insert, [user_id, property_type, city_id, rooms_count, price_min, price_max], fetchone=True)
+    return sub["id"]
+
+
+def list_subscriptions(user_id):
+    sql = """
+    SELECT id, property_type, city, rooms_count, price_min, price_max
+    FROM user_filters
+    WHERE user_id = %s
+    ORDER BY id
+    """
+    return execute_query(sql, [user_id], fetch=True)
+
+
+def remove_subscription(subscription_id, user_id):
+    """
+    subscription_id is the PK in user_filters,
+    user_id is the user, to ensure one user cannot remove another's subscription
+    """
+    sql = "DELETE FROM user_filters WHERE id = %s AND user_id = %s"
+    execute_query(sql, [subscription_id, user_id])
+
+
+def update_subscription(subscription_id, user_id, new_values):
+    """
+    new_values might be dict with property_type, city, etc.
+    We'll build a small dynamic query or just do a single update if columns are fixed.
+    """
+    sql = """
+    UPDATE user_filters
+    SET property_type = %s, city = %s, rooms_count = %s, price_min = %s, price_max = %s
+    WHERE id = %s AND user_id = %s
+    """
+    params = [new_values['property_type'], new_values['city'],
+              new_values['rooms_count'], new_values['price_min'], new_values['price_max'],
+              subscription_id, user_id]
+    execute_query(sql, params)
+
+
+def add_favorite_ad(user_id, ad_id):
+    # check limit 50
+    sql_count = "SELECT COUNT(*) as cnt FROM favorite_ads WHERE user_id = %s"
+    row = execute_query(sql_count, [user_id], fetchone=True)
+    if row["cnt"] >= 50:
+        raise ValueError("You already have 50 favorite ads, cannot add more.")
+
+    sql_insert = """
+    INSERT INTO favorite_ads (user_id, ad_id)
+    VALUES (%s, %s)
+    ON CONFLICT (user_id, ad_id) DO NOTHING  -- if you have unique constraint
+    """
+    execute_query(sql_insert, [user_id, ad_id])
+
+
+def list_favorites(user_id):
+    sql = """
+    SELECT fa.id, fa.ad_id, ads.price, ads.address, ads.city, ads.property_type, ads.rooms_count
+    FROM favorite_ads fa
+    JOIN ads ON fa.ad_id = ads.id
+    WHERE fa.user_id = %s
+    ORDER BY fa.created_at DESC
+    """
+    return execute_query(sql, [user_id], fetch=True)
+
+
+def remove_favorite_ad(user_id, ad_id):
+    sql = "DELETE FROM favorite_ads WHERE user_id = %s AND ad_id = %s"
+    execute_query(sql, [user_id, ad_id])
+
+
+def count_subscriptions(user_id):
+    sql = "SELECT COUNT(*) as cnt FROM user_filters WHERE user_id = %s"
+    row = execute_query(sql, [user_id], fetchone=True)
+    return row["cnt"]
+
+
+def list_subscriptions_paginated(user_id, page, per_page=5):
+    offset = page * per_page
+    sql = """
+    SELECT id, city, property_type, rooms_count, price_min, price_max, is_paused
+    FROM user_filters
+    WHERE user_id = %s
+    ORDER BY id
+    LIMIT %s OFFSET %s
+    """
+    rows = execute_query(sql, [user_id, per_page, offset], fetch=True)
+    return rows
+
+
+def get_extra_images(resource_url):
+    # Assuming resource_url corresponds to a unique external_id or similar.
+    # First, look up the ad using resource_url (or pass ad id directly instead).
+    sql = "SELECT id FROM ads WHERE resource_url = %s"
+    ad = execute_query(sql, [resource_url], fetchone=True)
+    if not ad:
+        return []
+    ad_id = ad["id"]
+    sql_images = "SELECT image_url FROM ad_images WHERE ad_id = %s"
+    rows = execute_query(sql_images, [ad_id], fetch=True)
+    return [row["image_url"] for row in rows] if rows else []
+
+
+def get_full_ad_description(resource_url):
+    logger.info(f'Getting full ad description for resource_url: {resource_url}...')
+    sql = "SELECT description from ads WHERE resource_url = %s"
+    ad = execute_query(sql, [resource_url], fetchone=True)
+    return ad["description"] if ad else None
+
+
+def store_ad_phones(resource_url, ad_id):
+    """
+    Extracts phone numbers and a viber link from the given resource URL,
+    then inserts them into the ad_phones table for the given ad_id.
+    """
+    # phones, viber_link = extract_phone_numbers_from_resource(resource_url)
+    result = extract_phone_numbers_from_resource(resource_url)
+    phones = result.phone_numbers
+    viber_link = result.viber_link
+    for phone in phones:
+        sql = "INSERT INTO ad_phones (ad_id, phone) VALUES (%s, %s)"
+        execute_query(sql, [ad_id, phone])
+    if viber_link:
+        sql = "INSERT INTO ad_phones (ad_id, viber_link) VALUES (%s, %s)"
+        execute_query(sql, [ad_id, viber_link])
