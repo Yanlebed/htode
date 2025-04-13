@@ -11,6 +11,11 @@ from common.db.models import update_user_filter, start_free_subscription_of_user
 from common.db.database import execute_query
 from common.config import GEO_ID_MAPPING, get_key_by_value, build_ad_text
 from common.celery_app import celery_app
+from common.utils.ad_utils import get_ad_images
+from ..utils.message_utils import (
+    safe_send_message, safe_answer_callback_query,
+    safe_edit_message, safe_send_photo
+)
 from ..keyboards import (
     main_menu_keyboard,
     how_to_use_keyboard,
@@ -23,37 +28,49 @@ logger = logging.getLogger(__name__)
 
 @dp.message_handler(commands=['menu'])
 async def show_main_menu(message: types.Message):
-    await message.answer(
-        "Оберіть опцію:",
+    """
+    Sends the main menu keyboard when the user uses /menu.
+    """
+    await safe_send_message(
+        chat_id=message.chat.id,
+        text="Головне меню:",
         reply_markup=main_menu_keyboard()
     )
 
 
-# @dp.message_handler(lambda msg: msg.text == "✏️ Редагувати")
-# async def handle_edit_subscription(message: types.Message):
-#     user_id = message.from_user.id
-#     # Show some custom flow or re-run the filter states
-#     await message.answer(
-#         "Давайте відредагуємо параметри. (Тут реалізуйте логіку вибору міста / кімнат...)",
-#         # Possibly a different keyboard or re-use subscription_menu
-#     )
-
-@dp.message_handler(lambda msg: msg.text == "✏️ Редагувати")
+@dp.callback_query_handler(lambda c: c.data == 'edit_parameters')
 async def edit_parameters(callback_query: types.CallbackQuery, state: FSMContext):
-    await callback_query.message.answer(
-        "Оберіть параметр для редагування:",
+    """
+    Handles 'edit_parameters' callback - shows parameter editing menu
+    """
+    await safe_send_message(
+        chat_id=callback_query.from_user.id,
+        text="Оберіть параметр для редагування:",
         reply_markup=edit_parameters_keyboard()
     )
-    await callback_query.answer()
+    await safe_answer_callback_query(callback_query.id)
+
+
+@dp.message_handler(lambda msg: msg.text == "✏️ Редагувати")
+async def handle_edit_button(message: types.Message):
+    """
+    Handles the "Edit" button press from keyboard
+    """
+    await safe_send_message(
+        chat_id=message.chat.id,
+        text="Оберіть параметр для редагування:",
+        reply_markup=edit_parameters_keyboard()
+    )
 
 
 @dp.callback_query_handler(lambda c: c.data == 'subs_back')
 async def subscription_back_handler(callback_query: types.CallbackQuery):
-    await bot.send_message(
+    await safe_send_message(
         chat_id=callback_query.message.chat.id,
         text="Повертаємося до головного меню...",
         reply_markup=main_menu_keyboard()
     )
+    await safe_answer_callback_query(callback_query.id)
 
 
 @dp.callback_query_handler(lambda c: c.data == 'menu_how_to_use')
@@ -65,54 +82,58 @@ async def how_to_use_handler(callback_query: types.CallbackQuery):
         "3. Отримуйте сповіщення.\n\n"
         "Якщо у вас є додаткові питання, зверніться до служби підтримки!"
     )
-    await bot.send_message(
+    await safe_send_message(
         chat_id=callback_query.message.chat.id,
         text=text,
         reply_markup=how_to_use_keyboard()
     )
+    await safe_answer_callback_query(callback_query.id)
 
 
 @dp.callback_query_handler(lambda c: c.data == 'contact_support')
 async def contact_support_handler(callback_query: types.CallbackQuery):
     # If you want them to message an admin directly, you can provide a link or instructions.
     # Or you can set up a separate "Support chat" logic. For simplicity:
-    await bot.send_message(
+    await safe_send_message(
         chat_id=callback_query.message.chat.id,
         text="Напишіть своє питання, і наша служба підтримки відповість вам найближчим часом..."
     )
+    await safe_answer_callback_query(callback_query.id)
 
 
 @dp.callback_query_handler(lambda c: c.data == 'menu_tech_support')
 async def menu_tech_support_handler(callback_query: types.CallbackQuery):
     # Same as above or you can show a new keyboard
-    await bot.send_message(
+    await safe_send_message(
         chat_id=callback_query.message.chat.id,
         text="Звернення до техпідтримки. Будь ласка, введіть своє питання.",
         reply_markup=tech_support_keyboard()
     )
+    await safe_answer_callback_query(callback_query.id)
 
 
 @dp.callback_query_handler(lambda c: c.data == 'main_menu')
 async def back_to_main_menu_handler(callback_query: types.CallbackQuery):
-    await bot.send_message(
+    await safe_send_message(
         chat_id=callback_query.message.chat.id,
         text="Головне меню:",
         reply_markup=main_menu_keyboard()
     )
+    await safe_answer_callback_query(callback_query.id)
 
 
 @dp.callback_query_handler(Text(startswith="subscribe"), state=FilterStates.waiting_for_confirmation)
 async def subscribe(callback_query: types.CallbackQuery, state: FSMContext):
     user_data = await state.get_data()
-    # logger.info('subscribe: user_data: %s', user_data)
-    user_db_id = user_data.get('user_db_id')  # Отримуємо внутрішній ID користувача
+    user_db_id = user_data.get('user_db_id')
     telegram_id = user_data.get('telegram_id')
-    # logger.info('User DB ID: %s', user_db_id)
-    # logger.info('Telegram ID: %s', telegram_id)
 
     if not user_db_id:
-        await callback_query.message.answer("Ошибка: Не удалось определить вашего пользователя.")
-        await callback_query.answer()
+        await safe_send_message(
+            chat_id=callback_query.from_user.id,
+            text="Ошибка: Не удалось определить вашего пользователя."
+        )
+        await safe_answer_callback_query(callback_query.id)
         return
 
     # Перетворимо дані для збереження
@@ -124,20 +145,21 @@ async def subscribe(callback_query: types.CallbackQuery, state: FSMContext):
         'price_max': user_data.get('price_max'),
     }
 
-    logger.info('Filters')
-    logger.info(filters)
+    logger.info('Filters: %s', filters)
 
     # Збереження фільтрів у базі даних
     update_user_filter(user_db_id, filters)
     logger.info('Filters updated')
-    logger.info(filters)
     start_free_subscription_of_user(user_db_id)
     logger.info('Free subscription started')
+
     # 1) Let user know subscription is set
-    await callback_query.message.answer("Ви успішно підписалися на пошук оголошень!")
+    await safe_send_message(
+        chat_id=callback_query.from_user.id,
+        text="Ви успішно підписалися на пошук оголошень!"
+    )
 
     # 2) Now do the multi-step check in local DB
-    #    We'll define a helper function below or inline.
     logger.info('Fetch ads for period')
     final_ads = []
     for days_limit in [1, 3, 7, 14, 30]:
@@ -150,21 +172,16 @@ async def subscribe(callback_query: types.CallbackQuery, state: FSMContext):
     if final_ads:
         # We found >=3 ads in last days_limit
         message_ending = 'день' if days_limit == 1 else 'днів'
-        await callback_query.message.answer(
-            f"Ось вам актуальні оголошення за останні {days_limit} {message_ending}:"
+        await safe_send_message(
+            chat_id=callback_query.from_user.id,
+            text=f"Ось вам актуальні оголошення за останні {days_limit} {message_ending}:"
         )
+
         # Send them (as 3 separate messages, or combine them)
         for ad in final_ads:
-            s3_image_links = get_ad_images(ad)[0]
+            s3_image_links = get_ad_images(ad)[0] if get_ad_images(ad) else None
             text = build_ad_text(ad)
-            # await callback_query.message.answer(text)
-
-            # We assume 'image_url' and 'resource_url' exist in your DB row.
-            # For example, 'image_url' might be `ad.get("image_url")`
-            # or 's3_image_url'.
-            # 'resource_url' might be "https://flatfy.ua/uk/redirect/..."
             resource_url = ad.get("resource_url")
-            # ad_id = ad.get("id")
             ad_external_id = ad.get("external_id")
             ad_id = ad.get("id")
 
@@ -179,27 +196,25 @@ async def subscribe(callback_query: types.CallbackQuery, state: FSMContext):
             )
     else:
         # We never found 3 ads even in last 30 days
-        await callback_query.message.answer(
-            "Ваші параметри фільтру настільки унікальні, що майже немає оголошень навіть за останній місяць.\n"
-            "Спробуйте розширити параметри пошуку або зачекайте. Ми сповістимо, щойно з’являться нові оголошення."
+        await safe_send_message(
+            chat_id=callback_query.from_user.id,
+            text="Ваші параметри фільтру настільки унікальні, що майже немає оголошень навіть за останній місяць.\n"
+                 "Спробуйте розширити параметри пошуку або зачекайте. Ми сповістимо, щойно з'являться нові оголошення."
         )
-
-    # # 3) Optionally say: "Ми також будемо надсилати всі майбутні..."
-    # await callback_query.message.answer("Ми будемо надсилати вам нові оголошення, щойно вони з’являтимуться!")
 
     # 4) End the state
     await state.finish()
-    await callback_query.answer()
+    await safe_answer_callback_query(callback_query.id)
 
     # 5) Optional: send a task to do further real-time scraping or notification
-    #    (Though you just gave them "existing" ads from the DB.)
     celery_app.send_task(
         'notifier_service.app.tasks.notify_user_with_ads',
         args=[telegram_id, filters]
     )
 
-    await callback_query.message.answer(
-        "Ми будемо надсилати вам нові оголошення, щойно вони з’являтимуться!",
+    await safe_send_message(
+        chat_id=callback_query.from_user.id,
+        text="Ми будемо надсилати вам нові оголошення, щойно вони з'являтимуться!",
         reply_markup=main_menu_keyboard()
     )
 
@@ -208,12 +223,14 @@ async def subscribe(callback_query: types.CallbackQuery, state: FSMContext):
 async def unsubscribe_callback(callback_query: types.CallbackQuery, state: FSMContext):
     user_id = callback_query.from_user.id
     # In DB, set user subscription inactive or remove user_filters
-    # e.g.
     sql = "UPDATE users SET subscription_until = NOW() WHERE telegram_id = %s"
     execute_query(sql, [user_id])
 
-    await callback_query.message.answer("Ви відписалися від розсилки оголошень.")
-    await callback_query.answer()
+    await safe_send_message(
+        chat_id=user_id,
+        text="Ви відписалися від розсилки оголошень."
+    )
+    await safe_answer_callback_query(callback_query.id)
 
 
 @dp.message_handler(state='*', commands='cancel')
@@ -225,23 +242,19 @@ async def cancel_handler(message: types.Message, state: FSMContext):
         return
 
     await state.finish()
-    await message.answer('Дія скасована.', reply_markup=types.ReplyKeyboardRemove())
-
-
-def get_ad_images(ad):
-    ad_id = ad.get('id')
-    sql_check = "SELECT * FROM ad_images WHERE ad_id = %s"
-    rows = execute_query(sql_check, [ad_id], fetch=True)
-    if rows:
-        return [row["image_url"] for row in rows]
+    await safe_send_message(
+        chat_id=message.chat.id,
+        text='Дія скасована.',
+        reply_markup=types.ReplyKeyboardRemove()
+    )
 
 
 def fetch_ads_for_period(filters, days, limit=3):
     """
-    Query your local ads table, matching the user’s filters,
+    Query your local ads table, matching the user's filters,
     for ads from the last `days` days. Return up to `limit` ads.
     """
-    # We assume you have a function `execute_query(sql, params, fetch=True)`
+    # Implementation remains the same
     where_clauses = []
     params = []
     city = filters.get('city')
@@ -256,9 +269,6 @@ def fetch_ads_for_period(filters, days, limit=3):
         params.append(filters['property_type'])
 
     if filters.get('rooms') is not None:
-        # filters['rooms'] is a list, so let's match any in that list
-        # E.g. rooms_count is stored as integer in "ads" table
-        # We'll check "rooms_count = ANY(...)"
         where_clauses.append("rooms_count = ANY(%s)")
         params.append(filters['rooms'])
 
@@ -298,18 +308,11 @@ async def handle_how_to_use(message: types.Message):
         "3. Отримуйте сповіщення.\n\n"
         "Якщо у вас є додаткові питання, зверніться до служби підтримки!"
     )
-    await message.answer(
-        text,
+    await safe_send_message(
+        chat_id=message.chat.id,
+        text=text,
         reply_markup=how_to_use_keyboard()
     )
-
-
-# @dp.message_handler(lambda msg: msg.text == "🧑‍💻 Техпідтримка")
-# async def handle_tech_support(message: types.Message):
-#     await message.answer(
-#         "Служба підтримки. Введіть своє питання.",
-#         reply_markup=tech_support_keyboard()
-#     )
 
 
 @dp.message_handler(lambda msg: msg.text == "↪️ Назад")
@@ -318,27 +321,20 @@ async def handle_back(message: types.Message):
     Simple universal 'Back' handler that returns to the main menu.
     Or you can differentiate if you have multiple sub-levels.
     """
-    await message.answer(
-        "Повертаємося в головне меню.",
-        reply_markup=main_menu_keyboard()
-    )
-
-
-@dp.message_handler(commands=['menu'])
-async def cmd_start(message: types.Message, state: FSMContext):
-    """
-    Sends the main menu keyboard when the user starts or uses /menu.
-    """
-    await message.answer(
-        "Головне меню:",
+    await safe_send_message(
+        chat_id=message.chat.id,
+        text="Повертаємося в головне меню.",
         reply_markup=main_menu_keyboard()
     )
 
 
 @dp.message_handler(lambda msg: msg.text == "➕ Додати підписку")
-async def edit_parameters(callback_query: types.CallbackQuery, state: FSMContext):
-    await callback_query.message.answer(
-        "Оберіть параметр для редагування:",
+async def add_subscription(message: types.Message):
+    """
+    Handles the text button for adding a new subscription
+    """
+    await safe_send_message(
+        chat_id=message.chat.id,
+        text="Оберіть параметр для редагування:",
         reply_markup=edit_parameters_keyboard()
     )
-    await callback_query.answer()

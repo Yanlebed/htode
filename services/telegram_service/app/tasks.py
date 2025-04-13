@@ -7,6 +7,10 @@ from common.celery_app import celery_app
 from .bot import bot, dp
 from common.db.database import execute_query
 from common.db.models import get_full_ad_description
+from .utils.message_utils import (
+    safe_send_photo, safe_send_message,
+    safe_answer_callback_query, safe_edit_message
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,21 +47,21 @@ def send_subscription_reminders():
             text = "Нагадування: Завтра закінчується безкоштовний період!"
         elif days_left == 0:
             text = "Нагадування: Сьогодні закінчується підписка!"
-
         else:
             # Not exactly 2,1,0 => skip
             continue
 
-        # Send message
-        # You can use async with run_coroutine_threadsafe or a simple approach:
-        # But here let's do a simple approach with "asyncio.run"
-        # or direct aiogram call in the worker if we have set up a shared event loop properly.
-        # For simplicity:
-
+        # Send message using our safe utility
         async def send_msg(chat_id, txt):
-            await bot.send_message(chat_id, txt)
+            await safe_send_message(chat_id, txt)
 
-        loop = asyncio.get_event_loop()
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            # If no event loop is set, create a new one
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
         loop.run_until_complete(send_msg(telegram_id, text))
 
 
@@ -102,19 +106,30 @@ def send_ad_with_extra_buttons(user_id, text, s3_image_url, resource_url, ad_id,
         )
 
         #### 4) Send the message with the final keyboard
+        # Use safe_send_photo instead of bot.send_photo
         try:
-            await bot.send_photo(
+            await safe_send_photo(
                 chat_id=user_id_number,
                 photo=image_url,
                 caption=message_text,
                 parse_mode='Markdown',
-                reply_markup=kb
+                reply_markup=kb,
+                retry_count=3
             )
         except Exception as e:
             logger.error(f"Failed to send ad with extra buttons to user {user_id_number}: {e}")
 
-    return asyncio.run(send(user_id, text, s3_image_url, resource_url, ad_id, ad_external_id))
-
+    try:
+        return asyncio.run(send(user_id, text, s3_image_url, resource_url, ad_id, ad_external_id))
+    except RuntimeError as e:
+        # Handle case where there's already an event loop
+        logger.warning(f"RuntimeError in send_ad_with_extra_buttons: {e}")
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(send(user_id, text, s3_image_url, resource_url, ad_id, ad_external_id))
+        finally:
+            loop.close()
 
 
 @dp.callback_query_handler(lambda c: c.data.startswith("show_more:"))
@@ -123,29 +138,55 @@ async def handle_show_more(callback_query: CallbackQuery):
     try:
         _, resource_url = callback_query.data.split("show_more:")
     except Exception:
-        await callback_query.answer("Невірні дані.", show_alert=True)
+        await safe_answer_callback_query(
+            callback_query_id=callback_query.id,
+            text="Невірні дані.",
+            show_alert=True
+        )
         return
 
-    # Retrieve the full description.
-    # Implement a helper that looks up the ad record from your DB
-    # or, if the ad page itself contains the full description, request and parse it.
-    full_description = get_full_ad_description(resource_url)  # IMPLEMENT THIS!
+    # Retrieve the full description
+    full_description = get_full_ad_description(resource_url)
     if full_description:
         try:
-            # Option 1: Edit the original message's caption (if the caption can be edited)
+            # Option 1: Edit the original message's caption using our safe utility
             original_caption = callback_query.message.caption or ""
             new_caption = original_caption + "\n\n" + full_description
-            await bot.edit_message_caption(
-                chat_id=callback_query.message.chat.id,
-                message_id=callback_query.message.message_id,
-                caption=new_caption,
-                parse_mode='Markdown',
-                reply_markup=callback_query.message.reply_markup  # keep buttons
-            )
-            await callback_query.answer("Повний опис показано!")
+
+            # Instead of directly using bot.edit_message_caption
+            try:
+                await bot.edit_message_caption(
+                    chat_id=callback_query.message.chat.id,
+                    message_id=callback_query.message.message_id,
+                    caption=new_caption,
+                    parse_mode='Markdown',
+                    reply_markup=callback_query.message.reply_markup  # keep buttons
+                )
+                await safe_answer_callback_query(
+                    callback_query_id=callback_query.id,
+                    text="Повний опис показано!"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to edit caption: {e}. Sending as new message.")
+                # Option 2: If editing fails, send as a new message
+                await safe_send_message(
+                    chat_id=callback_query.from_user.id,
+                    text=full_description
+                )
+                await safe_answer_callback_query(
+                    callback_query_id=callback_query.id,
+                    text="Повний опис надіслано окремим повідомленням!"
+                )
         except Exception as e:
-            # Option 2: Send a new message with the full description.
-            await bot.send_message(callback_query.from_user.id, full_description)
-            await callback_query.answer("Повний опис надіслано окремим повідомленням!")
+            logger.error(f"Failed to show full description: {e}")
+            await safe_answer_callback_query(
+                callback_query_id=callback_query.id,
+                text="Помилка при отриманні опису.",
+                show_alert=True
+            )
     else:
-        await callback_query.answer("Немає додаткового опису.", show_alert=True)
+        await safe_answer_callback_query(
+            callback_query_id=callback_query.id,
+            text="Немає додаткового опису.",
+            show_alert=True
+        )

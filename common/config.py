@@ -1,17 +1,37 @@
 # common/config.py
-
 import os
+from dotenv import load_dotenv
+from typing import Dict, Any, Optional
 
-# Можно читать ENV или .env
-DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_PORT = os.getenv("DB_PORT", "5432")
-DB_USER = os.getenv("DB_USER", "myuser")
-DB_PASS = os.getenv("DB_PASS", "mypass")
-DB_NAME = os.getenv("DB_NAME", "mydb")
+# Load .env file if it exists
+load_dotenv()
 
-# Redis
+# Database Configuration
+DB_CONFIG = {
+    "host": os.getenv("DB_HOST", "localhost"),
+    "port": os.getenv("DB_PORT", "5432"),
+    "user": os.getenv("DB_USER", "myuser"),
+    "password": os.getenv("DB_PASS", "mypass"),
+    "dbname": os.getenv("DB_NAME", "mydb"),
+}
+
+# AWS Configuration
+AWS_CONFIG = {
+    "access_key": os.getenv("AWS_ACCESS_KEY_ID"),
+    "secret_key": os.getenv("AWS_SECRET_ACCESS_KEY"),
+    "region": os.getenv("AWS_DEFAULT_REGION", "eu-west-1"),
+    "s3_bucket": os.getenv("AWS_S3_BUCKET", "htodebucket"),
+    "s3_prefix": os.getenv("AWS_S3_BUCKET_PREFIX", "ads-images/"),
+    "cloudfront_domain": os.getenv("CLOUDFRONT_DOMAIN"),
+}
+
+# Redis Configuration
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
+# Telegram Configuration
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+
+# Geo ID Mappings
 GEO_ID_MAPPING = {
     10012684: 'Львів',
     10006463: 'Дніпро',
@@ -37,15 +57,16 @@ GEO_ID_MAPPING = {
     10025207: 'Чернівці',
     10025209: 'Чернігів'
 }
+
+# For initial run
 GEO_ID_MAPPING_FOR_INITIAL_RUN = {10012684: 'Львів'}
 
-
-def get_key_by_value(value, geo_id_mapping):
+def get_key_by_value(value: str, geo_id_mapping: Dict[int, str]) -> Optional[int]:
+    """Get geo ID by city name"""
     return next((k for k, v in geo_id_mapping.items() if v == value), None)
 
-
-def build_ad_text(ad_row):
-    # For example:
+def build_ad_text(ad_row: Dict[str, Any]) -> str:
+    """Build a formatted text for an ad listing"""
     city_name = GEO_ID_MAPPING.get(ad_row.get('city'))
     text = (
         f"💰 Ціна: {int(ad_row.get('price'))} грн.\n"

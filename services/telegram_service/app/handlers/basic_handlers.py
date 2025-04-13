@@ -13,6 +13,10 @@ from ..keyboards import (
     edit_parameters_keyboard, floor_keyboard
 )
 from common.db.models import get_or_create_user
+from ..utils.message_utils import (
+    safe_send_message, safe_answer_callback_query,
+    safe_edit_message, delete_message_safe
+)
 
 # Список доступних міст (можна отримати з бази даних або конфігурації)
 AVAILABLE_CITIES = ['Івано-Франківськ', 'Вінниця', 'Дніпро', 'Житомир', 'Запоріжжя', 'Київ', 'Кропивницький', 'Луцьк',
@@ -25,12 +29,14 @@ async def start_command(message: types.Message, state: FSMContext):
     telegram_id = message.from_user.id
     user_db_id = get_or_create_user(telegram_id)  # Отримуємо внутрішній id користувача
 
-    await message.answer(
-        "Привіт!👋 Я бот з пошуку оголошень.\n"
-        "Зі мною легко і швидко знайти квартиру, будинок або кімнату для оренди.\n"
-        "У тебе зараз активний безкоштовний період 7 днів.\n"
-        "Давайте налаштуємо твої параметри пошуку.\n"
-        "Обери те, що тебе цікавить:\n",
+    # Use safe_send_message instead of message.answer
+    await safe_send_message(
+        chat_id=telegram_id,
+        text="Привіт!👋 Я бот з пошуку оголошень.\n"
+             "Зі мною легко і швидко знайти квартиру, будинок або кімнату для оренди.\n"
+             "У тебе зараз активний безкоштовний період 7 днів.\n"
+             "Давайте налаштуємо твої параметри пошуку.\n"
+             "Обери те, що тебе цікавить:\n",
         reply_markup=property_type_keyboard()
     )
     await FilterStates.waiting_for_property_type.set()
@@ -45,28 +51,36 @@ async def process_property_type(callback_query: types.CallbackQuery, state: FSMC
     property_type = callback_query.data.split('_')[-1]
     await state.update_data(property_type=property_type)
 
-    await callback_query.message.answer(
-        "🏙️ Оберіть місто:",
+    # Use safe_send_message
+    await safe_send_message(
+        chat_id=callback_query.from_user.id,
+        text="🏙️ Оберіть місто:",
         reply_markup=city_keyboard(AVAILABLE_CITIES)
     )
     await FilterStates.waiting_for_city.set()
-    await callback_query.answer()
+
+    # Use safe_answer_callback_query
+    await safe_answer_callback_query(callback_query.id)
 
 
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith('city_'), state=FilterStates.waiting_for_city)
 async def process_city(callback_query: types.CallbackQuery, state: FSMContext):
     city = callback_query.data.split('_', 1)[1].capitalize()
     if city not in AVAILABLE_CITIES:
-        await callback_query.message.answer("Будь ласка, оберіть місто зі списку.")
+        await safe_send_message(
+            chat_id=callback_query.from_user.id,
+            text="Будь ласка, оберіть місто зі списку."
+        )
         return
     await state.update_data(city=city)
 
-    await callback_query.message.answer(
-        "🛏️ Виберіть кількість кімнат (можна обрати декілька):",
+    await safe_send_message(
+        chat_id=callback_query.from_user.id,
+        text="🛏️ Виберіть кількість кімнат (можна обрати декілька):",
         reply_markup=rooms_keyboard()
     )
     await FilterStates.waiting_for_rooms.set()
-    await callback_query.answer()
+    await safe_answer_callback_query(callback_query.id)
 
 
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith('rooms_'), state=FilterStates.waiting_for_rooms)
@@ -78,22 +92,27 @@ async def process_rooms(callback_query: types.CallbackQuery, state: FSMContext):
 
     if data == 'rooms_done':
         if not selected_rooms:
-            await callback_query.message.answer("Ви не обрали кількість кімнат.")
+            await safe_send_message(
+                chat_id=callback_query.from_user.id,
+                text="Ви не обрали кількість кімнат."
+            )
             return
-        await callback_query.message.answer(
-            "💰 Виберіть діапазон цін (грн):",
+        await safe_send_message(
+            chat_id=callback_query.from_user.id,
+            text="💰 Виберіть діапазон цін (грн):",
             reply_markup=price_keyboard(city=city)
         )
         await FilterStates.waiting_for_price.set()
-        await callback_query.answer()
+        await safe_answer_callback_query(callback_query.id)
     elif data == 'rooms_any':
         await state.update_data(rooms=None)
-        await callback_query.message.answer(
-            "💰 Виберіть діапазон цін (грн):",
+        await safe_send_message(
+            chat_id=callback_query.from_user.id,
+            text="💰 Виберіть діапазон цін (грн):",
             reply_markup=price_keyboard(city=city)
         )
         await FilterStates.waiting_for_price.set()
-        await callback_query.answer()
+        await safe_answer_callback_query(callback_query.id)
     elif data.startswith('rooms_'):
         try:
             rooms_number = int(data.split('_')[1])
@@ -103,15 +122,26 @@ async def process_rooms(callback_query: types.CallbackQuery, state: FSMContext):
                 selected_rooms.append(rooms_number)
             await state.update_data(rooms=selected_rooms)
 
-            # Обновляем клавиатуру, показывая выбранные комнаты
-            await callback_query.message.edit_reply_markup(reply_markup=rooms_keyboard(selected_rooms))
-            await callback_query.answer()
+            # Use safe_edit_message_reply_markup instead
+            await safe_edit_message(
+                chat_id=callback_query.message.chat.id,
+                message_id=callback_query.message.message_id,
+                text=callback_query.message.text,
+                reply_markup=rooms_keyboard(selected_rooms)
+            )
+            await safe_answer_callback_query(callback_query.id)
         except (IndexError, ValueError):
-            await callback_query.message.answer("Виникла помилка при виборі кількості кімнат.")
-            await callback_query.answer()
+            await safe_send_message(
+                chat_id=callback_query.from_user.id,
+                text="Виникла помилка при виборі кількості кімнат."
+            )
+            await safe_answer_callback_query(callback_query.id)
     else:
-        await callback_query.message.answer("Невідома команда.")
-        await callback_query.answer()
+        await safe_send_message(
+            chat_id=callback_query.from_user.id,
+            text="Невідома команда."
+        )
+        await safe_answer_callback_query(callback_query.id)
 
 
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith('price_'), state=FilterStates.waiting_for_price)
@@ -126,7 +156,10 @@ async def process_price(callback_query: types.CallbackQuery, state: FSMContext):
         high = int(parts[2])
 
     text_range = f"{low}+ грн." if not high else f"{low}–{high} грн."
-    await callback_query.message.answer(f"Ви обрали діапазон: {text_range}")
+    await safe_send_message(
+        chat_id=callback_query.from_user.id,
+        text=f"Ви обрали діапазон: {text_range}"
+    )
 
     await state.update_data(price_min=low, price_max=high)
 
@@ -137,7 +170,7 @@ async def process_price(callback_query: types.CallbackQuery, state: FSMContext):
     # Mark it done, so we are now in waiting_for_confirmation
     # (Inside process_basic_params you set waiting_for_confirmation,
     #  so no need to set it again here.)
-    await callback_query.answer()
+    await safe_answer_callback_query(callback_query.id)
 
 
 @dp.callback_query_handler(Text(startswith="edit_"), state=FilterStates.waiting_for_confirmation)
@@ -147,42 +180,57 @@ async def handle_edit(callback_query: types.CallbackQuery, state: FSMContext):
     city = user_data.get('city')
 
     if edit_field == "property_type":
-        await callback_query.message.answer(
-            "🏷 Оберіть тип нерухомості:",
+        await safe_send_message(
+            chat_id=callback_query.from_user.id,
+            text="🏷 Оберіть тип нерухомості:",
             reply_markup=property_type_keyboard()
         )
         await FilterStates.waiting_for_property_type.set()
     elif edit_field == "city":
-        await callback_query.message.answer(
-            "🏙️ Оберіть місто:",
+        await safe_send_message(
+            chat_id=callback_query.from_user.id,
+            text="🏙️ Оберіть місто:",
             reply_markup=city_keyboard(AVAILABLE_CITIES)
         )
         await FilterStates.waiting_for_city.set()
     elif edit_field == "rooms":
         user_data = await state.get_data()
         selected_rooms = user_data.get('rooms', [])
-        await callback_query.message.answer(
-            "🛏️ Виберіть кількість кімнат (можна вибрати декілька):",
+        await safe_send_message(
+            chat_id=callback_query.from_user.id,
+            text="🛏️ Виберіть кількість кімнат (можна вибрати декілька):",
             reply_markup=rooms_keyboard(selected_rooms)
         )
         await FilterStates.waiting_for_rooms.set()
     elif edit_field == "price":
-        await callback_query.message.answer(
-            "💰 Виберіть діапазон цін (грн):",
+        await safe_send_message(
+            chat_id=callback_query.from_user.id,
+            text="💰 Виберіть діапазон цін (грн):",
             reply_markup=price_keyboard(city=city)
         )
         await FilterStates.waiting_for_price.set()
     elif edit_field == "floor":
         # call your function to handle floor editing
-        await callback_query.message.answer("🏢 Налаштуйте поверх:", reply_markup=floor_keyboard())
+        await safe_send_message(
+            chat_id=callback_query.from_user.id,
+            text="🏢 Налаштуйте поверх:",
+            reply_markup=floor_keyboard()
+        )
         # optionally change state, etc.
     elif edit_field == "cancel_edit":
-        await callback_query.message.answer("Редагування скасовано.", reply_markup=confirmation_keyboard())
+        await safe_send_message(
+            chat_id=callback_query.from_user.id,
+            text="Редагування скасовано.",
+            reply_markup=confirmation_keyboard()
+        )
         await FilterStates.waiting_for_confirmation.set()
     else:
-        await callback_query.message.answer("Невідомий параметр редагування.")
+        await safe_send_message(
+            chat_id=callback_query.from_user.id,
+            text="Невідомий параметр редагування."
+        )
 
-    await callback_query.answer()
+    await safe_answer_callback_query(callback_query.id)
 
 
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith('confirmation_'),
@@ -221,19 +269,21 @@ async def process_basic_params(callback_query: types.CallbackQuery, state: FSMCo
     from aiogram.utils.markdown import escape_md
     summary_escaped = escape_md(summary).replace('\\', '')
 
-    await callback_query.message.answer(
-        summary_escaped,
+    await safe_send_message(
+        chat_id=callback_query.from_user.id,
+        text=summary_escaped,
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=confirmation_keyboard()
     )
     await FilterStates.waiting_for_confirmation.set()
-    await callback_query.answer()
+    await safe_answer_callback_query(callback_query.id)
 
 
 @dp.callback_query_handler(Text(startswith="edit_parameters"), state=FilterStates.waiting_for_confirmation)
 async def edit_parameters(callback_query: types.CallbackQuery, state: FSMContext):
-    await callback_query.message.answer(
-        "Оберіть параметр для редагування:",
+    await safe_send_message(
+        chat_id=callback_query.from_user.id,
+        text="Оберіть параметр для редагування:",
         reply_markup=edit_parameters_keyboard()
     )
-    await callback_query.answer()
+    await safe_answer_callback_query(callback_query.id)
