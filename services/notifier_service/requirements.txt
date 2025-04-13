@@ -6,3 +6,5 @@ python-dotenv
 loguru
 requests
 boto3
+beautifulsoup4
+playwright

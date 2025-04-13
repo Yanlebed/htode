@@ -1,3 +1,4 @@
+import logging
 import requests
 import boto3
 
@@ -12,6 +13,8 @@ s3_client = boto3.client(
     aws_secret_access_key="Oj8AoxASxahA0x03t9rlCZo5i1eb8vVWbzKzVyan",  # os.getenv("AWS_SECRET_ACCESS_KEY"),
     region_name="eu-west-1"  # os.getenv("AWS_DEFAULT_REGION", "us-east-1")
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _upload_image_to_s3(image_url, ad_unique_id):

@@ -4,12 +4,12 @@ import logging
 
 from aiogram import types
 from aiogram.dispatcher import FSMContext
-from aiogram.types import ParseMode
+from aiogram.types import ParseMode, MediaGroup, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from aiogram.utils.exceptions import MessageNotModified
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from ..bot import dp
+from ..bot import dp, bot
 from ..states.basis_states import FilterStates
 from ..keyboards import floor_keyboard
+from common.db.models import get_extra_images
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,6 @@ async def set_floor_max(callback_query: types.CallbackQuery, state: FSMContext):
     await show_advanced_options(callback_query.message, state)
     await callback_query.answer()
 
-
 @dp.callback_query_handler(lambda c: c.data == "edit_is_not_first_floor", state="*")
 async def edit_is_not_first_floor_handler(callback_query: types.CallbackQuery, state: FSMContext):
     keyboard = InlineKeyboardMarkup()
@@ -73,7 +72,6 @@ async def set_is_not_first_floor(callback_query: types.CallbackQuery, state: FSM
     await callback_query.message.answer(text)
     await show_advanced_options(callback_query.message, state)
     await callback_query.answer()
-
 
 @dp.callback_query_handler(lambda c: c.data == "edit_last_floor", state="*")
 async def edit_last_floor_handler(callback_query: types.CallbackQuery, state: FSMContext):
@@ -360,3 +358,22 @@ def build_full_summary(data: dict) -> str:
         lines.append("😎 Тільки від власника")
 
     return "**Поточні параметри пошуку**\n" + "\n".join(lines)
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("view_photos:"))
+async def handle_view_photos(callback_query: types.CallbackQuery):
+    # Expect callback_data "view_photos:<resource_url>"
+    _, resource_url = callback_query.data.split("view_photos:")
+    # Retrieve the extra photos for this ad.
+    # Implement get_extra_images(resource_url) that returns a list of URLs.
+    extra_images = get_extra_images(resource_url)  # <-- You must implement this.
+    if extra_images:
+        media = MediaGroup()
+        for i, url in enumerate(extra_images):
+            if i == 0:
+                media.attach_photo(url, caption="Додаткові фото:")
+            else:
+                media.attach_photo(url)
+        await bot.send_media_group(chat_id=callback_query.from_user.id, media=media)
+    else:
+        await callback_query.answer("Немає додаткових фото.", show_alert=True)

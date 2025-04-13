@@ -10,3 +10,9 @@ psycopg2==2.9.5
 # Прочие зависимости
 python-dotenv==0.21.1
 loguru==0.6.0
+pyyaml
+aiohttp
+nest_asyncio
+lxml
+aiodns
+playwright

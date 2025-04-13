@@ -4,3 +4,9 @@ psycopg2-binary==2.9.10
 SQLAlchemy==1.4.46
 python-dotenv==0.21.1
 loguru==0.6.0
+pyyaml
+aiohttp
+nest_asyncio
+lxml
+aiodns
+zenrows
