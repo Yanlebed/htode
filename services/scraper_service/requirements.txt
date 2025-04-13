@@ -1,9 +1,0 @@
-requests
-scrapy
-celery
-redis
-psycopg2-binary
-SQLAlchemy
-boto3
-fake_useragent
-beautifulsoup4

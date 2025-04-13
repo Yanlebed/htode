@@ -31,7 +31,7 @@ COPY common /app/common
 COPY services/notifier_service/app /app/app
 
 # 4) Copy requirements and install
-COPY services/notifier_service/requirements.txt /app/requirements.txt
+COPY requirements/notifier.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 5) Install Playwright + Browsers

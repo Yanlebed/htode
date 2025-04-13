@@ -11,7 +11,7 @@ COPY common /app/common
 COPY services/telegram_service/app /app/app
 
 # Устанавливаем зависимости
-COPY services/telegram_service/requirements.txt /app/requirements.txt
+COPY requirements/telegram.txt /app/requirements.txt
 RUN pip install -r requirements.txt
 
 # Устанавливаем PYTHONPATH
