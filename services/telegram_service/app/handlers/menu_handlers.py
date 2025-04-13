@@ -11,6 +11,7 @@ from common.db.models import update_user_filter, start_free_subscription_of_user
 from common.db.database import execute_query
 from common.config import GEO_ID_MAPPING, get_key_by_value, build_ad_text
 from common.celery_app import celery_app
+from common.utils.ad_utils import get_ad_images
 from ..keyboards import (
     main_menu_keyboard,
     how_to_use_keyboard,
@@ -226,14 +227,6 @@ async def cancel_handler(message: types.Message, state: FSMContext):
 
     await state.finish()
     await message.answer('Дія скасована.', reply_markup=types.ReplyKeyboardRemove())
-
-
-def get_ad_images(ad):
-    ad_id = ad.get('id')
-    sql_check = "SELECT * FROM ad_images WHERE ad_id = %s"
-    rows = execute_query(sql_check, [ad_id], fetch=True)
-    if rows:
-        return [row["image_url"] for row in rows]
 
 
 def fetch_ads_for_period(filters, days, limit=3):

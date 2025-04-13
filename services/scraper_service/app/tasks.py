@@ -12,6 +12,7 @@ from common.config import GEO_ID_MAPPING_FOR_INITIAL_RUN, AWS_CONFIG
 from common.db.models import store_ad_phones
 from common.celery_app import celery_app
 from common.utils.request_utils import make_request
+from common.utils.ad_utils import process_and_insert_ad
 
 # ---------------------------
 # Configuration & Initialization
@@ -117,15 +118,6 @@ def _scrape_ads_from_page(geo_id: int, section_id: int, page: int) -> list:
         return []
 
 
-def insert_ad_images(ad_id, image_urls: list) -> None:
-    """
-    Inserts ad images into the database.
-    """
-    sql = "INSERT INTO ad_images (ad_id, image_url) VALUES (%s, %s)"
-    for url in image_urls:
-        execute_query(sql, (ad_id, url))
-
-
 def _insert_ad_if_new(ad_data: dict, geo_id: int, property_type: str, cutoff_time: datetime) -> int:
     """
     Inserts an ad into the DB if it is new (based on its unique external ID and timestamp).
@@ -151,57 +143,9 @@ def _insert_ad_if_new(ad_data: dict, geo_id: int, property_type: str, cutoff_tim
     if existing:
         return None
 
-    # Process images by uploading them to S3
-    images = ad_data.get('images', [])
-    uploaded_image_urls = []
-    for image_info in images:
-        image_id = image_info.get("image_id")
-        if image_id:
-            original_url = f"https://market-images.lunstatic.net/lun-ua/720/720/images/{image_id}.webp"
-            s3_url = _upload_image_to_s3(original_url, ad_unique_id)
-            if s3_url:
-                uploaded_image_urls.append(s3_url)
-
-    logger.info(f"Inserting ad into DB: {ad_data}")
-    resource_url = f"https://flatfy.ua/uk/redirect/{ad_data.get('id')}"
-    insert_sql = """
-    INSERT INTO ads (external_id, property_type, city, address, price, square_feet, rooms_count, floor, total_floors, insert_time, description, resource_url)
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-    ON CONFLICT (external_id) DO UPDATE
-      SET property_type = EXCLUDED.property_type,
-          city = EXCLUDED.city,
-          address = EXCLUDED.address,
-          price = EXCLUDED.price,
-          square_feet = EXCLUDED.square_feet,
-          rooms_count = EXCLUDED.rooms_count,
-          floor = EXCLUDED.floor,
-          total_floors = EXCLUDED.total_floors,
-          insert_time = EXCLUDED.insert_time,
-          description = EXCLUDED.description,
-          resource_url = EXCLUDED.resource_url
-    RETURNING id;
-    """
-    params = [
-        ad_unique_id,
-        property_type,
-        geo_id,
-        ad_data.get("header"),
-        ad_data.get("price"),
-        ad_data.get("area_total"),
-        ad_data.get("room_count"),
-        ad_data.get("floor"),
-        ad_data.get("floor_count"),
-        ad_data.get("insert_time"),
-        ad_data.get("text"),
-        resource_url
-    ]
-    row = execute_query(insert_sql, params, fetchone=True)
-    if row:
-        ad_id = row["id"]
-        store_ad_phones(resource_url, ad_id)
-        insert_ad_images(ad_id, uploaded_image_urls)
-        return ad_id
-    return None
+    # Use the unified ad insertion function
+    logger.info(f"Inserting new ad into DB: {ad_data.get('id')}")
+    return process_and_insert_ad(ad_data, property_type, geo_id)
 
 
 @celery_app.task(name="scraper_service.app.tasks.handle_new_records")
@@ -298,54 +242,6 @@ def insert_ad(ad_data: dict, property_type: str, geo_id: int) -> int:
     if not ad_unique_id:
         return None
 
-    resource_url = f"https://flatfy.ua/uk/redirect/{ad_unique_id}"
-    images = ad_data.get('images', [])
-    uploaded_image_urls = []
-    for image_info in images:
-        image_id = image_info.get("image_id")
-        if image_id:
-            original_url = f"https://market-images.lunstatic.net/lun-ua/720/720/images/{image_id}.webp"
-            s3_url = _upload_image_to_s3(original_url, ad_unique_id)
-            if s3_url:
-                uploaded_image_urls.append(s3_url)
-
-    insert_sql = """
-    INSERT INTO ads (external_id, property_type, city, address, price, square_feet, rooms_count, floor, total_floors, insert_time, description, resource_url)
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-    ON CONFLICT (external_id) DO UPDATE
-      SET property_type = EXCLUDED.property_type,
-          city = EXCLUDED.city,
-          address = EXCLUDED.address,
-          price = EXCLUDED.price,
-          square_feet = EXCLUDED.square_feet,
-          rooms_count = EXCLUDED.rooms_count,
-          floor = EXCLUDED.floor,
-          total_floors = EXCLUDED.total_floors,
-          insert_time = EXCLUDED.insert_time,
-          description = EXCLUDED.description,
-          resource_url = EXCLUDED.resource_url
-    RETURNING id;
-    """
-    params = [
-        ad_unique_id,
-        property_type,
-        geo_id,
-        ad_data.get("header"),
-        ad_data.get("price"),
-        ad_data.get("area_total"),
-        ad_data.get("room_count"),
-        ad_data.get("floor"),
-        ad_data.get("floor_count"),
-        ad_data.get("insert_time"),
-        ad_data.get("text"),
-        resource_url
-    ]
+    # Use the unified ad insertion function
     logger.info("Inserting ad into DB...")
-    logger.info(f"Params for ad insertion: {params}")
-    row = execute_query(insert_sql, params, fetchone=True)
-    if row:
-        ad_id = row["id"]
-        store_ad_phones(resource_url, ad_id)
-        insert_ad_images(ad_id, uploaded_image_urls)
-        return ad_id
-    return None
+    return process_and_insert_ad(ad_data, property_type, geo_id)
