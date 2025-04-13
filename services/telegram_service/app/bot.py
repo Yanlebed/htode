@@ -4,19 +4,28 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.contrib.fsm_storage.redis import RedisStorage2
-import os
+from aiogram.utils.exceptions import (
+    MessageNotModified, CantParseEntities, NetworkError, RetryAfter,
+    BadRequest, Unauthorized, InvalidQueryID, TelegramAPIError,
+    MessageToDeleteNotFound, BotBlocked
+)
+from common.config import TELEGRAM_TOKEN, REDIS_URL
 
-# Читання токена зі змінних оточення
-TELEGRAM_TOKEN = '7937900638:AAHgA0BxbsxGjq7GDDLkMjtizPY8PwyevVM'
-REDIS_HOST = os.getenv("REDIS_HOST", "redis")
-REDIS_PORT = os.getenv("REDIS_PORT", "6379")
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+)
+logger = logging.getLogger(__name__)
 
-# Ініціалізація бота та диспетчера
+# Parse Redis URL for host and port
+# REDIS_URL format: redis://localhost:6379/0
+import urllib.parse
+parsed_redis_url = urllib.parse.urlparse(REDIS_URL)
+REDIS_HOST = parsed_redis_url.hostname or "redis"
+REDIS_PORT = parsed_redis_url.port or 6379
+
+# Initialize bot and dispatcher
 bot = Bot(token=TELEGRAM_TOKEN)
-# storage = MemoryStorage()
 storage = RedisStorage2(host=REDIS_HOST, port=REDIS_PORT, db=1, prefix='fsm')
 dp = Dispatcher(bot, storage=storage)
-
-# Налаштування логування
-logging.basicConfig(level=logging.INFO)
-
