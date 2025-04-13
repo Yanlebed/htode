@@ -6,17 +6,18 @@ from common.db.database import execute_query
 from common.utils.s3_utils import _upload_image_to_s3
 from common.utils.req_utils import fetch_ads_flatfy
 from common.config import GEO_ID_MAPPING, get_key_by_value
-from common.utils.ad_utils import process_and_insert_ad, get_ad_images
+from common.utils.ad_utils import process_and_insert_ad, get_ad_images as utils_get_ad_images
 import logging
 
 TELEGRAM_SEND_TASK = "telegram_service.app.tasks.send_ad_with_extra_buttons"
 logger = logging.getLogger(__name__)
 
-
-def get_ad_images(ad):
+def get_ad_images_local(ad):
+    """
+    Get images for an ad (renamed to avoid recursion)
+    """
     ad_id = ad.get('id')
-    return get_ad_images(ad_id)
-
+    return utils_get_ad_images(ad_id)  # Call the imported function
 
 def insert_ad(ad_data, property_type, geo_id):
     """Insert the ad into the ads table"""
@@ -32,7 +33,7 @@ def sort_and_notify_new_ads(new_ads):
     logger.info("Received new ads for sorting/notification...")
     logger.info(f'New ads {new_ads}')
     for ad in new_ads:
-        s3_image_urls = get_ad_images(ad)[0]
+        s3_image_urls = get_ad_images_local(ad)[0] if get_ad_images_local(ad) else None
         users_to_notify = find_users_for_ad(ad)
         # `find_users_for_ad` is in your models.py and returns user_ids
         logger.info(f"Ad {ad['id']} -> Notifying users: {users_to_notify}")

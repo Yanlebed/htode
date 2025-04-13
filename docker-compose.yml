@@ -77,7 +77,7 @@ services:
       context: .
       dockerfile: services/telegram_service/Dockerfile
     container_name: telegram_worker
-    command: celery -A app.celery_app.celery_app worker -Q telegram_queue --loglevel=info --concurrency=1
+    command: celery -A app.celery_app.celery_app worker -Q telegram_queue --loglevel=info --concurrency=2 --max-tasks-per-child=100
 
   scraper_worker_service:
     container_name: scraper_worker_service
@@ -104,7 +104,7 @@ services:
       CLOUDFRONT_DOMAIN: "https://d3h86hbbdu2c7h.cloudfront.net"
     networks:
       - app_net
-    command: celery -A scraper_service.app.celery_app worker --loglevel=info -Q scrape_queue
+    command: celery -A scraper_service.app.celery_app worker --loglevel=info -Q scrape_queue --max-tasks-per-child=50
 
 
   scraper_beat_service:

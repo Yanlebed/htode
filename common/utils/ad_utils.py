@@ -99,13 +99,6 @@ def process_and_insert_ad(
 def process_ad_images(ad_data: Dict[str, Any], ad_unique_id: str) -> List[str]:
     """
     Process and upload images associated with an ad to S3.
-
-    Args:
-        ad_data: Ad data dictionary containing images info
-        ad_unique_id: Unique ID of the ad
-
-    Returns:
-        List of uploaded S3/CloudFront URLs
     """
     uploaded_image_urls = []
 
@@ -118,7 +111,8 @@ def process_ad_images(ad_data: Dict[str, Any], ad_unique_id: str) -> List[str]:
                 continue
 
             original_url = f"https://market-images.lunstatic.net/lun-ua/720/720/images/{image_id}.webp"
-            s3_url = _upload_image_to_s3(original_url, ad_unique_id)
+            # Updated to handle the new function signature with max_retries
+            s3_url = _upload_image_to_s3(original_url, ad_unique_id, max_retries=3)
 
             if s3_url:
                 uploaded_image_urls.append(s3_url)
