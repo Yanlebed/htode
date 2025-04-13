@@ -1,8 +1,7 @@
-# phone_parser.py
+# common/utils/phone_parser.py
 
 import os
 import re
-import json
 import urllib.parse
 import logging
 import random
@@ -11,18 +10,13 @@ import jmespath
 from dataclasses import dataclass
 from typing import List, Optional
 from bs4 import BeautifulSoup
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 from playwright.async_api import async_playwright, Page, Browser
 
-try:
-    from fake_useragent import UserAgent
-except ImportError:
-    UserAgent = None
+from common.utils.request_utils import make_request
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
 
 # ===========================
 # Data structure
@@ -31,6 +25,7 @@ logger.setLevel(logging.INFO)
 class ExtractionResult:
     phone_numbers: List[str]
     viber_link: Optional[str] = None
+
 
 # ===========================
 # Domain-specific constants
@@ -51,6 +46,7 @@ FAKTOR24_PHONE_REGEX = re.compile(r'"tel:(.*?)" id="phoneDisplay"')
 ZENROWS_API_KEY = os.getenv("ZENROWS_API_KEY", "YOUR_DEFAULT_KEY")
 ZENROWS_ENDPOINT = "https://api.zenrows.com/v1/"
 
+
 def parse_proxy(proxy_url: str):
     parsed = urllib.parse.urlparse(proxy_url)
     return {
@@ -58,6 +54,7 @@ def parse_proxy(proxy_url: str):
         "username": parsed.username,
         "password": parsed.password
     }
+
 
 def fetch_with_zenrows(url: str, js_render: bool = True) -> str:
     """
@@ -70,74 +67,44 @@ def fetch_with_zenrows(url: str, js_render: bool = True) -> str:
         "premium_proxy": "false",
         "js_render": "true" if js_render else "false",
     }
-    try:
-        resp = requests.get(ZENROWS_ENDPOINT, params=params, timeout=REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        return resp.text
-    except Exception as e:
-        logger.exception(f"ZenRows request error: {url}")
-        raise e
+
+    # Use our centralized request utility
+    response = make_request(
+        url=ZENROWS_ENDPOINT,
+        method='get',
+        params=params,
+        timeout=REQUEST_TIMEOUT,
+        retries=3
+    )
+
+    if not response:
+        raise Exception(f"Failed to get response from ZenRows for URL: {url}")
+
+    return response.text
+
 
 # ===========================
 # Bright Data pool
 # ===========================
-# BRIGHTDATA_POOL_ENV = os.getenv("BRIGHTDATA_PROXY_POOL", "")
-# BRIGHTDATA_PROXIES = [x.strip() for x in BRIGHTDATA_POOL_ENV.split(",") if x.strip()]
 BRIGHTDATA_PROXIES = [
     'http://brd-customer-hl_668fd6e0-zone-datacenter_proxy1:7g6edg65pwp8@brd.superproxy.io:33335',
     'http://brd-customer-hl_668fd6e0-zone-datacenter_proxy2:y6ft4jxbcvjm@brd.superproxy.io:33335',
     'http://brd-customer-hl_668fd6e0-zone-datacenter_proxy3:c9swm7yi5xhd@brd.superproxy.io:33335'
 ]
+
+
 # ===========================
-# Retry-enabled session
+# User agent
 # ===========================
-def get_requests_session() -> requests.Session:
-    s = requests.Session()
-    retry_strategy = Retry(
-        total=3,
-        backoff_factor=1,
-        status_forcelist=[502, 503, 504],
-        allowed_methods=["HEAD", "GET", "OPTIONS"]
-    )
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    s.mount("https://", adapter)
-    s.mount("http://", adapter)
-    return s
-
-session = get_requests_session()
-
 def get_random_desktop_user_agent() -> str:
-    if UserAgent:
-        try:
-            ua = UserAgent()
-            desktop_browsers = ['chrome', 'firefox', 'safari', 'opera']
-            return getattr(ua, random.choice(desktop_browsers))
-        except:
-            logger.exception("Failed generating random UA, fallback.")
-    return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.51 Safari/537.36"
-
-"""
-def get_random_desktop_user_agent() -> str:
-    fallback = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " \
-               "(KHTML, like Gecko) Chrome/99.0.4844.51 Safari/537.36"
-    if UserAgent:
-        try:
-            ua = UserAgent()
-            desktop_browsers = ['chrome', 'firefox', 'safari', 'opera']
-            # randomly choose a browser key
-            browser = random.choice(desktop_browsers)
-            # Access the list of user agents for that browser from the underlying data
-            user_agents = ua.data.get(browser, [])
-            # filter out any user agents that contain mobile identifiers
-            desktop_agents = [agent for agent in user_agents if not any(keyword in agent for keyword in ['Mobile', 'Android', 'iPhone'])]
-            if desktop_agents:
-                return random.choice(desktop_agents)
-            else:
-                logger.warning(f"No desktop user agents found for browser {browser}.")
-        except Exception:
-            logger.exception("Failed generating random UA, fallback.")
-    return fallback
-"""
+    """Get a random desktop user agent."""
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.51 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Safari/605.1.15",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:98.0) Gecko/20100101 Firefox/98.0",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.75 Safari/537.36"
+    ]
+    return random.choice(user_agents)
 
 
 # ===========================
@@ -148,9 +115,12 @@ def _parse_real_estate_lviv(ad_link: str) -> ExtractionResult:
     ad_id_part = ad_link.split("/")[-1].split("-")[0]
     link_ = REAL_ESTATE_LVIV_UA_LINK.format(ad_id_part)
     try:
-        r = session.get(link_, timeout=REQUEST_TIMEOUT)
-        r.raise_for_status()
-        matches = TELEPHONE_REGEX_REAL_ESTATE.findall(r.text)
+        # Use centralized request utility
+        response = make_request(link_, timeout=REQUEST_TIMEOUT, retries=3)
+        if not response:
+            return ExtractionResult([], None)
+
+        matches = TELEPHONE_REGEX_REAL_ESTATE.findall(response.text)
         if matches:
             phones = [p.replace('(', '').replace(')', '').replace(' ', '') for p in matches]
             return ExtractionResult(phones, None)
@@ -159,12 +129,14 @@ def _parse_real_estate_lviv(ad_link: str) -> ExtractionResult:
         logger.exception("Error fetching real-estate.lviv.ua phone link.")
         return ExtractionResult([], None)
 
+
 def _parse_lun(html: str) -> ExtractionResult:
     logger.info("Parsing lun.ua content.")
     matches = LUN_PHONE_REGEX.findall(html)
     if matches:
         return ExtractionResult([matches[0]], None)
     return ExtractionResult([], None)
+
 
 def _parse_rieltor(html: str) -> ExtractionResult:
     logger.info("Parsing rieltor.ua content.")
@@ -173,12 +145,14 @@ def _parse_rieltor(html: str) -> ExtractionResult:
         return ExtractionResult([telephones[0]], None)
     return ExtractionResult([], None)
 
+
 def _parse_faktor24(html: str) -> ExtractionResult:
     logger.info("Parsing faktor24.com content.")
     telephones = FAKTOR24_PHONE_REGEX.findall(html)
     if telephones:
         return ExtractionResult([telephones[0]], None)
     return ExtractionResult([], None)
+
 
 def _fallback_parse(html: str) -> ExtractionResult:
     logger.info("Fallback parse for unknown domain.")
@@ -198,6 +172,7 @@ def _fallback_parse(html: str) -> ExtractionResult:
             viber_link = viber_a.get("href")
 
     return ExtractionResult(phone_nums, viber_link)
+
 
 # ===========================
 # OLX phone fetch with JS fetch
@@ -248,6 +223,7 @@ async def olx_js_fetch_phone(page: Page, sku: str, attempts: int = 3) -> Optiona
                 return None
     return None
 
+
 async def olx_js_fetch_phone_via_proxies(browser: Browser, resource_url: str, sku: str) -> Optional[str]:
     """
     If normal OLX fetch fails, do 3 attempts with random bright data proxies.
@@ -269,7 +245,7 @@ async def olx_js_fetch_phone_via_proxies(browser: Browser, resource_url: str, sk
                 proxy=proxy_config
             )
             page = await context.new_page()
-            await page.goto(resource_url, wait_until="networkidle", timeout=REQUEST_TIMEOUT*1000)
+            await page.goto(resource_url, wait_until="networkidle", timeout=REQUEST_TIMEOUT * 1000)
             phone = await olx_js_fetch_phone(page, sku, attempts=1)
             await context.close()
             if phone:
@@ -279,6 +255,7 @@ async def olx_js_fetch_phone_via_proxies(browser: Browser, resource_url: str, sk
             logger.exception(f"Proxy fallback attempt {attempt_} => error: {e}")
     logger.warning("All proxy fallback attempts for OLX phone => fail.")
     return None
+
 
 async def parse_olx_playwright(html: str, page: Page, browser: Browser, resource_url: str) -> ExtractionResult:
     """
@@ -311,6 +288,7 @@ async def parse_olx_playwright(html: str, page: Page, browser: Browser, resource
     # final => no phone
     return ExtractionResult([], None)
 
+
 # ===========================
 # Main domain parse
 # ===========================
@@ -321,8 +299,6 @@ async def _domain_parse_final(html: str, original_url: str, page: Page, browser:
     if canonical_url == original_url:
         logger.warning("canonical_url == original_url")
         logger.warning(html)
-        # canonical_url = soup.find("a", class_="redirect-link")["href"]
-        # logger.warning(f"new canonical_url {canonical_url}")
     logger.info(f"Canonical for {original_url}: {canonical_url}")
 
     if "olx.ua" in canonical_url:
@@ -339,14 +315,15 @@ async def _domain_parse_final(html: str, original_url: str, page: Page, browser:
         logger.warning("Unknown domain => fallback parse.")
         return _fallback_parse(html)
 
+
 # ===========================
 # Page fetch
 # ===========================
-async def _playwright_fetch_page(url: str, browser: Browser, proxy: Optional[str], attempts: int=3) -> str:
+async def _playwright_fetch_page(url: str, browser: Browser, proxy: Optional[str], attempts: int = 3) -> str:
     """
     Up to `attempts` times, random UA. If fail => raise.
     """
-    for i in range(1, attempts+1):
+    for i in range(1, attempts + 1):
         ua = get_random_desktop_user_agent()
         proxy_settings = None
         if proxy:
@@ -362,7 +339,7 @@ async def _playwright_fetch_page(url: str, browser: Browser, proxy: Optional[str
         page = await context.new_page()
 
         try:
-            await page.goto(url, wait_until="networkidle", timeout=REQUEST_TIMEOUT*1000)
+            await page.goto(url, wait_until="networkidle", timeout=REQUEST_TIMEOUT * 1000)
             content = await page.content()
             await context.close()
             return content
@@ -371,6 +348,7 @@ async def _playwright_fetch_page(url: str, browser: Browser, proxy: Optional[str
             await context.close()
             await asyncio.sleep(1)
     raise Exception(f"Failed to load {url} after {attempts} attempts, proxy={proxy}")
+
 
 # ===========================
 # Async main fetch
@@ -390,7 +368,7 @@ async def _extract_phone_numbers_async(resource_url: str) -> ExtractionResult:
             # parse domain => need page context to do OLX phone
             ctx_np = await browser.new_context(java_script_enabled=True)
             page_np = await ctx_np.new_page()
-            await page_np.goto(resource_url, wait_until="networkidle", timeout=REQUEST_TIMEOUT*1000)
+            await page_np.goto(resource_url, wait_until="networkidle", timeout=REQUEST_TIMEOUT * 1000)
             result_np = await _domain_parse_final(html_np, resource_url, page_np, browser)
             await ctx_np.close()
             return result_np
@@ -403,18 +381,15 @@ async def _extract_phone_numbers_async(resource_url: str) -> ExtractionResult:
             for att_ in range(1, 4):
                 proxy_ = random.choice(BRIGHTDATA_PROXIES)
                 try:
-                    html_px = await _playwright_fetch_page(resource_url, browser, proxy_, attempts=len(BRIGHTDATA_PROXIES))
+                    html_px = await _playwright_fetch_page(resource_url, browser, proxy_,
+                                                           attempts=len(BRIGHTDATA_PROXIES))
                     ctx_px = await browser.new_context(java_script_enabled=True, proxy={"server": proxy_})
                     page_px = await ctx_px.new_page()
-                    await page_px.goto(resource_url, wait_until="networkidle", timeout=REQUEST_TIMEOUT*1000)
-                    # if resp.status != 200:
-                    #     logger.warning(f"Failed to fetch bright data proxy for {resource_url}. {resp.status}")
-                    #     logger.warning("Let's try with another proxy.")
-                    #     continue
+                    await page_px.goto(resource_url, wait_until="networkidle", timeout=REQUEST_TIMEOUT * 1000)
                     res_px = await _domain_parse_final(html_px, resource_url, page_px, browser)
                     await ctx_px.close()
                     return res_px
-                except:
+                except Exception:
                     logger.warning(f"Bright data attempt {att_} => fail for {proxy_}")
             logger.warning("All bright data attempts => fail.")
         else:
@@ -429,7 +404,7 @@ async def _extract_phone_numbers_async(resource_url: str) -> ExtractionResult:
             res_z = await _domain_parse_final(zen_html, resource_url, page_z, browser)
             await ctx_z.close()
             return res_z
-        except:
+        except Exception:
             logger.exception("ZenRows fallback => error.")
             return ExtractionResult([], None)
 

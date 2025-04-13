@@ -1,8 +1,8 @@
 # common/utils/s3_utils.py
 import logging
-import requests
 import boto3
 from common.config import AWS_CONFIG
+from common.utils.request_utils import make_request
 
 logger = logging.getLogger(__name__)
 
@@ -13,16 +13,28 @@ s3_client = boto3.client(
     region_name=AWS_CONFIG["region"]
 )
 
+
 def _upload_image_to_s3(image_url, ad_unique_id):
     """
     Downloads the image from `image_url` and uploads to S3.
     Returns the final S3 (or CloudFront) URL if successful, else None.
     """
     try:
-        # 1) Download image
-        resp = requests.get(image_url, timeout=10)
-        resp.raise_for_status()
-        image_data = resp.content
+        # 1) Download image using our retry utility
+        response = make_request(
+            image_url,
+            method='get',
+            timeout=10,
+            retries=3,
+            raise_for_status=False
+        )
+
+        if not response or response.status_code != 200:
+            logger.error(
+                f"Failed to download image from {image_url}, status: {response.status_code if response else 'No response'}")
+            return None
+
+        image_data = response.content
 
         # 2) Create a unique key for S3
         image_id = image_url.split("/")[-1].split('.')[0]

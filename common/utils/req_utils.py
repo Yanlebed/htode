@@ -1,7 +1,6 @@
 # common/utils/req_utils.py
-
 import logging
-import requests
+from common.utils.request_utils import make_request
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +43,6 @@ def fetch_ads_flatfy(
 
     Returns:
       list: A list of ad dictionaries or empty list if error or none.
-
-    Raises:
-      ValueError or requests exceptions if something goes wrong.
     """
     try:
         params = {
@@ -70,9 +66,19 @@ def fetch_ads_flatfy(
             params["price_max"] = str(price_max)
 
         logger.info(f"Fetching Flatfy ads with params: {params}")
-        response = requests.get(BASE_FLATFY_URL, params=params, headers=DEFAULT_HEADERS, timeout=15)
-        if response.status_code != 200:
-            logger.error(f"Fetch failed with status {response.status_code}.")
+
+        # Use our new make_request utility instead of direct requests call
+        response = make_request(
+            BASE_FLATFY_URL,
+            method='get',
+            params=params,
+            headers=DEFAULT_HEADERS,
+            timeout=15,
+            retries=3
+        )
+
+        if response is None or response.status_code != 200:
+            logger.error(f"Fetch failed with status {response.status_code if response else 'No response'}.")
             return []
 
         data = response.json().get("data", [])
