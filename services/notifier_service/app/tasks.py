@@ -93,7 +93,7 @@ def notify_user_with_ads(telegram_id, user_filters):
                 continue
 
             # Get the first image for the ad
-            ad_images = get_ad_images(ad_id)
+            ad_images = utils_get_ad_images(ad_id)  # Use the imported function
             first_image = ad_images[0] if ad_images else None
 
             ad_external_id = str(ad.get("id"))
