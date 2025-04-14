@@ -1,13 +1,61 @@
 version: '3.8'
 
+# Define common environment variables for reuse
+x-common-variables: &common-variables
+  REDIS_URL: "${REDIS_URL:-redis://redis:6379/0}"
+  DB_HOST: "${DB_HOST:-postgres}"
+  DB_PORT: "${DB_PORT:-5432}"
+  DB_NAME: "${DB_NAME:-mydb}"
+  DB_USER: "${DB_USER:-myuser}"
+  DB_PASS: "${DB_PASS:-mypass}"
+
+# Define common AWS environment variables
+x-aws-variables: &aws-variables
+  AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID}"
+  AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY}"
+  AWS_DEFAULT_REGION: "${AWS_DEFAULT_REGION:-eu-west-1}"
+  AWS_S3_BUCKET: "${AWS_S3_BUCKET:-htodebucket}"
+  AWS_S3_BUCKET_PREFIX: "${AWS_S3_BUCKET_PREFIX:-ads-images/}"
+  CLOUDFRONT_DOMAIN: "${CLOUDFRONT_DOMAIN:-https://d3h86hbbdu2c7h.cloudfront.net}"
+
+# Define common service settings
+x-service-settings: &service-settings
+  networks:
+    - app_net
+  restart: unless-stopped
+
+# Define resource limits for services
+x-resource-limits: &resource-limits
+  deploy:
+    resources:
+      limits:
+        cpus: '0.50'
+        memory: 512M
+      reservations:
+        cpus: '0.25'
+        memory: 256M
+
+# Define resource limits for smaller services
+x-small-resource-limits: &small-resource-limits
+  deploy:
+    resources:
+      limits:
+        cpus: '0.30'
+        memory: 256M
+      reservations:
+        cpus: '0.10'
+        memory: 128M
+
 services:
   redis:
     image: redis:7
     container_name: my_redis
+    <<: *service-settings
+    <<: *resource-limits
     ports:
       - "6379:6379"
-    networks:
-      - app_net
+    volumes:
+      - redis-data:/data
     healthcheck:
       test: [ "CMD", "redis-cli", "ping" ]
       interval: 5s
@@ -15,21 +63,20 @@ services:
       retries: 5
     command: [ "redis-server", "--appendonly", "yes" ]
 
-
   postgres:
     image: postgres:14
     container_name: my_postgres
+    <<: *service-settings
+    <<: *resource-limits
     environment:
-      POSTGRES_DB: mydb
-      POSTGRES_USER: myuser
-      POSTGRES_PASSWORD: mypass
+      POSTGRES_DB: "${DB_NAME:-mydb}"
+      POSTGRES_USER: "${DB_USER:-myuser}"
+      POSTGRES_PASSWORD: "${DB_PASS:-mypass}"
     ports:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
-    networks:
-      - app_net
     healthcheck:
       test: [ "CMD", "pg_isready", "-h", "postgres" ]
       interval: 5s
@@ -38,6 +85,8 @@ services:
 
   telegram_service:
     container_name: telegram_service
+    <<: *service-settings
+    <<: *resource-limits
     build:
       context: .
       dockerfile: services/telegram_service/Dockerfile
@@ -47,40 +96,35 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      REDIS_URL: "redis://redis:6379/0"
-      DB_HOST: "postgres"
-      DB_PORT: "5432"
-      DB_NAME: "mydb"
-      DB_USER: "myuser"
-      DB_PASS: "mypass"
-      TELEGRAM_TOKEN: "SET_YOUR_TELEGRAM_TOKEN_HERE"
-    networks:
-      - app_net
+      <<: *common-variables
+      TELEGRAM_TOKEN: "${TELEGRAM_TOKEN}"
     command: python -m app.main
 
   telegram_worker_service:
-    networks:
-      - app_net
-    depends_on:
-      redis:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-    environment:
-      REDIS_URL: "redis://redis:6379/0"
-      DB_HOST: "postgres"
-      DB_PORT: "5432"
-      DB_NAME: "mydb"
-      DB_USER: "myuser"
-      DB_PASS: "mypass"
+    container_name: telegram_worker
+    <<: *service-settings
+    <<: *resource-limits
     build:
       context: .
       dockerfile: services/telegram_service/Dockerfile
-    container_name: telegram_worker
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *common-variables
     command: celery -A app.celery_app.celery_app worker -Q telegram_queue --loglevel=info --concurrency=2 --max-tasks-per-child=100
+    healthcheck:
+      test: ["CMD", "celery", "inspect", "ping", "-d", "celery@telegram_worker"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   scraper_worker_service:
     container_name: scraper_worker_service
+    <<: *service-settings
+    <<: *resource-limits
     build:
       context: .
       dockerfile: services/scraper_service/Dockerfile
@@ -90,25 +134,19 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      REDIS_URL: "redis://redis:6379/0"
-      DB_HOST: "postgres"
-      DB_PORT: "5432"
-      DB_NAME: "mydb"
-      DB_USER: "myuser"
-      DB_PASS: "mypass"
-      AWS_ACCESS_KEY_ID: "AKIAS74TMCYOZMLDIA6K"
-      AWS_SECRET_ACCESS_KEY: "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"
-      AWS_DEFAULT_REGION: "us-east-1"
-      AWS_S3_BUCKET: "htodebucket"
-      AWS_S3_BUCKET_PREFIX: "ads-images/"
-      CLOUDFRONT_DOMAIN: "https://d3h86hbbdu2c7h.cloudfront.net"
-    networks:
-      - app_net
+      <<: *common-variables
+      <<: *aws-variables
     command: celery -A scraper_service.app.celery_app worker --loglevel=info -Q scrape_queue --max-tasks-per-child=50
-
+    healthcheck:
+      test: ["CMD", "celery", "inspect", "ping", "-d", "celery@scraper_worker_service"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   scraper_beat_service:
     container_name: scraper_beat_service
+    <<: *service-settings
+    <<: *small-resource-limits
     build:
       context: .
       dockerfile: services/scraper_service/Dockerfile
@@ -118,28 +156,16 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      REDIS_URL: "redis://redis:6379/0"
-      DB_HOST: "postgres"
-      DB_PORT: "5432"
-      DB_NAME: "mydb"
-      DB_USER: "myuser"
-      DB_PASS: "mypass"
-      AWS_ACCESS_KEY_ID: "AKIAS74TMCYOZMLDIA6K"
-      AWS_SECRET_ACCESS_KEY: "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"
-      AWS_DEFAULT_REGION: "us-east-1"
-      AWS_S3_BUCKET: "htodebucket"
-      AWS_S3_BUCKET_PREFIX: "ads-images/"
-      CLOUDFRONT_DOMAIN: "https://d3h86hbbdu2c7h.cloudfront.net"
-    networks:
-      - app_net
+      <<: *common-variables
+      <<: *aws-variables
     command: celery -A scraper_service.app.celery_app beat --loglevel=info
-
 
   scraper_init_service:
     container_name: scraper_init_service
     build:
       context: .
       dockerfile: services/scraper_service/Dockerfile
+    <<: *small-resource-limits
     depends_on:
       redis:
         condition: service_healthy
@@ -148,64 +174,61 @@ services:
       scraper_worker_service:
         condition: service_started
     environment:
-      REDIS_URL: "redis://redis:6379/0"
-      DB_HOST: "postgres"
-      DB_PORT: "5432"
-      DB_NAME: "mydb"
-      DB_USER: "myuser"
-      DB_PASS: "mypass"
-      AWS_ACCESS_KEY_ID: "AKIAS74TMCYOZMLDIA6K"
-      AWS_SECRET_ACCESS_KEY: "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"
-      AWS_DEFAULT_REGION: "us-east-1"
-      AWS_S3_BUCKET: "htodebucket"
-      AWS_S3_BUCKET_PREFIX: "ads-images/"
-      CLOUDFRONT_DOMAIN: "https://d3h86hbbdu2c7h.cloudfront.net"
+      <<: *common-variables
+      <<: *aws-variables
     networks:
       - app_net
     command: >
       sh -c "
         echo 'Waiting for postgres to be ready...';
-        until pg_isready -h postgres -p 5432 -U myuser; do
+        until pg_isready -h postgres -p 5432 -U $${DB_USER}; do
           sleep 1;
         done;
         echo 'Postgres is ready. Triggering initial data scrape...';
         celery -A scraper_service.app.celery_app call scraper_service.app.tasks.initial_30_day_scrape;
         echo 'Initial data scrape task triggered. Exiting.';
       "
-    # Optional: Restart policy to prevent restarting after completion
     restart: "no"
-
 
   notifier_service:
     container_name: notifier_service
+    <<: *service-settings
+    <<: *resource-limits
     build:
       context: .
       dockerfile: services/notifier_service/Dockerfile
     depends_on:
-      - redis
-      - postgres
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
-      REDIS_URL: "redis://redis:6379/0"
-      DB_HOST: "postgres"
-      DB_PORT: "5432"
-      DB_NAME: "mydb"
-      DB_USER: "myuser"
-      DB_PASS: "mypass"
-    networks:
-      - app_net
+      <<: *common-variables
+      <<: *aws-variables
     command: celery -A app.celery_app.celery_app worker --loglevel=info -Q notify_queue
-
+    healthcheck:
+      test: ["CMD", "celery", "inspect", "ping", "-d", "celery@notifier_service"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   mini_webapp_service:
     container_name: mini_webapp
+    <<: *service-settings
+    <<: *small-resource-limits
     build:
       context: services/webapps
       dockerfile: Dockerfile
     ports:
       - "8080:8080"
-    networks:
-      - app_net
+    environment:
+      <<: *common-variables
     command: python /app/mini_webapp.py
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
 networks:
   app_net:
@@ -213,3 +236,4 @@ networks:
 
 volumes:
   postgres-data:
+  redis-data:
