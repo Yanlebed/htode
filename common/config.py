@@ -30,6 +30,7 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 # Telegram Configuration
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+# TODO: I receive an error while passing token for bot creating. Nonetype is received for some reason. Check logs.
 
 # Geo ID Mappings
 GEO_ID_MAPPING = {
