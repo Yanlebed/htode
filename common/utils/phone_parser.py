@@ -9,6 +9,7 @@ import asyncio
 import jmespath
 from dataclasses import dataclass
 from typing import List, Optional
+from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright, Page, Browser
 
@@ -16,6 +17,12 @@ from common.utils.request_utils import make_request
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+# Circuit breaker globals
+CIRCUIT_BREAKER_FAILURES = 0
+CIRCUIT_BREAKER_LAST_ATTEMPT = datetime.now()
+CIRCUIT_BREAKER_THRESHOLD = 5  # Number of failures before opening circuit
+CIRCUIT_BREAKER_RESET_TIME = timedelta(minutes=15)  # Time before trying again
 
 
 # ===========================
@@ -245,7 +252,8 @@ async def olx_js_fetch_phone_via_proxies(browser: Browser, resource_url: str, sk
                 proxy=proxy_config
             )
             page = await context.new_page()
-            await page.goto(resource_url, wait_until="networkidle", timeout=REQUEST_TIMEOUT * 1000)
+            # Use domcontentloaded instead of networkidle
+            await page.goto(resource_url, wait_until="domcontentloaded", timeout=REQUEST_TIMEOUT * 1000)
             phone = await olx_js_fetch_phone(page, sku, attempts=1)
             await context.close()
             if phone:
@@ -339,7 +347,8 @@ async def _playwright_fetch_page(url: str, browser: Browser, proxy: Optional[str
         page = await context.new_page()
 
         try:
-            await page.goto(url, wait_until="networkidle", timeout=REQUEST_TIMEOUT * 1000)
+            # Changed from networkidle to domcontentloaded to reduce memory usage and crashes
+            await page.goto(url, wait_until="domcontentloaded", timeout=REQUEST_TIMEOUT * 1000)
             content = await page.content()
             await context.close()
             return content
@@ -348,6 +357,48 @@ async def _playwright_fetch_page(url: str, browser: Browser, proxy: Optional[str
             await context.close()
             await asyncio.sleep(1)
     raise Exception(f"Failed to load {url} after {attempts} attempts, proxy={proxy}")
+
+
+async def create_optimized_browser() -> Browser:
+    """
+    Create a Playwright browser with optimized memory settings.
+    """
+    try:
+        p = await async_playwright().start()
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                '--disable-dev-shm-usage',
+                '--disable-extensions',
+                '--disable-gpu',
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-web-security',
+                '--disable-features=IsolateOrigins,site-per-process',
+                '--disable-site-isolation-trials',
+                '--mute-audio',
+                '--disable-infobars',
+                '--disable-breakpad',
+                '--disable-3d-apis',
+                '--disable-accelerated-2d-canvas',
+                '--disable-accelerated-jpeg-decoding',
+                '--disable-accelerated-mjpeg-decode',
+                '--disable-accelerated-video-decode',
+                '--disable-app-list-dismiss-on-blur',
+                '--disable-canvas-aa',
+                '--disable-composited-antialiasing',
+                '--disable-gl-extensions',
+                '--disable-webgl',
+                '--disable-webgl2',
+                '--ignore-certificate-errors',
+                '--disable-features=ScriptStreaming',
+                '--js-flags=--max-old-space-size=128',  # Limit JavaScript memory
+            ]
+        )
+        return browser
+    except Exception as e:
+        logger.exception(f"Failed to create optimized browser: {e}")
+        raise
 
 
 # ===========================
@@ -359,16 +410,17 @@ async def _extract_phone_numbers_async(resource_url: str) -> ExtractionResult:
     2) 3 attempts random bright data proxies
     3) fallback ZenRows
     """
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-
+    # Use optimized browser instead of default
+    browser = await create_optimized_browser()
+    try:
         # 1) no-proxy (3 attempts)
         try:
             html_np = await _playwright_fetch_page(resource_url, browser, None, attempts=5)
             # parse domain => need page context to do OLX phone
             ctx_np = await browser.new_context(java_script_enabled=True)
             page_np = await ctx_np.new_page()
-            await page_np.goto(resource_url, wait_until="networkidle", timeout=REQUEST_TIMEOUT * 1000)
+            # Use domcontentloaded instead of networkidle
+            await page_np.goto(resource_url, wait_until="domcontentloaded", timeout=REQUEST_TIMEOUT * 1000)
             result_np = await _domain_parse_final(html_np, resource_url, page_np, browser)
             await ctx_np.close()
             return result_np
@@ -385,7 +437,8 @@ async def _extract_phone_numbers_async(resource_url: str) -> ExtractionResult:
                                                            attempts=len(BRIGHTDATA_PROXIES))
                     ctx_px = await browser.new_context(java_script_enabled=True, proxy={"server": proxy_})
                     page_px = await ctx_px.new_page()
-                    await page_px.goto(resource_url, wait_until="networkidle", timeout=REQUEST_TIMEOUT * 1000)
+                    # Use domcontentloaded instead of networkidle
+                    await page_px.goto(resource_url, wait_until="domcontentloaded", timeout=REQUEST_TIMEOUT * 1000)
                     res_px = await _domain_parse_final(html_px, resource_url, page_px, browser)
                     await ctx_px.close()
                     return res_px
@@ -407,18 +460,41 @@ async def _extract_phone_numbers_async(resource_url: str) -> ExtractionResult:
         except Exception:
             logger.exception("ZenRows fallback => error.")
             return ExtractionResult([], None)
+    finally:
+        # Make sure browser is always closed properly
+        await browser.close()
 
 
 def extract_phone_numbers_from_resource(resource_url: str) -> ExtractionResult:
     """
-    Synchronous function:
+    Synchronous function with circuit breaker pattern:
       phones, viber = extract_phone_numbers_from_resource(url).phone_numbers, .viber_link
     """
+    global CIRCUIT_BREAKER_FAILURES, CIRCUIT_BREAKER_LAST_ATTEMPT
+
+    # Check if circuit breaker is open
+    if CIRCUIT_BREAKER_FAILURES >= CIRCUIT_BREAKER_THRESHOLD:
+        time_since_last = datetime.now() - CIRCUIT_BREAKER_LAST_ATTEMPT
+        if time_since_last < CIRCUIT_BREAKER_RESET_TIME:
+            logger.warning(f"Circuit breaker open, skipping phone extraction for {resource_url}")
+            return ExtractionResult([], None)
+        else:
+            # Reset the circuit breaker
+            logger.info("Resetting circuit breaker for phone extraction")
+            CIRCUIT_BREAKER_FAILURES = 0
+
     logger.info(f"extract_phone_numbers_from_resource => {resource_url}")
+    CIRCUIT_BREAKER_LAST_ATTEMPT = datetime.now()
+
     try:
-        return asyncio.run(_extract_phone_numbers_async(resource_url))
-    except Exception:
+        result = asyncio.run(_extract_phone_numbers_async(resource_url))
+        # Reset failure count on success
+        CIRCUIT_BREAKER_FAILURES = 0
+        return result
+    except Exception as e:
         logger.exception("All final attempts => fail.")
+        # Increment failure count
+        CIRCUIT_BREAKER_FAILURES += 1
         return ExtractionResult([], None)
 
 
