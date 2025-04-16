@@ -295,6 +295,8 @@ def store_ad_phones(resource_url, ad_id):
     """
     Extracts phone numbers and a viber link from the given resource URL,
     then inserts them into the ad_phones table for the given ad_id.
+
+    Returns the number of phones stored.
     """
     # First check if the ad exists in the database
     check_sql = "SELECT id FROM ads WHERE id = %s"
@@ -302,30 +304,40 @@ def store_ad_phones(resource_url, ad_id):
 
     if not ad_exists:
         logger.warning(f"Cannot store phones for ad_id={ad_id} - ad doesn't exist in the database")
-        return
+        return 0
 
     # Only proceed if the ad exists
     try:
+        phones_added = 0
         result = extract_phone_numbers_from_resource(resource_url)
         phones = result.phone_numbers
         viber_link = result.viber_link
 
         for phone in phones:
             # Double check ad exists before each insert
-            check_sql = "SELECT id FROM ads WHERE id = %s"
-            if not execute_query(check_sql, [ad_id], fetchone=True):
+            if not execute_query("SELECT id FROM ads WHERE id = %s", [ad_id], fetchone=True):
                 logger.warning(f"Ad {ad_id} no longer exists, aborting phone insert")
                 break
 
-            sql = "INSERT INTO ad_phones (ad_id, phone) VALUES (%s, %s)"
-            execute_query(sql, [ad_id, phone])
+            try:
+                sql = "INSERT INTO ad_phones (ad_id, phone) VALUES (%s, %s)"
+                execute_query(sql, [ad_id, phone])
+                phones_added += 1
+            except Exception as e:
+                logger.error(f"Error inserting phone {phone} for ad {ad_id}: {e}")
+                # Continue with other phones
 
         if viber_link:
             # Double check ad exists before viber link insert
-            check_sql = "SELECT id FROM ads WHERE id = %s"
-            if execute_query(check_sql, [ad_id], fetchone=True):
-                sql = "INSERT INTO ad_phones (ad_id, viber_link) VALUES (%s, %s)"
-                execute_query(sql, [ad_id, viber_link])
+            if execute_query("SELECT id FROM ads WHERE id = %s", [ad_id], fetchone=True):
+                try:
+                    sql = "INSERT INTO ad_phones (ad_id, viber_link) VALUES (%s, %s)"
+                    execute_query(sql, [ad_id, viber_link])
+                except Exception as e:
+                    logger.error(f"Error inserting viber link for ad {ad_id}: {e}")
+
+        return phones_added
     except Exception as e:
         logger.error(f"Error extracting or storing phones for ad {ad_id}: {e}")
         # Continue with the processing
+        return 0

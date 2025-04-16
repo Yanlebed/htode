@@ -224,6 +224,7 @@ def _insert_ad_if_new(ad_data: dict, geo_id: int, property_type: str, cutoff_tim
         return None
 
     # Use the unified ad insertion function
+    # This now handles images and phone numbers in a single transaction
     logger.info(f"Inserting new ad into DB: {ad_data.get('id')}")
     return process_and_insert_ad(ad_data, property_type, geo_id)
 

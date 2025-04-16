@@ -119,9 +119,11 @@ def get_random_desktop_user_agent() -> str:
 # ===========================
 def _parse_real_estate_lviv(ad_link: str) -> ExtractionResult:
     logger.info("Parsing real-estate.lviv.ua data.")
-    ad_id_part = ad_link.split("/")[-1].split("-")[0]
-    link_ = REAL_ESTATE_LVIV_UA_LINK.format(ad_id_part)
     try:
+        # Extract the ID part from the URL
+        ad_id_part = ad_link.split("/")[-1].split("-")[0]
+        link_ = REAL_ESTATE_LVIV_UA_LINK.format(ad_id_part)
+
         # Use centralized request utility
         response = make_request(link_, timeout=REQUEST_TIMEOUT, retries=3)
         if not response:
@@ -132,8 +134,8 @@ def _parse_real_estate_lviv(ad_link: str) -> ExtractionResult:
             phones = [p.replace('(', '').replace(')', '').replace(' ', '') for p in matches]
             return ExtractionResult(phones, None)
         return ExtractionResult([], None)
-    except Exception:
-        logger.exception("Error fetching real-estate.lviv.ua phone link.")
+    except Exception as e:
+        logger.exception(f"Error fetching real-estate.lviv.ua phone link: {e}")
         return ExtractionResult([], None)
 
 
@@ -302,11 +304,12 @@ async def parse_olx_playwright(html: str, page: Page, browser: Browser, resource
 # ===========================
 async def _domain_parse_final(html: str, original_url: str, page: Page, browser: Browser) -> ExtractionResult:
     soup = BeautifulSoup(html, "lxml")
-    canonical_tag = soup.find("link", rel="canonical")
-    canonical_url = canonical_tag["href"] if canonical_tag else original_url
+    canonical_tag = soup.find("link", rel="canonical") or soup.find("a", class_="redirect-link")
+    canonical_url = canonical_tag.get("href") if canonical_tag else original_url
     if canonical_url == original_url:
         logger.warning("canonical_url == original_url")
-        logger.warning(html)
+    else:
+        logger.warning(f"canonical_url != original_url => {canonical_url} != {original_url}")
     logger.info(f"Canonical for {original_url}: {canonical_url}")
 
     if "olx.ua" in canonical_url:
@@ -329,7 +332,7 @@ async def _domain_parse_final(html: str, original_url: str, page: Page, browser:
 # ===========================
 async def _playwright_fetch_page(url: str, browser: Browser, proxy: Optional[str], attempts: int = 3) -> str:
     """
-    Up to `attempts` times, random UA. If fail => raise.
+    Fetch page content with retry logic and proper error handling.
     """
     for i in range(1, attempts + 1):
         ua = get_random_desktop_user_agent()
@@ -347,8 +350,9 @@ async def _playwright_fetch_page(url: str, browser: Browser, proxy: Optional[str
         page = await context.new_page()
 
         try:
-            # Changed from networkidle to domcontentloaded to reduce memory usage and crashes
-            await page.goto(url, wait_until="domcontentloaded", timeout=REQUEST_TIMEOUT * 1000)
+            # Use "domcontentloaded" instead of "networkidle" to reduce timeouts
+            # Also reduce timeout from 30 seconds to 15 seconds
+            await page.goto(url, wait_until="domcontentloaded", timeout=15000)
             content = await page.content()
             await context.close()
             return content
