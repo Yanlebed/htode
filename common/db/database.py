@@ -38,7 +38,21 @@ def return_connection(conn):
     if pool is not None:
         pool.putconn(conn)
 
-def execute_query(sql, params=None, fetch=False, fetchone=False):
+
+def execute_query(sql, params=None, fetch=False, fetchone=False, commit=True):
+    """
+    Execute a SQL query with proper transaction handling.
+
+    Args:
+        sql: SQL query to execute
+        params: Parameters for the query
+        fetch: Whether to fetch all results
+        fetchone: Whether to fetch one result
+        commit: Whether to commit the transaction
+
+    Returns:
+        Query results or None
+    """
     conn = None
     try:
         conn = get_connection()
@@ -48,9 +62,11 @@ def execute_query(sql, params=None, fetch=False, fetchone=False):
                 return cur.fetchone()
             if fetch:
                 return cur.fetchall()
-            conn.commit()
+            if commit:
+                conn.commit()
+            return None
     except Exception as e:
-        if conn:
+        if conn and commit:
             conn.rollback()
         logger.error(f"Database error: {e}, SQL: {sql}, Params: {params}")
         raise
