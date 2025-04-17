@@ -11,44 +11,59 @@ logger = logging.getLogger(__name__)
 
 
 def get_or_create_user(telegram_id):
-    logger.info("Getting user with telegram id: %s", telegram_id)
+    logger.info(f"Getting user with telegram id: {telegram_id}")
     sql_check = "SELECT id FROM users WHERE telegram_id = %s"
     row = execute_query(sql_check, [telegram_id], fetchone=True)
     if row:
-        logger.info("Found user with telegram id: %s", telegram_id)
+        logger.info(f"Found user with telegram id: {telegram_id}, user_id: {row['id']}")
         return row['id']
 
-    logger.info("Creating user with telegram id: %s", telegram_id)
+    logger.info(f"Creating user with telegram id: {telegram_id}")
     free_until = (datetime.datetime.now() + datetime.timedelta(days=7)).isoformat()
     sql_insert = """
-    INSERT INTO users (telegram_id, free_until)
-    VALUES (%s, %s)
-    RETURNING id
-    """
-    user = execute_query(sql_insert, [telegram_id, free_until], fetchone=True)
+                 INSERT INTO users (telegram_id, free_until)
+                 VALUES (%s, %s) RETURNING id \
+                 """
+    user = execute_query(sql_insert, [telegram_id, free_until], fetchone=True, commit=True)  # Ensure commit=True
+    if not user:
+        logger.error(f"Failed to create user with telegram id: {telegram_id}")
+        return None
+
+    logger.info(f"Created user with telegram id: {telegram_id}, new user_id: {user['id']}")
     return user['id']
 
 
 def update_user_filter(user_id, filters):
+    logger.info(f"Updating filters for user_id: {user_id}")
+
+    # First verify user exists
+    check_sql = "SELECT id FROM users WHERE id = %s"
+    user_exists = execute_query(check_sql, [user_id], fetchone=True)
+    if not user_exists:
+        logger.error(f"Cannot update filters - user_id {user_id} does not exist in database")
+        raise ValueError(f"User ID {user_id} does not exist")
+
     property_type = filters.get('property_type')
     city = filters.get('city')
     geo_id = get_key_by_value(city, GEO_ID_MAPPING)
-    rooms_count = filters.get('rooms')  # Это теперь список или None
+    rooms_count = filters.get('rooms')  # List or None
     price_min = filters.get('price_min')
     price_max = filters.get('price_max')
 
     sql_upsert = """
-    INSERT INTO user_filters (user_id, property_type, city, rooms_count, price_min, price_max)
-    VALUES (%s, %s, %s, %s, %s, %s)
-    ON CONFLICT (user_id)
-    DO UPDATE SET
-        property_type = EXCLUDED.property_type,
-        city = EXCLUDED.city,
-        rooms_count = EXCLUDED.rooms_count,
-        price_min = EXCLUDED.price_min,
-        price_max = EXCLUDED.price_max
-    """
-    execute_query(sql_upsert, [user_id, property_type, geo_id, rooms_count, price_min, price_max])
+                 INSERT INTO user_filters (user_id, property_type, city, rooms_count, price_min, price_max)
+                 VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (user_id)
+    DO
+                 UPDATE SET
+                     property_type = EXCLUDED.property_type,
+                     city = EXCLUDED.city,
+                     rooms_count = EXCLUDED.rooms_count,
+                     price_min = EXCLUDED.price_min,
+                     price_max = EXCLUDED.price_max \
+                 """
+    logger.info(
+        f"Executing query with params: [{user_id}, {property_type}, {geo_id}, {rooms_count}, {price_min}, {price_max}]")
+    execute_query(sql_upsert, [user_id, property_type, geo_id, rooms_count, price_min, price_max], commit=True)
 
 
 def start_free_subscription_of_user(user_id):
@@ -82,17 +97,16 @@ def find_users_for_ad(ad):
     """
     logger.info('Looking for users for ad: %s', ad)
     sql = """
-    SELECT u.id AS user_id, uf.property_type, uf.city, uf.rooms_count, uf.price_min, uf.price_max
-    FROM user_filters uf
-    JOIN users u ON uf.user_id = u.id
-    WHERE
-      (u.free_until > NOW() OR (u.subscription_until > NOW()))
-      AND (uf.property_type = %s OR uf.property_type IS NULL)
-      AND (uf.city = %s OR uf.city IS NULL)
-      AND (uf.rooms_count = %s OR uf.rooms_count IS NULL)
-      AND (uf.price_min IS NULL OR ad.price >= uf.price_min)
-      AND (uf.price_max IS NULL OR ad.price <= uf.price_max)
-    """
+          SELECT u.id AS user_id, uf.property_type, uf.city, uf.rooms_count, uf.price_min, uf.price_max
+          FROM user_filters uf
+                   JOIN users u ON uf.user_id = u.id
+          WHERE (u.free_until > NOW() OR (u.subscription_until > NOW()))
+            AND (uf.property_type = %s OR uf.property_type IS NULL)
+            AND (uf.city = %s OR uf.city IS NULL)
+            AND (uf.rooms_count = %s OR uf.rooms_count IS NULL)
+            AND (uf.price_min IS NULL OR ad.price >= uf.price_min)
+            AND (uf.price_max IS NULL OR ad.price <= uf.price_max) \
+          """
     # Предполагается, что в `ads` есть соответствующие поля
     # Выполните SQL-запрос с передачей параметров объявления
     # Пример:
@@ -178,21 +192,20 @@ def add_subscription(user_id, property_type, city_id, rooms_count, price_min, pr
         raise ValueError("You already have 20 subscriptions, cannot add more.")
 
     sql_insert = """
-    INSERT INTO user_filters (user_id, property_type, city, rooms_count, price_min, price_max)
-    VALUES (%s, %s, %s, %s, %s, %s)
-    RETURNING id
-    """
+                 INSERT INTO user_filters (user_id, property_type, city, rooms_count, price_min, price_max)
+                 VALUES (%s, %s, %s, %s, %s, %s) RETURNING id \
+                 """
     sub = execute_query(sql_insert, [user_id, property_type, city_id, rooms_count, price_min, price_max], fetchone=True)
     return sub["id"]
 
 
 def list_subscriptions(user_id):
     sql = """
-    SELECT id, property_type, city, rooms_count, price_min, price_max
-    FROM user_filters
-    WHERE user_id = %s
-    ORDER BY id
-    """
+          SELECT id, property_type, city, rooms_count, price_min, price_max
+          FROM user_filters
+          WHERE user_id = %s
+          ORDER BY id \
+          """
     return execute_query(sql, [user_id], fetch=True)
 
 
@@ -211,10 +224,15 @@ def update_subscription(subscription_id, user_id, new_values):
     We'll build a small dynamic query or just do a single update if columns are fixed.
     """
     sql = """
-    UPDATE user_filters
-    SET property_type = %s, city = %s, rooms_count = %s, price_min = %s, price_max = %s
-    WHERE id = %s AND user_id = %s
-    """
+          UPDATE user_filters
+          SET property_type = %s,
+              city          = %s,
+              rooms_count   = %s,
+              price_min     = %s,
+              price_max     = %s
+          WHERE id = %s
+            AND user_id = %s \
+          """
     params = [new_values['property_type'], new_values['city'],
               new_values['rooms_count'], new_values['price_min'], new_values['price_max'],
               subscription_id, user_id]
@@ -229,21 +247,20 @@ def add_favorite_ad(user_id, ad_id):
         raise ValueError("You already have 50 favorite ads, cannot add more.")
 
     sql_insert = """
-    INSERT INTO favorite_ads (user_id, ad_id)
-    VALUES (%s, %s)
-    ON CONFLICT (user_id, ad_id) DO NOTHING  -- if you have unique constraint
-    """
+                 INSERT INTO favorite_ads (user_id, ad_id)
+                 VALUES (%s, %s) ON CONFLICT (user_id, ad_id) DO NOTHING -- if you have unique constraint \
+                 """
     execute_query(sql_insert, [user_id, ad_id])
 
 
 def list_favorites(user_id):
     sql = """
-    SELECT fa.id, fa.ad_id, ads.price, ads.address, ads.city, ads.property_type, ads.rooms_count
-    FROM favorite_ads fa
-    JOIN ads ON fa.ad_id = ads.id
-    WHERE fa.user_id = %s
-    ORDER BY fa.created_at DESC
-    """
+          SELECT fa.id, fa.ad_id, ads.price, ads.address, ads.city, ads.property_type, ads.rooms_count
+          FROM favorite_ads fa
+                   JOIN ads ON fa.ad_id = ads.id
+          WHERE fa.user_id = %s
+          ORDER BY fa.created_at DESC \
+          """
     return execute_query(sql, [user_id], fetch=True)
 
 
@@ -261,12 +278,13 @@ def count_subscriptions(user_id):
 def list_subscriptions_paginated(user_id, page, per_page=5):
     offset = page * per_page
     sql = """
-    SELECT id, city, property_type, rooms_count, price_min, price_max, is_paused
-    FROM user_filters
-    WHERE user_id = %s
-    ORDER BY id
-    LIMIT %s OFFSET %s
-    """
+          SELECT id, city, property_type, rooms_count, price_min, price_max, is_paused
+          FROM user_filters
+          WHERE user_id = %s
+          ORDER BY id
+              LIMIT %s
+          OFFSET %s \
+          """
     rows = execute_query(sql, [user_id, per_page, offset], fetch=True)
     return rows
 
@@ -341,3 +359,25 @@ def store_ad_phones(resource_url, ad_id):
         logger.error(f"Error extracting or storing phones for ad {ad_id}: {e}")
         # Continue with the processing
         return 0
+
+
+def list_favorites(user_id):
+    sql = """
+          SELECT fa.id,
+                 fa.ad_id,
+                 ads.price,
+                 ads.address,
+                 ads.city,
+                 ads.property_type,
+                 ads.rooms_count,
+                 ads.resource_url,
+                 ads.external_id,
+                 ads.square_feet,
+                 ads.floor,
+                 ads.total_floors
+          FROM favorite_ads fa
+                   JOIN ads ON fa.ad_id = ads.id
+          WHERE fa.user_id = %s
+          ORDER BY fa.created_at DESC \
+          """
+    return execute_query(sql, [user_id], fetch=True)

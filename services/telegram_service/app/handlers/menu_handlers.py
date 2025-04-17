@@ -7,7 +7,7 @@ from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters import Text
 from ..bot import dp, bot
 from ..states.basis_states import FilterStates
-from common.db.models import update_user_filter, start_free_subscription_of_user
+from common.db.models import update_user_filter, start_free_subscription_of_user, get_db_user_id_by_telegram_id, get_or_create_user
 from common.db.database import execute_query
 from common.config import GEO_ID_MAPPING, get_key_by_value, build_ad_text
 from common.celery_app import celery_app
@@ -128,13 +128,46 @@ async def subscribe(callback_query: types.CallbackQuery, state: FSMContext):
     user_db_id = user_data.get('user_db_id')
     telegram_id = user_data.get('telegram_id')
 
+    logger.info(f"Subscribe handler - user_db_id: {user_db_id}, telegram_id: {telegram_id}")
+
     if not user_db_id:
+        # If user_db_id is not in state, try to get it directly from DB
+        logger.warning(f"user_db_id not found in state, trying to retrieve from DB")
+        user_db_id = get_db_user_id_by_telegram_id(telegram_id)
+
+        if not user_db_id:
+            # Still no user_db_id, create the user
+            logger.warning(f"User not found in DB, creating new user")
+            user_db_id = get_or_create_user(telegram_id)
+            await state.update_data(user_db_id=user_db_id)
+
+    if not user_db_id:
+        logger.error(f"Failed to get or create user for telegram_id: {telegram_id}")
         await safe_send_message(
             chat_id=callback_query.from_user.id,
-            text="Ошибка: Не удалось определить вашего пользователя."
+            text="Помилка: Не вдалося створити профіль користувача."
         )
         await safe_answer_callback_query(callback_query.id)
         return
+
+    # Verify user exists in database before proceeding
+    check_sql = "SELECT id FROM users WHERE id = %s"
+    user_exists = execute_query(check_sql, [user_db_id], fetchone=True)
+    if not user_exists:
+        logger.error(f"User ID {user_db_id} does not exist in database")
+        # Try to create user again
+        user_db_id = get_or_create_user(telegram_id)
+        await state.update_data(user_db_id=user_db_id)
+
+        # Verify again
+        user_exists = execute_query(check_sql, [user_db_id], fetchone=True)
+        if not user_exists:
+            await safe_send_message(
+                chat_id=callback_query.from_user.id,
+                text="Помилка: Не вдалося створити профіль користувача."
+            )
+            await safe_answer_callback_query(callback_query.id)
+            return
 
     # Перетворимо дані для збереження
     filters = {
@@ -145,13 +178,22 @@ async def subscribe(callback_query: types.CallbackQuery, state: FSMContext):
         'price_max': user_data.get('price_max'),
     }
 
-    logger.info('Filters: %s', filters)
+    logger.info(f'Filters: {filters}')
 
     # Збереження фільтрів у базі даних
-    update_user_filter(user_db_id, filters)
-    logger.info('Filters updated')
-    start_free_subscription_of_user(user_db_id)
-    logger.info('Free subscription started')
+    try:
+        update_user_filter(user_db_id, filters)
+        logger.info('Filters updated')
+        start_free_subscription_of_user(user_db_id)
+        logger.info('Free subscription started')
+    except Exception as e:
+        logger.error(f"Error updating user filters: {e}")
+        await safe_send_message(
+            chat_id=callback_query.from_user.id,
+            text="Помилка при збереженні фільтрів. Спробуйте ще раз."
+        )
+        await safe_answer_callback_query(callback_query.id)
+        return
 
     # 1) Let user know subscription is set
     await safe_send_message(

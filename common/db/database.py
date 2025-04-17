@@ -42,16 +42,6 @@ def return_connection(conn):
 def execute_query(sql, params=None, fetch=False, fetchone=False, commit=True):
     """
     Execute a SQL query with proper transaction handling.
-
-    Args:
-        sql: SQL query to execute
-        params: Parameters for the query
-        fetch: Whether to fetch all results
-        fetchone: Whether to fetch one result
-        commit: Whether to commit the transaction
-
-    Returns:
-        Query results or None
     """
     conn = None
     try:
@@ -59,14 +49,20 @@ def execute_query(sql, params=None, fetch=False, fetchone=False, commit=True):
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(sql, params)
             if fetchone:
-                return cur.fetchone()
-            if fetch:
-                return cur.fetchall()
+                result = cur.fetchone()
+            elif fetch:
+                result = cur.fetchall()
+            else:
+                result = None
+
             if commit:
+                logger.debug(f"Committing transaction for query: {sql}")
                 conn.commit()
-            return None
+
+            return result
     except Exception as e:
         if conn and commit:
+            logger.warning(f"Rolling back transaction due to error: {e}")
             conn.rollback()
         logger.error(f"Database error: {e}, SQL: {sql}, Params: {params}")
         raise
