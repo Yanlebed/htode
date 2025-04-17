@@ -101,7 +101,7 @@ def send_ad_with_extra_buttons(user_id, text, s3_image_url, resource_url, ad_id,
                 text="📲 Подзвонити",
                 web_app=WebAppInfo(url=phone_webapp_url)
             ),
-            InlineKeyboardButton("❤️ Додати в обрані", callback_data=f"add_fav:{ad_url}"),
+            InlineKeyboardButton("❤️ Додати в обрані", callback_data=f"add_fav:{adv_id}"),
             InlineKeyboardButton("ℹ️ Повний опис", callback_data=f"show_more:{ad_url}")
         )
 

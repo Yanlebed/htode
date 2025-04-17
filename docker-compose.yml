@@ -95,6 +95,9 @@ services:
       retries: 5
 
   telegram_service:
+    volumes:
+      - ./services/telegram_service:/app  # Mount directly to /app, not /app/app
+      - ./common:/app/common
     env_file:
       - .env
     container_name: telegram_service
@@ -111,9 +114,13 @@ services:
     environment:
       <<: *common-variables
       TELEGRAM_TOKEN: "${TELEGRAM_TOKEN}"
+      PYTHONPATH: "/app:/app/common"  # Important: set the correct Python path
     command: python -m app.main
 
   telegram_worker_service:
+    volumes:
+      - ./services/telegram_service:/app  # Mount directly to /app, not /app/app
+      - ./common:/app/common
     env_file:
       - .env
     container_name: telegram_worker
@@ -130,7 +137,8 @@ services:
     environment:
       <<: *common-variables
       TELEGRAM_TOKEN: "${TELEGRAM_TOKEN}"
-    command: celery -A app.celery_app.celery_app worker -Q telegram_queue --loglevel=info --concurrency=2 --max-tasks-per-child=100
+      PYTHONPATH: "/app:/app/common"  # Important: set the correct Python path
+    command: celery -A app.celery_app worker -Q telegram_queue --loglevel=info --concurrency=2 --max-tasks-per-child=100
     healthcheck:
       test: [ "CMD", "celery", "inspect", "ping", "-d", "celery@telegram_worker" ]
       interval: 30s

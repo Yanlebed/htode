@@ -36,16 +36,20 @@ def get_price_ranges(city: str):
 
 def main_menu_keyboard():
     """
-    Shows the main menu with 3 buttons:
+    Shows the main menu with 4 buttons:
     - Моя підписка
+    - Обрані
     - Як це працює?
     - Техпідтримка
     """
     keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
     keyboard.row(
-        KeyboardButton("📝 Мої підписки"),  # change
+        KeyboardButton("📝 Мої підписки"),
+        KeyboardButton("❤️ Обрані")
+    )
+    keyboard.row(
         KeyboardButton("🤔 Як це працює?"),
-        KeyboardButton("🧑‍💻 Техпідтримка"),
+        KeyboardButton("🧑‍💻 Техпідтримка")
     )
     return keyboard
 
