@@ -75,3 +75,15 @@ CREATE TABLE IF NOT EXISTS ad_phones (
     phone TEXT,          -- For phone numbers (e.g., "tel: +380663866058")
     viber_link TEXT      -- For a Viber chat link if available
 );
+
+-- High-priority indexes
+CREATE INDEX IF NOT EXISTS idx_ads_resource_url ON ads (resource_url);
+CREATE INDEX IF NOT EXISTS idx_ad_images_ad_id ON ad_images (ad_id);
+CREATE INDEX IF NOT EXISTS idx_ad_phones_ad_id ON ad_phones (ad_id);
+CREATE INDEX IF NOT EXISTS idx_ads_insert_time ON ads (insert_time DESC);
+CREATE INDEX IF NOT EXISTS idx_favorite_ads_created_at ON favorite_ads (user_id, created_at DESC);
+
+-- Query-specific indexes
+CREATE INDEX IF NOT EXISTS idx_ads_filter_query ON ads (city, property_type, price, rooms_count, insert_time DESC);
+CREATE INDEX IF NOT EXISTS idx_user_filters_active ON user_filters (user_id, city, property_type)
+WHERE is_paused = FALSE;

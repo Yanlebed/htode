@@ -1,6 +1,8 @@
 # services/telegram_service/app/handlers/favorites.py
 import decimal
 import logging
+import redis
+import json
 
 from aiogram import types
 from aiogram.dispatcher import FSMContext
@@ -10,13 +12,15 @@ from ..bot import dp, bot
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 
-from common.config import build_ad_text
+from common.config import build_ad_text, REDIS_URL
 from common.db.models import add_favorite_ad, remove_favorite_ad, list_favorites, get_db_user_id_by_telegram_id, \
     get_full_ad_description
 from common.db.database import execute_query
 from ..utils.message_utils import safe_send_message, safe_send_photo, safe_answer_callback_query
 
 logger = logging.getLogger(__name__)
+
+redis_client = redis.from_url(REDIS_URL)
 
 
 @dp.callback_query_handler(lambda c: c.data.startswith("add_fav:"))
@@ -147,6 +151,36 @@ async def handle_remove_fav(callback_query: types.CallbackQuery):
     db_user_id = get_db_user_id_by_telegram_id(callback_query.from_user.id)
     remove_favorite_ad(db_user_id, ad_id)
     await callback_query.answer("Видалено з обраних.")
+
+
+async def get_favorites_with_cache(user_id):
+    """Get user favorites with caching"""
+    cache_key = f"user_favorites:{user_id}"
+    cached = redis_client.get(cache_key)
+
+    if cached:
+        return json.loads(cached)
+
+    # Get from database
+    favorites = list_favorites(user_id)
+
+    if favorites:
+        # Convert to JSON serializable directly
+        serializable_favorites = []
+        for fav in favorites:
+            serializable_fav = {}
+            for key, value in fav.items():
+                if isinstance(value, decimal.Decimal):
+                    serializable_fav[key] = float(value)
+                else:
+                    serializable_fav[key] = value
+            serializable_favorites.append(serializable_fav)
+
+        # Cache for 5 minutes
+        redis_client.set(cache_key, json.dumps(serializable_favorites), ex=300)
+        return serializable_favorites
+
+    return []
 
 
 @dp.message_handler(lambda msg: msg.text == "❤️ Обрані")

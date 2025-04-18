@@ -1,13 +1,18 @@
 # common/db/models.py
 import time
+import redis
+import json
+import decimal
 
 from .database import execute_query
 import datetime
 import logging
-from common.config import GEO_ID_MAPPING, get_key_by_value
+from common.config import GEO_ID_MAPPING, get_key_by_value, REDIS_URL
 from common.utils.phone_parser import extract_phone_numbers_from_resource
 
 logger = logging.getLogger(__name__)
+
+redis_client = redis.from_url(REDIS_URL)
 
 
 def get_or_create_user(telegram_id):
@@ -91,35 +96,58 @@ def get_user_filters(user_id):
 
 
 def find_users_for_ad(ad):
-    # TODO: If is_paused = TRUE, you skip it when searching for active subscriptions (like in find_users_for_ad, or wherever you want to ignore paused ones).
     """
-    Возвращает список user_id, которым подходит объявление.
+    Finds users whose subscription filters match this ad.
+    Now with Redis caching to improve performance.
     """
-    logger.info('Looking for users for ad: %s', ad)
-    sql = """
-          SELECT u.id AS user_id, uf.property_type, uf.city, uf.rooms_count, uf.price_min, uf.price_max
-          FROM user_filters uf
-                   JOIN users u ON uf.user_id = u.id
-          WHERE (u.free_until > NOW() OR (u.subscription_until > NOW()))
-            AND (uf.property_type = %s OR uf.property_type IS NULL)
-            AND (uf.city = %s OR uf.city IS NULL)
-            AND (uf.rooms_count = %s OR uf.rooms_count IS NULL)
-            AND (uf.price_min IS NULL OR ad.price >= uf.price_min)
-            AND (uf.price_max IS NULL OR ad.price <= uf.price_max) \
-          """
-    # Предполагается, что в `ads` есть соответствующие поля
-    # Выполните SQL-запрос с передачей параметров объявления
-    # Пример:
-    ad_property_type = ad.get('property_type')
-    ad_city = ad.get('city')
-    ad_rooms = ad.get('rooms_count')
-    ad_price = ad.get('price')
-    ad_insert_time = ad.get('insert_time')
+    try:
+        # Create a cache key based on the ad's primary attributes that affect matching
+        ad_id = ad.get('id')
+        cache_key = f"matching_users:{ad_id}"
 
-    # Выполняем SQL-запрос
-    rows = execute_query(sql, [ad_property_type, ad_city, ad_rooms, ad_price, ad_price, ad_insert_time], fetch=True)
-    logger.info('Found %s users for ad: %s', len(rows), ad)
-    return [row["user_id"] for row in rows]
+        # Try to get results from cache first
+        cached = redis_client.get(cache_key)
+        if cached:
+            logger.info(f'Cache hit for ad {ad_id} matching users')
+            return json.loads(cached)
+
+        logger.info(f'Looking for users for ad: {ad}')
+
+        # The original SQL query remains unchanged
+        sql = """
+              SELECT u.id AS user_id, uf.property_type, uf.city, uf.rooms_count, uf.price_min, uf.price_max
+              FROM user_filters uf
+                       JOIN users u ON uf.user_id = u.id
+              WHERE (u.free_until > NOW() OR (u.subscription_until > NOW()))
+                AND (uf.property_type = %s OR uf.property_type IS NULL)
+                AND (uf.city = %s OR uf.city IS NULL)
+                AND (uf.rooms_count = %s OR uf.rooms_count IS NULL)
+                AND (uf.price_min IS NULL OR ad.price >= uf.price_min)
+                AND (uf.price_max IS NULL OR ad.price <= uf.price_max) \
+              """
+
+        # Extract ad properties for matching
+        ad_property_type = ad.get('property_type')
+        ad_city = ad.get('city')
+        ad_rooms = ad.get('rooms_count')
+        ad_price = ad.get('price')
+        ad_insert_time = ad.get('insert_time')
+
+        # Execute the SQL query
+        rows = execute_query(sql, [ad_property_type, ad_city, ad_rooms, ad_price, ad_price, ad_insert_time], fetch=True)
+        logger.info(f'Found {len(rows)} users for ad: {ad}')
+
+        # Extract user IDs from results
+        user_ids = [row["user_id"] for row in rows]
+
+        # Cache the results for 1 hour
+        # This is especially valuable since user filter preferences change infrequently
+        redis_client.set(cache_key, json.dumps(user_ids), ex=3600)  # 1 hour TTL
+
+        return user_ids
+    except Exception as e:
+        logger.error(f"Error finding users for ad {ad.get('id')}: {e}")
+        return []  # Return empty list on error to avoid service disruption
 
 
 def disable_subscription_for_user(user_id):
@@ -248,7 +276,7 @@ def add_favorite_ad(user_id, ad_id):
 
     sql_insert = """
                  INSERT INTO favorite_ads (user_id, ad_id)
-                 VALUES (%s, %s) ON CONFLICT (user_id, ad_id) DO NOTHING -- if you have unique constraint \
+                 VALUES (%s, %s) ON CONFLICT (user_id, ad_id) DO NOTHING -- if you have unique constraint   \
                  """
     execute_query(sql_insert, [user_id, ad_id])
 
@@ -381,3 +409,45 @@ def list_favorites(user_id):
           ORDER BY fa.created_at DESC \
           """
     return execute_query(sql, [user_id], fetch=True)
+
+
+def get_full_ad_data(ad_id):
+    """Get complete ad data with joined images and phones (with caching)"""
+    cache_key = f"full_ad:{ad_id}"
+
+    # Try to get from cache
+    cached = redis_client.get(cache_key)
+    if cached:
+        return json.loads(cached)
+
+    # Database query with multiple joins
+    sql = """
+          SELECT a.*,
+                 array_agg(DISTINCT ai.image_url) as images,
+                 array_agg(DISTINCT ap.phone)     as phones,
+                 ap.viber_link
+          FROM ads a
+                   LEFT JOIN ad_images ai ON a.id = ai.ad_id
+                   LEFT JOIN ad_phones ap ON a.id = ap.ad_id
+          WHERE a.id = %s
+          GROUP BY a.id, ap.viber_link \
+          """
+
+    ad_data = execute_query(sql, [ad_id], fetchone=True)
+
+    if ad_data:
+        # Convert to JSON serializable directly
+        serializable_ad_data = {}
+        for key, value in ad_data.items():
+            if isinstance(value, decimal.Decimal):
+                serializable_ad_data[key] = float(value)
+            elif isinstance(value, datetime.datetime) or isinstance(value, datetime.date):
+                serializable_ad_data[key] = value.isoformat()
+            else:
+                serializable_ad_data[key] = value
+
+        # Cache for 30 minutes
+        redis_client.set(cache_key, json.dumps(serializable_ad_data), ex=1800)
+        return serializable_ad_data
+
+    return None
