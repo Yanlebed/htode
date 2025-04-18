@@ -3,9 +3,13 @@ import logging
 import time
 import mimetypes
 import boto3
+import redis
+import json
+
 from botocore.exceptions import ClientError
-from common.config import AWS_CONFIG
+from common.config import AWS_CONFIG, REDIS_URL
 from common.utils.request_utils import make_request
+from common.db.database import execute_query
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +20,8 @@ s3_client = boto3.client(
     aws_secret_access_key=AWS_CONFIG['secret_key'],
     region_name=AWS_CONFIG['region']
 )
+
+redis_client = redis.from_url(REDIS_URL)
 
 
 def detect_content_type(image_url, file_extension):
@@ -157,28 +163,28 @@ def _upload_image_to_s3(image_url, ad_unique_id, max_retries=3, retry_delay=1):
 
 
 def get_image_urls_for_ad(ad_id, max_images=5):
-    """
-    Get S3 image URLs for an ad from the database.
+    """Get S3 image URLs for an ad from the database with caching"""
+    # Try cache first
+    cache_key = f"image_urls:{ad_id}"
+    cached = redis_client.get(cache_key)
+    if cached:
+        return json.loads(cached)
 
-    Args:
-        ad_id: The database ID of the ad
-        max_images: Maximum number of images to return
-
-    Returns:
-        List of image URLs or empty list if no images found
-    """
-    from common.db.database import execute_query
-
+    # If not in cache, query database
     try:
         sql = """
-        SELECT image_url FROM ad_images 
-        WHERE ad_id = %s 
-        ORDER BY id 
-        LIMIT %s
-        """
+              SELECT image_url \
+              FROM ad_images
+              WHERE ad_id = %s
+              ORDER BY id
+                  LIMIT %s \
+              """
         rows = execute_query(sql, [ad_id, max_images], fetch=True)
         if rows:
-            return [row['image_url'] for row in rows]
+            urls = [row['image_url'] for row in rows]
+            # Cache for 1 hour (images rarely change)
+            redis_client.set(cache_key, json.dumps(urls), ex=3600)
+            return urls
         return []
     except Exception as e:
         logger.error(f"Error retrieving image URLs for ad {ad_id}: {e}")

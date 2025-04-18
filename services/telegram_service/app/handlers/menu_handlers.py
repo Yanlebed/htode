@@ -5,6 +5,8 @@ import logging
 from aiogram import types
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters import Text
+
+from common.utils.cache import redis_cache
 from ..bot import dp, bot
 from ..states.basis_states import FilterStates
 from common.db.models import update_user_filter, start_free_subscription_of_user, get_db_user_id_by_telegram_id, get_or_create_user
@@ -291,6 +293,7 @@ async def cancel_handler(message: types.Message, state: FSMContext):
     )
 
 
+@redis_cache("ads_period", ttl=300)  # 5 minute cache
 def fetch_ads_for_period(filters, days, limit=3):
     """
     Query your local ads table, matching the user's filters,
