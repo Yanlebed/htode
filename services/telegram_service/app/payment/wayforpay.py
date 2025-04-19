@@ -4,6 +4,7 @@ import hashlib
 import requests
 import time
 import json
+import os
 import hmac
 import logging
 from typing import Dict, Any, Optional
@@ -11,8 +12,8 @@ from typing import Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 # Replace with your actual merchant credentials from WayForPay
-MERCHANT_ACCOUNT = "YOUR_MERCHANT_ACCOUNT"
-MERCHANT_SECRET = "YOUR_MERCHANT_SECRET"
+MERCHANT_ACCOUNT = os.getenv("WAYFORPAY_MERCHANT_LOGIN")
+MERCHANT_SECRET = os.getenv("WAYFORPAY_MERCHANT_SECRET")
 API_URL = "https://api.wayforpay.com/api"
 
 

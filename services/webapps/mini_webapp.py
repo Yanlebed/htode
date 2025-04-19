@@ -11,7 +11,7 @@ from flask import Flask, request, render_template_string, jsonify
 logger = logging.getLogger(__name__)
 
 # Get these from environment variables
-MERCHANT_ACCOUNT = os.getenv("WAYFORPAY_MERCHANT_ACCOUNT")
+MERCHANT_ACCOUNT = os.getenv("WAYFORPAY_MERCHANT_LOGIN")
 MERCHANT_SECRET = os.getenv("WAYFORPAY_MERCHANT_SECRET")
 app = Flask(__name__)
 
