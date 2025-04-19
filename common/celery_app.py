@@ -49,6 +49,8 @@ celery_app.conf.update(
     task_routes={
         'notifier_service.app.tasks.*': {'queue': 'notify_queue'},
         'telegram_service.app.tasks.*': {'queue': 'telegram_queue'},
+        'viber_service.app.tasks.*': {'queue': 'viber_queue'},
+        'whatsapp_service.app.tasks.*': {'queue': 'whatsapp_queue'},
         'scraper_service.app.tasks.*': {'queue': 'scrape_queue'},
     },
 )
