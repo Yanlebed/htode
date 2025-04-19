@@ -12,10 +12,10 @@ COPY services/whatsapp_service/app /app/app
 
 # Install dependencies
 COPY requirements/whatsapp.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt uvicorn fastapi
 
 # Set PYTHONPATH
 ENV PYTHONPATH=/app/common
 
-# Run the bot
-CMD ["python", "-m", "app.main"]
+# Run with uvicorn
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]

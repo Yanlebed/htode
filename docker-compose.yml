@@ -149,8 +149,17 @@ services:
     env_file:
       - .env
     container_name: viber_service
-    <<: *service-settings
-    <<: *resource-limits
+    networks:
+      - app_net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
     build:
       context: .
       dockerfile: services/viber_service/Dockerfile
@@ -165,15 +174,59 @@ services:
       VIBER_WEBHOOK_URL: "${VIBER_WEBHOOK_URL}"
     ports:
       - "8001:8000"  # Expose port for webhook
-    command: python -m app.main
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+
+  viber_worker_service:
+    volumes:
+      - ./services/viber_service:/app
+      - ./common:/app/common
+    env_file:
+      - .env
+    container_name: viber_worker
+    <<: *service-settings
+    <<: *resource-limits
+    build:
+      context: .
+      dockerfile: services/viber_service/Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *common-variables
+      VIBER_TOKEN: "${VIBER_TOKEN}"
+      VIBER_WEBHOOK_URL: "${VIBER_WEBHOOK_URL}"
+      PYTHONPATH: "/app:/app/common"
+    command: celery -A app.celery_app worker -Q viber_queue --loglevel=info --concurrency=2 --max-tasks-per-child=100
+    healthcheck:
+      test: [ "CMD", "celery", "inspect", "ping", "-d", "celery@viber_worker" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
 
   whatsapp_service:
     env_file:
       - .env
     container_name: whatsapp_service
-    <<: *service-settings
-    <<: *resource-limits
+    networks:
+      - app_net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
     build:
       context: .
       dockerfile: services/whatsapp_service/Dockerfile
@@ -189,7 +242,43 @@ services:
       TWILIO_ACCOUNT_SID: "${TWILIO_ACCOUNT_SID}"
       TWILIO_AUTH_TOKEN: "${TWILIO_AUTH_TOKEN}"
       TWILIO_PHONE_NUMBER: "${TWILIO_PHONE_NUMBER}"
-    command: python -m app.main
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8080
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+
+  whatsapp_worker_service:
+    volumes:
+      - ./services/whatsapp_service:/app
+      - ./common:/app/common
+    env_file:
+      - .env
+    container_name: whatsapp_worker
+    <<: *service-settings
+    <<: *resource-limits
+    build:
+      context: .
+      dockerfile: services/whatsapp_service/Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *common-variables
+      TWILIO_ACCOUNT_SID: "${TWILIO_ACCOUNT_SID}"
+      TWILIO_AUTH_TOKEN: "${TWILIO_AUTH_TOKEN}"
+      TWILIO_PHONE_NUMBER: "${TWILIO_PHONE_NUMBER}"
+      PYTHONPATH: "/app:/app/common"
+    command: celery -A app.celery_app worker -Q whatsapp_queue --loglevel=info --concurrency=2 --max-tasks-per-child=100
+    healthcheck:
+      test: [ "CMD", "celery", "inspect", "ping", "-d", "celery@whatsapp_worker" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   scraper_worker_service:
     container_name: scraper_worker_service
@@ -293,7 +382,7 @@ services:
       - "8080:8080"
     environment:
       <<: *common-variables
-    command: python /app/mini_webapp.py
+    command: uvicorn mini_webapp:app --host 0.0.0.0 --port 8080
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
       interval: 30s

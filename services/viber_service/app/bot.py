@@ -4,11 +4,7 @@ import logging
 import os
 from viberbot import Api
 from viberbot.api.bot_configuration import BotConfiguration
-from viberbot.api.viber_requests import ViberMessageRequest
-from viberbot.api.messages import (
-    TextMessage, PictureMessage, ContactMessage,
-    LocationMessage, URLMessage, KeyboardMessage
-)
+from common.utils.state_manager import RedisStateManager
 
 # Configure logging
 logging.basicConfig(
@@ -33,5 +29,5 @@ viber = Api(BotConfiguration(
     auth_token=VIBER_TOKEN
 ))
 
-# Dictionary to store user states
-user_states = {}
+# Initialize Redis state manager
+state_manager = RedisStateManager(prefix='viber_state')

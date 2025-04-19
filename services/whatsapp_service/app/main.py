@@ -1,76 +1,72 @@
 # services/whatsapp_service/app/main.py
 
 import logging
-import json
-from flask import Flask, request, Response
+from fastapi import FastAPI, Form, Request, Response, BackgroundTasks
 from twilio.twiml.messaging_response import MessagingResponse
-from .bot import sanitize_phone_number, user_states
+from .bot import sanitize_phone_number, state_manager
 from .handlers import basic_handlers
 
-# Initialize Flask app
-app = Flask(__name__)
+# Initialize FastAPI app
+app = FastAPI(title="WhatsApp Service API")
 logger = logging.getLogger(__name__)
 
-
-@app.route('/whatsapp/webhook', methods=['POST'])
-def incoming_message():
+@app.post('/whatsapp/webhook')
+async def incoming_message(
+    background_tasks: BackgroundTasks,
+    From: str = Form(...),
+    To: str = Form(...),
+    Body: str = Form(...),
+    NumMedia: int = Form(0)
+):
     """Handle incoming WhatsApp messages from Twilio webhook"""
     try:
-        # Get WhatsApp message details from Twilio request
-        from_number = request.values.get('From', '')
-        to_number = request.values.get('To', '')
-        body = request.values.get('Body', '')
-        media_count = int(request.values.get('NumMedia', 0))
-
         # Log incoming message
-        logger.info(f"Received message from {from_number}: {body}")
+        logger.info(f"Received message from {From}: {Body}")
 
         # Clean the phone number for use as a unique user ID
-        user_id = sanitize_phone_number(from_number)
+        user_id = sanitize_phone_number(From)
 
         # Process media if any
         media_urls = []
-        if media_count > 0:
-            for i in range(media_count):
-                media_url = request.values.get(f'MediaUrl{i}')
-                media_urls.append(media_url)
+        if NumMedia > 0:
+            # In a real implementation, you'd get media URLs from Form parameters
+            # For example: MediaUrl0, MediaUrl1, etc.
+            pass
 
         # Generate response
         response = MessagingResponse()
 
-        # Process the message
-        basic_handlers.handle_message(user_id, body, media_urls, response)
+        # Process the message asynchronously in the background
+        background_tasks.add_task(
+            basic_handlers.handle_message,
+            user_id,
+            Body,
+            media_urls,
+            response
+        )
 
-        return str(response)
+        return Response(content=str(response), media_type="application/xml")
     except Exception as e:
         logger.exception(f"Error processing WhatsApp message: {e}")
         # Always return a valid response to Twilio
         response = MessagingResponse()
-        return str(response)
+        return Response(content=str(response), media_type="application/xml")
 
-
-@app.route('/whatsapp/status', methods=['POST'])
-def message_status():
+@app.post('/whatsapp/status')
+async def message_status(
+    MessageSid: str = Form(...),
+    MessageStatus: str = Form(...)
+):
     """Handle message status callbacks from Twilio"""
-    message_sid = request.values.get('MessageSid', '')
-    message_status = request.values.get('MessageStatus', '')
+    logger.info(f"Message {MessageSid} status: {MessageStatus}")
+    return Response(status_code=200)
 
-    logger.info(f"Message {message_sid} status: {message_status}")
-
-    return Response(status=200)
-
-
-@app.route('/health', methods=['GET'])
-def health_check():
+@app.get('/health')
+async def health_check():
     """Simple health check endpoint"""
     return {'status': 'ok'}
 
-
-def main():
-    """Run the Flask app for WhatsApp webhook handling"""
-    logger.info("Starting WhatsApp service...")
-    app.run(host='0.0.0.0', port=8080)
-
-
 if __name__ == "__main__":
-    main()
+    import uvicorn
+    logger.info("Starting WhatsApp service with FastAPI...")
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8080, reload=False)

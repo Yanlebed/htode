@@ -1,9 +1,18 @@
 # services/whatsapp_service/app/handlers/basic_handlers.py
 
 import logging
-from ..bot import send_message, user_states
-from common.db.models import get_or_create_user, update_user_filter
+import asyncio
+from ..bot import sanitize_phone_number, state_manager
+from ..utils.message_utils import safe_send_message, safe_send_media
+from common.db.models import (
+    get_or_create_user,
+    update_user_filter,
+    start_free_subscription_of_user,
+    get_subscription_data_for_user,
+    get_subscription_until_for_user
+)
 from common.config import GEO_ID_MAPPING, get_key_by_value
+from common.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
@@ -14,16 +23,16 @@ STATE_WAITING_CITY = "waiting_city"
 STATE_WAITING_ROOMS = "waiting_rooms"
 STATE_WAITING_PRICE = "waiting_price"
 STATE_CONFIRMATION = "confirmation"
+STATE_EDITING_PARAMETERS = "editing_parameters"
 
 # City list
 AVAILABLE_CITIES = ['Івано-Франківськ', 'Вінниця', 'Дніпро', 'Житомир', 'Запоріжжя', 'Київ', 'Кропивницький', 'Луцьк',
-                    'Львів', 'Миколаїв', 'Одеса', 'Полтава', 'Рівне', 'Суми', 'Тернопіль', 'Ужгород', 'Харків',
-                    'Херсон', 'Хмельницький', 'Черкаси', 'Чернівці']
+                   'Львів', 'Миколаїв', 'Одеса', 'Полтава', 'Рівне', 'Суми', 'Тернопіль', 'Ужгород', 'Харків',
+                   'Херсон', 'Хмельницький', 'Черкаси', 'Чернівці']
 
-
-def handle_message(user_id, text, media_urls=None, response=None):
+async def handle_message(user_id, text, media_urls=None, response=None):
     """
-    Handle incoming WhatsApp messages
+    Handle incoming WhatsApp messages asynchronously
 
     Args:
         user_id: User's WhatsApp number (cleaned)
@@ -31,44 +40,46 @@ def handle_message(user_id, text, media_urls=None, response=None):
         media_urls: List of media URLs from the message (if any)
         response: Twilio MessagingResponse object for immediate response
     """
-    # If user not in states dict, initialize
-    if user_id not in user_states:
-        user_states[user_id] = {"state": STATE_START}
-        # Get or create user in database
-        user_db_id = get_or_create_user(user_id, messenger_type="whatsapp")
-        user_states[user_id]["user_db_id"] = user_db_id
+    # Get user state from Redis
+    user_data = await state_manager.get_state(user_id) or {"state": STATE_START}
+    current_state = user_data.get("state", STATE_START)
 
-    # Get current state
-    current_state = user_states[user_id].get("state", STATE_START)
+    # If no state or new user, create user_db_id
+    if "user_db_id" not in user_data:
+        user_db_id = get_or_create_user(user_id, messenger_type="whatsapp")
+        await state_manager.update_state(user_id, {
+            "user_db_id": user_db_id
+        })
 
     # Handle commands first
     if text.lower() == "/start":
-        handle_start_command(user_id, response)
+        await handle_start_command(user_id, response)
         return
     elif text.lower() == "/menu":
-        handle_menu_command(user_id, response)
+        await handle_menu_command(user_id, response)
         return
 
     # Handle based on current state
     if current_state == STATE_START:
-        handle_start_command(user_id, response)
+        await handle_start_command(user_id, response)
     elif current_state == STATE_WAITING_PROPERTY_TYPE:
-        handle_property_type(user_id, text, response)
+        await handle_property_type(user_id, text, response)
     elif current_state == STATE_WAITING_CITY:
-        handle_city(user_id, text, response)
+        await handle_city(user_id, text, response)
     elif current_state == STATE_WAITING_ROOMS:
-        handle_rooms(user_id, text, response)
+        await handle_rooms(user_id, text, response)
     elif current_state == STATE_WAITING_PRICE:
-        handle_price(user_id, text, response)
+        await handle_price(user_id, text, response)
     elif current_state == STATE_CONFIRMATION:
-        handle_confirmation(user_id, text, response)
+        await handle_confirmation(user_id, text, response)
+    elif current_state == STATE_EDITING_PARAMETERS:
+        await handle_edit_parameters(user_id, text, response)
     else:
         # Handle main menu options
-        handle_menu_option(user_id, text, response)
+        await handle_menu_option(user_id, text, response)
 
-
-def handle_start_command(user_id, response=None):
-    """Handle /start command"""
+async def handle_start_command(user_id, response=None):
+    """Handle /start command asynchronously"""
     welcome_message = (
         "Привіт!👋 Я бот з пошуку оголошень.\n"
         "Зі мною легко і швидко знайти квартиру, будинок або кімнату для оренди.\n"
@@ -83,20 +94,21 @@ def handle_start_command(user_id, response=None):
     if response:
         response.message(welcome_message)
     else:
-        send_message(user_id, welcome_message)
+        await safe_send_message(user_id, welcome_message)
 
-    # Store user state
-    user_states[user_id] = {
+    # Store user state in Redis
+    await state_manager.set_state(user_id, {
         "state": STATE_WAITING_PROPERTY_TYPE
-    }
+    })
 
     # Create user in database if not exists
     user_db_id = get_or_create_user(user_id, messenger_type="whatsapp")
-    user_states[user_id]["user_db_id"] = user_db_id
+    await state_manager.update_state(user_id, {
+        "user_db_id": user_db_id
+    })
 
-
-def handle_menu_command(user_id, response=None):
-    """Handle /menu command"""
+async def handle_menu_command(user_id, response=None):
+    """Handle /menu command asynchronously"""
     menu_text = (
         "Головне меню:\n\n"
         "1. 📝 Мої підписки\n"
@@ -107,16 +119,19 @@ def handle_menu_command(user_id, response=None):
         "Введіть номер опції"
     )
 
+    # Reset state to start
+    await state_manager.update_state(user_id, {
+        "state": STATE_START
+    })
+
     if response:
         response.message(menu_text)
     else:
-        send_message(user_id, menu_text)
+        await safe_send_message(user_id, menu_text)
 
 
-def handle_property_type(user_id, text, response=None):
-    """Handle property type selection"""
-    user_data = user_states.get(user_id, {})
-
+async def handle_property_type(user_id, text, response=None):
+    """Handle property type selection asynchronously"""
     # Map numeric input to property type
     property_mapping = {
         "1": "apartment",
@@ -129,12 +144,12 @@ def handle_property_type(user_id, text, response=None):
     if text_lower in property_mapping:
         property_type = property_mapping[text_lower]
         # Update user state
-        user_data["property_type"] = property_type
-        user_states[user_id] = user_data
+        await state_manager.update_state(user_id, {
+            "property_type": property_type,
+            "state": STATE_WAITING_CITY
+        })
 
         # Move to city selection
-        user_data["state"] = STATE_WAITING_CITY
-
         city_options = "\n".join([f"{i + 1}. {city}" for i, city in enumerate(AVAILABLE_CITIES[:10])])
         city_message = (
             "🏙️ Оберіть місто (введіть номер або назву):\n\n"
@@ -145,7 +160,7 @@ def handle_property_type(user_id, text, response=None):
         if response:
             response.message(city_message)
         else:
-            send_message(user_id, city_message)
+            await safe_send_message(user_id, city_message)
     else:
         error_message = (
             "Будь ласка, оберіть тип нерухомості (введіть цифру):\n"
@@ -156,12 +171,13 @@ def handle_property_type(user_id, text, response=None):
         if response:
             response.message(error_message)
         else:
-            send_message(user_id, error_message)
+            await safe_send_message(user_id, error_message)
 
 
-def handle_city(user_id, text, response=None):
-    """Handle city selection"""
-    user_data = user_states.get(user_id, {})
+async def handle_city(user_id, text, response=None):
+    """Handle city selection asynchronously"""
+    # Get user data from state
+    user_data = await state_manager.get_state(user_id) or {}
     text = text.strip()
 
     # Check if input is a number
@@ -188,15 +204,16 @@ def handle_city(user_id, text, response=None):
             if response:
                 response.message(error_message)
             else:
-                send_message(user_id, error_message)
+                await safe_send_message(user_id, error_message)
             return
 
     # Store city in user data
-    user_data["city"] = selected_city
-    user_states[user_id] = user_data
+    await state_manager.update_state(user_id, {
+        "city": selected_city,
+        "state": STATE_WAITING_ROOMS
+    })
 
     # Move to rooms selection
-    user_data["state"] = STATE_WAITING_ROOMS
     rooms_message = (
         "🛏️ Виберіть кількість кімнат:\n\n"
         "1. 1 кімната\n"
@@ -211,22 +228,24 @@ def handle_city(user_id, text, response=None):
     if response:
         response.message(rooms_message)
     else:
-        send_message(user_id, rooms_message)
+        await safe_send_message(user_id, rooms_message)
 
 
-def handle_rooms(user_id, text, response=None):
-    """Handle rooms selection"""
-    user_data = user_states.get(user_id, {})
+async def handle_rooms(user_id, text, response=None):
+    """Handle rooms selection asynchronously"""
+    # Get user data from state
+    user_data = await state_manager.get_state(user_id) or {}
     text = text.strip()
 
     if text == "6" or text.lower() in ["будь-яка", "будь яка", "будь-яка кількість кімнат"]:
         # User selected "Any number of rooms"
-        user_data["rooms"] = None
-        user_states[user_id] = user_data
+        await state_manager.update_state(user_id, {
+            "rooms": None,
+            "state": STATE_WAITING_PRICE
+        })
 
         # Move to price selection
-        user_data["state"] = STATE_WAITING_PRICE
-        show_price_options(user_id, user_data.get("city", "Київ"), response)
+        await show_price_options(user_id, user_data.get("city", "Київ"), response)
     else:
         try:
             # Parse room numbers, support both comma and space separated values
@@ -237,8 +256,10 @@ def handle_rooms(user_id, text, response=None):
                 raise ValueError("No valid room numbers found")
 
             # Store selected rooms
-            user_data["rooms"] = room_numbers
-            user_states[user_id] = user_data
+            await state_manager.update_state(user_id, {
+                "rooms": room_numbers,
+                "state": STATE_WAITING_PRICE
+            })
 
             # Show confirmation and move to price selection
             rooms_text = ", ".join(map(str, room_numbers))
@@ -246,12 +267,12 @@ def handle_rooms(user_id, text, response=None):
 
             if response:
                 response.message(confirm_message)
+                # Don't use the same response twice
+                await asyncio.sleep(0.5)  # Small delay before the next message
+                await show_price_options(user_id, user_data.get("city", "Київ"), None)
             else:
-                send_message(user_id, confirm_message)
-
-            # Move to price selection
-            user_data["state"] = STATE_WAITING_PRICE
-            show_price_options(user_id, user_data.get("city", "Київ"), None)  # Don't use the same response twice
+                await safe_send_message(user_id, confirm_message)
+                await show_price_options(user_id, user_data.get("city", "Київ"), None)
         except ValueError:
             error_message = (
                 "Невірний формат. Будь ласка, введіть цифри від 1 до 5, розділені комами або пробілами.\n"
@@ -262,12 +283,12 @@ def handle_rooms(user_id, text, response=None):
             if response:
                 response.message(error_message)
             else:
-                send_message(user_id, error_message)
+                await safe_send_message(user_id, error_message)
 
 
-def get_price_ranges(city):
+async def get_price_ranges(city):
     """
-    Returns price ranges for the given city.
+    Returns price ranges for the given city asynchronously.
     """
     # Group cities by size for price ranges
     big_cities = {'Київ'}
@@ -285,9 +306,9 @@ def get_price_ranges(city):
         return [(0, 5000), (5000, 7000), (7000, 10000), (10000, None)]
 
 
-def show_price_options(user_id, city, response=None):
-    """Show price range options based on city"""
-    price_ranges = get_price_ranges(city)
+async def show_price_options(user_id, city, response=None):
+    """Show price range options based on city asynchronously"""
+    price_ranges = await get_price_ranges(city)
 
     options = []
     for i, (low, high) in enumerate(price_ranges):
@@ -307,16 +328,17 @@ def show_price_options(user_id, city, response=None):
     if response:
         response.message(price_message)
     else:
-        send_message(user_id, price_message)
+        await safe_send_message(user_id, price_message)
 
 
-def handle_price(user_id, text, response=None):
-    """Handle price range selection"""
-    user_data = user_states.get(user_id, {})
+async def handle_price(user_id, text, response=None):
+    """Handle price range selection asynchronously"""
+    # Get user data from state
+    user_data = await state_manager.get_state(user_id) or {}
     text = text.strip()
 
     city = user_data.get("city", "Київ")
-    price_ranges = get_price_ranges(city)
+    price_ranges = await get_price_ranges(city)
 
     try:
         selection = int(text)
@@ -324,9 +346,11 @@ def handle_price(user_id, text, response=None):
             low, high = price_ranges[selection - 1]
 
             # Store price range
-            user_data["price_min"] = low if low > 0 else None
-            user_data["price_max"] = high
-            user_states[user_id] = user_data
+            await state_manager.update_state(user_id, {
+                "price_min": low if low > 0 else None,
+                "price_max": high,
+                "state": STATE_CONFIRMATION
+            })
 
             # Format price range for display
             if high is None:
@@ -341,11 +365,12 @@ def handle_price(user_id, text, response=None):
 
             if response:
                 response.message(confirm_message)
+                # Don't use the same response twice
+                await asyncio.sleep(0.5)  # Small delay before showing confirmation
+                await show_confirmation(user_id, None)
             else:
-                send_message(user_id, confirm_message)
-
-            # Show confirmation
-            show_confirmation(user_id, None)  # Don't use the same response twice
+                await safe_send_message(user_id, confirm_message)
+                await show_confirmation(user_id, None)
         else:
             raise ValueError("Selection out of range")
     except (ValueError, IndexError):
@@ -357,14 +382,16 @@ def handle_price(user_id, text, response=None):
         if response:
             response.message(error_message)
         else:
-            send_message(user_id, error_message)
+            await safe_send_message(user_id, error_message)
 
 
-def show_confirmation(user_id, response=None):
-    """Show subscription confirmation"""
-    user_data = user_states.get(user_id, {})
-    user_data["state"] = STATE_CONFIRMATION
-    user_states[user_id] = user_data
+async def show_confirmation(user_id, response=None):
+    """Show subscription confirmation asynchronously"""
+    # Get user data from state
+    user_data = await state_manager.get_state(user_id) or {}
+    await state_manager.update_state(user_id, {
+        "state": STATE_CONFIRMATION
+    })
 
     # Build summary text
     property_type = user_data.get("property_type", "")
@@ -400,12 +427,13 @@ def show_confirmation(user_id, response=None):
     if response:
         response.message(summary)
     else:
-        send_message(user_id, summary)
+        await safe_send_message(user_id, summary)
 
 
-def handle_confirmation(user_id, text, response=None):
-    """Handle confirmation of search parameters"""
-    user_data = user_states.get(user_id, {})
+async def handle_confirmation(user_id, text, response=None):
+    """Handle confirmation of search parameters asynchronously"""
+    # Get user data from state
+    user_data = await state_manager.get_state(user_id) or {}
     text_lower = text.lower().strip()
 
     if text_lower in ["підписатися", "subscribe", "1"]:
@@ -416,7 +444,7 @@ def handle_confirmation(user_id, text, response=None):
             if response:
                 response.message(error_message)
             else:
-                send_message(user_id, error_message)
+                await safe_send_message(user_id, error_message)
             return
 
         # Prepare filters for database
@@ -431,7 +459,6 @@ def handle_confirmation(user_id, text, response=None):
         # Save filters to database
         try:
             update_user_filter(user_db_id, filters)
-            from common.db.models import start_free_subscription_of_user
             start_free_subscription_of_user(user_db_id)
 
             # Send confirmation message
@@ -439,25 +466,25 @@ def handle_confirmation(user_id, text, response=None):
             if response:
                 response.message(success_message)
             else:
-                send_message(user_id, success_message)
+                await safe_send_message(user_id, success_message)
 
             # Send additional message about notifications
             notification_message = "Ми будемо надсилати вам нові оголошення, щойно вони з'являтимуться!"
-            send_message(user_id, notification_message)
+            await safe_send_message(user_id, notification_message)
 
             # Trigger ad notification task via Celery
-            from common.celery_app import celery_app
             celery_app.send_task(
                 'notifier_service.app.tasks.notify_user_with_ads',
                 args=[user_db_id, filters]
             )
 
             # Reset state to main menu
-            user_data["state"] = STATE_START
-            user_states[user_id] = user_data
+            await state_manager.update_state(user_id, {
+                "state": STATE_START
+            })
 
             # Show main menu
-            handle_menu_command(user_id, None)
+            await handle_menu_command(user_id, None)
 
         except Exception as e:
             logger.error(f"Error updating user filters: {e}")
@@ -465,9 +492,14 @@ def handle_confirmation(user_id, text, response=None):
             if response:
                 response.message(error_message)
             else:
-                send_message(user_id, error_message)
+                await safe_send_message(user_id, error_message)
 
     elif text_lower in ["редагувати", "edit", "2"]:
+        # Update state to editing parameters
+        await state_manager.update_state(user_id, {
+            "state": STATE_EDITING_PARAMETERS
+        })
+
         edit_message = (
             "Оберіть параметр для редагування (введіть цифру):\n\n"
             "1. Тип нерухомості\n"
@@ -480,7 +512,7 @@ def handle_confirmation(user_id, text, response=None):
         if response:
             response.message(edit_message)
         else:
-            send_message(user_id, edit_message)
+            await safe_send_message(user_id, edit_message)
 
     elif text_lower in ["розширений", "advanced", "3"]:
         advanced_message = "Розширений пошук поки не доступний в WhatsApp."
@@ -488,7 +520,7 @@ def handle_confirmation(user_id, text, response=None):
         if response:
             response.message(advanced_message)
         else:
-            send_message(user_id, advanced_message)
+            await safe_send_message(user_id, advanced_message)
 
     else:
         error_message = (
@@ -501,11 +533,107 @@ def handle_confirmation(user_id, text, response=None):
         if response:
             response.message(error_message)
         else:
-            send_message(user_id, error_message)
+            await safe_send_message(user_id, error_message)
 
 
-def handle_menu_option(user_id, text, response=None):
-    """Handle main menu option selection"""
+async def handle_edit_parameters(user_id, text, response=None):
+    """Handle editing parameters asynchronously"""
+    # Get user data from state
+    user_data = await state_manager.get_state(user_id) or {}
+    text = text.strip()
+
+    try:
+        option = int(text)
+
+        if option == 1:  # Edit property type
+            await state_manager.update_state(user_id, {
+                "state": STATE_WAITING_PROPERTY_TYPE
+            })
+
+            message = (
+                "Обери тип нерухомості (введи цифру):\n"
+                "1. Квартира\n"
+                "2. Будинок"
+            )
+
+            if response:
+                response.message(message)
+            else:
+                await safe_send_message(user_id, message)
+
+        elif option == 2:  # Edit city
+            await state_manager.update_state(user_id, {
+                "state": STATE_WAITING_CITY
+            })
+
+            city_options = "\n".join([f"{i + 1}. {city}" for i, city in enumerate(AVAILABLE_CITIES[:10])])
+            message = (
+                "🏙️ Оберіть місто (введіть номер або назву):\n\n"
+                f"{city_options}\n\n"
+                "Якщо вашого міста немає в списку, введіть його назву"
+            )
+
+            if response:
+                response.message(message)
+            else:
+                await safe_send_message(user_id, message)
+
+        elif option == 3:  # Edit rooms
+            await state_manager.update_state(user_id, {
+                "state": STATE_WAITING_ROOMS
+            })
+
+            message = (
+                "🛏️ Виберіть кількість кімнат:\n\n"
+                "1. 1 кімната\n"
+                "2. 2 кімнати\n"
+                "3. 3 кімнати\n"
+                "4. 4 кімнати\n"
+                "5. 5 кімнат\n"
+                "6. Будь-яка кількість кімнат\n\n"
+                "Ви можете вибрати кілька варіантів, розділивши їх комами, наприклад: 1,2,3"
+            )
+
+            if response:
+                response.message(message)
+            else:
+                await safe_send_message(user_id, message)
+
+        elif option == 4:  # Edit price
+            await state_manager.update_state(user_id, {
+                "state": STATE_WAITING_PRICE
+            })
+
+            await show_price_options(user_id, user_data.get("city", "Київ"), response)
+
+        elif option == 5:  # Cancel editing
+            await state_manager.update_state(user_id, {
+                "state": STATE_CONFIRMATION
+            })
+
+            await show_confirmation(user_id, response)
+
+        else:
+            raise ValueError("Invalid option")
+
+    except (ValueError, TypeError):
+        message = (
+            "Невірний формат. Будь ласка, введіть цифру від 1 до 5:\n\n"
+            "1. Тип нерухомості\n"
+            "2. Місто\n"
+            "3. Кількість кімнат\n"
+            "4. Діапазон цін\n"
+            "5. Скасувати редагування"
+        )
+
+        if response:
+            response.message(message)
+        else:
+            await safe_send_message(user_id, message)
+
+
+async def handle_menu_option(user_id, text, response=None):
+    """Handle main menu option selection asynchronously"""
     text_lower = text.lower().strip()
 
     # Handle both text and numeric input
@@ -515,7 +643,7 @@ def handle_menu_option(user_id, text, response=None):
         if response:
             response.message(message)
         else:
-            send_message(user_id, message)
+            await safe_send_message(user_id, message)
 
     elif text_lower in ["2", "обрані", "❤️ обрані"]:
         # Favorites
@@ -523,7 +651,7 @@ def handle_menu_option(user_id, text, response=None):
         if response:
             response.message(message)
         else:
-            send_message(user_id, message)
+            await safe_send_message(user_id, message)
 
     elif text_lower in ["3", "як це працює", "🤔 як це працює"]:
         # Help information
@@ -537,7 +665,7 @@ def handle_menu_option(user_id, text, response=None):
         if response:
             response.message(help_message)
         else:
-            send_message(user_id, help_message)
+            await safe_send_message(user_id, help_message)
 
     elif text_lower in ["4", "оплатити підписку", "💳 оплатити підписку"]:
         # Payment
@@ -545,8 +673,7 @@ def handle_menu_option(user_id, text, response=None):
         if response:
             response.message(message)
         else:
-            send_message(user_id, message)
-
+            await safe_send_message(user_id, message)
 
     elif text_lower in ["5", "техпідтримка", "🧑‍💻 техпідтримка"]:
         # Support
@@ -557,7 +684,7 @@ def handle_menu_option(user_id, text, response=None):
         if response:
             response.message(support_message)
         else:
-            send_message(user_id, support_message)
+            await safe_send_message(user_id, support_message)
 
     else:
         # Check if this is a support request
@@ -572,8 +699,49 @@ def handle_menu_option(user_id, text, response=None):
                 if response:
                     response.message(thank_you_message)
                 else:
-                    send_message(user_id, thank_you_message)
+                    await safe_send_message(user_id, thank_you_message)
                 return
+
+        # Parse ad-related commands (format: "фото 123", "тел 123", etc.)
+        command_parts = text.lower().split()
+        if len(command_parts) == 2:
+            command, ad_id_str = command_parts
+            try:
+                ad_id = int(ad_id_str)
+
+                if command in ["фото", "photo"]:
+                    # Schedule celery task to send more photos
+                    celery_app.send_task(
+                        'whatsapp_service.app.tasks.show_more_photos',
+                        args=[user_id, ad_id]
+                    )
+                    return
+
+                elif command in ["тел", "phone"]:
+                    # Schedule celery task to send phone numbers
+                    celery_app.send_task(
+                        'whatsapp_service.app.tasks.show_phone_numbers',
+                        args=[user_id, ad_id]
+                    )
+                    return
+
+                elif command in ["обр", "fav"]:
+                    # Schedule celery task to add to favorites
+                    celery_app.send_task(
+                        'whatsapp_service.app.tasks.handle_favorite_actions',
+                        args=[user_id, ad_id, "add"]
+                    )
+                    return
+
+                elif command in ["опис", "desc"]:
+                    # Schedule celery task to show full description
+                    celery_app.send_task(
+                        'whatsapp_service.app.tasks.show_full_description',
+                        args=[user_id, ad_id]
+                    )
+                    return
+            except ValueError:
+                pass  # Not a valid ad ID, continue to unknown command
 
         # Unknown command
         menu_message = (
@@ -588,4 +756,4 @@ def handle_menu_option(user_id, text, response=None):
         if response:
             response.message(menu_message)
         else:
-            send_message(user_id, menu_message)
+            await safe_send_message(user_id, menu_message)

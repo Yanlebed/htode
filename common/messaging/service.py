@@ -68,9 +68,9 @@ class MessagingService:
             if messenger_type == "telegram":
                 await self.telegram_messenger.send_text(messenger_id, text, **kwargs)
             elif messenger_type == "viber":
-                self.viber_messenger.send_text(messenger_id, text, **kwargs)
+                await self.viber_messenger.send_text(messenger_id, text, **kwargs)  # Now using await
             elif messenger_type == "whatsapp":
-                self.whatsapp_messenger.send_text(messenger_id, text, **kwargs)
+                await self.whatsapp_messenger.send_text(messenger_id, text, **kwargs)  # Now using await
             return True
         except Exception as e:
             logger.error(f"Error sending notification to user {user_id}: {e}")

@@ -3,6 +3,7 @@
 import logging
 import os
 from twilio.rest import Client
+from common.utils.state_manager import RedisStateManager
 
 # Configure logging
 logging.basicConfig(
@@ -24,44 +25,8 @@ if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER]):
 # Initialize Twilio client
 client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
-# Dictionary to store user states
-user_states = {}
-
-
-def send_message(to_number, message_body, media_url=None):
-    """
-    Send a WhatsApp message using Twilio
-
-    Args:
-        to_number: Recipient's WhatsApp number in format "whatsapp:+1234567890"
-        message_body: Message text
-        media_url: Optional URL to an image to include
-
-    Returns:
-        The Twilio message SID if successful, None otherwise
-    """
-    try:
-        # Ensure proper WhatsApp formatting
-        if not to_number.startswith("whatsapp:"):
-            to_number = f"whatsapp:{to_number}"
-
-        message_params = {
-            "from_": TWILIO_PHONE_NUMBER,
-            "body": message_body,
-            "to": to_number
-        }
-
-        # Add media if provided
-        if media_url:
-            message_params["media_url"] = [media_url]
-
-        message = client.messages.create(**message_params)
-        logger.info(f"Sent message to {to_number} with SID: {message.sid}")
-        return message.sid
-    except Exception as e:
-        logger.error(f"Failed to send WhatsApp message: {e}")
-        return None
-
+# Initialize Redis state manager
+state_manager = RedisStateManager(prefix='whatsapp_state')
 
 def sanitize_phone_number(phone_number):
     """
