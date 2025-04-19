@@ -68,4 +68,8 @@ celery_app.conf.beat_schedule = {
         'schedule': crontab(day_of_week='sun', hour=2, minute=0),  # Sunday at 2 AM
         'kwargs': {'days_old': 30},  # Clean ads older than 30 days
     },
+    'check-expiring-subscriptions-daily': {
+        'task': 'telegram_service.app.tasks.check_expiring_subscriptions',
+        'schedule': crontab(hour=9, minute=0),  # Run daily at 9:00 AM
+    },
 }

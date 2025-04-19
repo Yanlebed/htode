@@ -76,6 +76,29 @@ CREATE TABLE IF NOT EXISTS ad_phones (
     viber_link TEXT      -- For a Viber chat link if available
 );
 
+CREATE TABLE IF NOT EXISTS payment_orders (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    order_id VARCHAR(255) UNIQUE NOT NULL,
+    amount NUMERIC NOT NULL,
+    period VARCHAR(50) NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS payment_history (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    order_id VARCHAR(255) UNIQUE NOT NULL,
+    amount NUMERIC NOT NULL,
+    payment_date TIMESTAMP DEFAULT NOW(),
+    subscription_period VARCHAR(50) NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    transaction_id VARCHAR(255),
+    card_mask VARCHAR(50),
+    payment_details JSONB
+);
+
 -- High-priority indexes
 CREATE INDEX IF NOT EXISTS idx_ads_resource_url ON ads (resource_url);
 CREATE INDEX IF NOT EXISTS idx_ad_images_ad_id ON ad_images (ad_id);
