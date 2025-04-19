@@ -255,71 +255,52 @@ def check_expiring_subscriptions():
 
 
 @celery_app.task(name='telegram_service.app.tasks.send_subscription_notification')
-def send_subscription_notification(telegram_id, notification_type, data):
+def send_subscription_notification(user_id, notification_type, data):
     """Send subscription-related notifications to users"""
     try:
-        # Use aiogram to send message
-        async def send_message():
-            if notification_type == "payment_success":
-                message_text = (
-                    f"✅ Оплату успішно отримано!\n\n"
-                    f"🧾 Замовлення: {data['order_id']}\n"
-                    f"💰 Сума: {data['amount']} грн.\n"
-                    f"📅 Ваша підписка дійсна до: {data['subscription_until']}\n\n"
-                    f"Дякуємо за підтримку нашого сервісу! 🙏"
-                )
+        # Get messenger type and ID
+        from common.messaging.service import MessagingService
+        from common.messaging.telegram import TelegramMessenger
+        from common.messaging.viber import ViberMessenger
+        from common.messaging.whatsapp import WhatsAppMessenger
+        from services.telegram_service.app.bot import bot
+        from services.viber_service.app.bot import viber
+        from services.whatsapp_service.app.bot import client as twilio_client
 
-                # Add payment success keyboard with "View My Subscription" button
-                kb = InlineKeyboardMarkup()
-                kb.add(InlineKeyboardButton("Переглянути підписку", callback_data="menu_my_subscription"))
+        messaging_service = MessagingService(
+            TelegramMessenger(bot),
+            ViberMessenger(viber),
+            WhatsAppMessenger(twilio_client)
+        )
 
-                await bot.send_message(
-                    chat_id=telegram_id,
-                    text=message_text,
-                    reply_markup=kb
-                )
+        # Prepare message content
+        if notification_type == "payment_success":
+            message_text = (
+                f"✅ Оплату успішно отримано!\n\n"
+                f"🧾 Замовлення: {data['order_id']}\n"
+                f"💰 Сума: {data['amount']} грн.\n"
+                f"📅 Ваша підписка дійсна до: {data['subscription_until']}\n\n"
+                f"Дякуємо за підтримку нашого сервісу! 🙏"
+            )
+        elif notification_type == "expiration_reminder":
+            message_text = (
+                f"⚠️ Нагадування про підписку\n\n"
+                f"Ваша підписка закінчується через {data['days_left']} {'день' if data['days_left'] == 1 else 'дні' if data['days_left'] < 5 else 'днів'}.\n"
+                f"Дата закінчення: {data['subscription_until']}\n\n"
+                f"Щоб продовжити користуватися сервісом, оновіть підписку."
+            )
+        elif notification_type == "expiration_today":
+            message_text = (
+                f"⚠️ Ваша підписка закінчується сьогодні!\n\n"
+                f"Час закінчення: {data['subscription_until']}\n\n"
+                f"Щоб не втратити доступ до сервісу, оновіть підписку зараз."
+            )
 
-            elif notification_type == "expiration_reminder":
-                message_text = (
-                    f"⚠️ Нагадування про підписку\n\n"
-                    f"Ваша підписка закінчується через {data['days_left']} {'день' if data['days_left'] == 1 else 'дні' if data['days_left'] < 5 else 'днів'}.\n"
-                    f"Дата закінчення: {data['subscription_until']}\n\n"
-                    f"Щоб продовжити користуватися сервісом, оновіть підписку."
-                )
+        # Send notification via messaging service
+        success = messaging_service.send_notification(user_id, message_text)
 
-                # Add renewal keyboard
-                kb = InlineKeyboardMarkup()
-                kb.add(InlineKeyboardButton("Оновити підписку", callback_data="payment_menu"))
-
-                await bot.send_message(
-                    chat_id=telegram_id,
-                    text=message_text,
-                    reply_markup=kb
-                )
-
-            elif notification_type == "expiration_today":
-                message_text = (
-                    f"⚠️ Ваша підписка закінчується сьогодні!\n\n"
-                    f"Час закінчення: {data['subscription_until']}\n\n"
-                    f"Щоб не втратити доступ до сервісу, оновіть підписку зараз."
-                )
-
-                # Add renewal keyboard with more urgency
-                kb = InlineKeyboardMarkup()
-                kb.add(InlineKeyboardButton("🔄 Оновити зараз", callback_data="payment_menu"))
-
-                await bot.send_message(
-                    chat_id=telegram_id,
-                    text=message_text,
-                    reply_markup=kb
-                )
-
-        # Run the async function
-        import asyncio
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(send_message())
-        loop.close()
+        if not success:
+            logger.error(f"Failed to send notification to user {user_id}")
 
     except Exception as e:
-        logger.error(f"Error sending notification to {telegram_id}: {e}")
+        logger.error(f"Error in send_subscription_notification: {e}")

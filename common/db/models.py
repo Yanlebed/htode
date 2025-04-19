@@ -15,26 +15,44 @@ logger = logging.getLogger(__name__)
 redis_client = redis.from_url(REDIS_URL)
 
 
-def get_or_create_user(telegram_id):
-    logger.info(f"Getting user with telegram id: {telegram_id}")
-    sql_check = "SELECT id FROM users WHERE telegram_id = %s"
-    row = execute_query(sql_check, [telegram_id], fetchone=True)
+def get_or_create_user(messenger_id, messenger_type="telegram"):
+    """
+    Get or create a user with telegram_id, viber_id, or whatsapp_id
+    """
+    logger.info(f"Getting user with {messenger_type} id: {messenger_id}")
+
+    if messenger_type == "telegram":
+        sql_check = "SELECT id FROM users WHERE telegram_id = %s"
+    elif messenger_type == "viber":
+        sql_check = "SELECT id FROM users WHERE viber_id = %s"
+    else:  # whatsapp
+        sql_check = "SELECT id FROM users WHERE whatsapp_id = %s"
+
+    row = execute_query(sql_check, [messenger_id], fetchone=True)
     if row:
-        logger.info(f"Found user with telegram id: {telegram_id}, user_id: {row['id']}")
+        logger.info(f"Found user with {messenger_type} id: {messenger_id}")
         return row['id']
 
-    logger.info(f"Creating user with telegram id: {telegram_id}")
+    logger.info(f"Creating user with {messenger_type} id: {messenger_id}")
     free_until = (datetime.datetime.now() + datetime.timedelta(days=7)).isoformat()
-    sql_insert = """
-                 INSERT INTO users (telegram_id, free_until)
-                 VALUES (%s, %s) RETURNING id \
-                 """
-    user = execute_query(sql_insert, [telegram_id, free_until], fetchone=True, commit=True)  # Ensure commit=True
-    if not user:
-        logger.error(f"Failed to create user with telegram id: {telegram_id}")
-        return None
 
-    logger.info(f"Created user with telegram id: {telegram_id}, new user_id: {user['id']}")
+    if messenger_type == "telegram":
+        sql_insert = """
+                     INSERT INTO users (telegram_id, free_until)
+                     VALUES (%s, %s) RETURNING id \
+                     """
+    elif messenger_type == "viber":
+        sql_insert = """
+                     INSERT INTO users (viber_id, free_until)
+                     VALUES (%s, %s) RETURNING id \
+                     """
+    else:  # whatsapp
+        sql_insert = """
+                     INSERT INTO users (whatsapp_id, free_until)
+                     VALUES (%s, %s) RETURNING id \
+                     """
+
+    user = execute_query(sql_insert, [messenger_id, free_until], fetchone=True, commit=True)
     return user['id']
 
 
