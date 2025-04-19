@@ -2,7 +2,9 @@
 
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
-    telegram_id BIGINT UNIQUE NOT NULL,
+    telegram_id BIGINT UNIQUE,
+    viber_id VARCHAR(255) UNIQUE,
+    whatsapp_id VARCHAR(255) UNIQUE,
     free_until TIMESTAMP,
     subscription_until TIMESTAMP
 );

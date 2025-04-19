@@ -145,6 +145,52 @@ services:
       timeout: 10s
       retries: 3
 
+  viber_service:
+    env_file:
+      - .env
+    container_name: viber_service
+    <<: *service-settings
+    <<: *resource-limits
+    build:
+      context: .
+      dockerfile: services/viber_service/Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *common-variables
+      VIBER_TOKEN: "${VIBER_TOKEN}"
+      VIBER_WEBHOOK_URL: "${VIBER_WEBHOOK_URL}"
+    ports:
+      - "8001:8000"  # Expose port for webhook
+    command: python -m app.main
+
+
+  whatsapp_service:
+    env_file:
+      - .env
+    container_name: whatsapp_service
+    <<: *service-settings
+    <<: *resource-limits
+    build:
+      context: .
+      dockerfile: services/whatsapp_service/Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8002:8080"  # Expose port for webhook
+    environment:
+      <<: *common-variables
+      TWILIO_ACCOUNT_SID: "${TWILIO_ACCOUNT_SID}"
+      TWILIO_AUTH_TOKEN: "${TWILIO_AUTH_TOKEN}"
+      TWILIO_PHONE_NUMBER: "${TWILIO_PHONE_NUMBER}"
+    command: python -m app.main
+
   scraper_worker_service:
     container_name: scraper_worker_service
     <<: *service-settings
