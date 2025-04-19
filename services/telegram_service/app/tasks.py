@@ -27,12 +27,12 @@ def send_subscription_reminders():
     # Let's do something like:
 
     sql = """
-    SELECT id, telegram_id, subscription_until
-    FROM users
-    WHERE subscription_until IS NOT NULL
-      AND subscription_until > NOW() -- subscription is still active
-      AND subscription_until < NOW() + interval '3 days'; 
-    """
+          SELECT id, telegram_id, subscription_until
+          FROM users
+          WHERE subscription_until IS NOT NULL
+            AND subscription_until > NOW() -- subscription is still active
+            AND subscription_until < NOW() + interval '3 days'; \
+          """
     # We'll refine the logic in Python to see if it's exactly 2 days, 1 day, or same day.
 
     rows = execute_query(sql, fetch=True)
@@ -190,3 +190,136 @@ async def handle_show_more(callback_query: CallbackQuery):
             text="Немає додаткового опису.",
             show_alert=True
         )
+
+
+@celery_app.task(name='telegram_service.app.tasks.check_expiring_subscriptions')
+def check_expiring_subscriptions():
+    """Check for subscriptions that will expire soon and send reminders"""
+    try:
+        # Check for subscriptions expiring in 3, 2, and 1 days
+        for days in [3, 2, 1]:
+            # Find users whose subscription expires in exactly `days` days
+            sql = """
+                  SELECT id, telegram_id, subscription_until
+                  FROM users
+                  WHERE subscription_until IS NOT NULL
+                    AND subscription_until > NOW()
+                    AND subscription_until < NOW() + interval '%s days 1 hour'
+                    AND subscription_until \
+                      > NOW() + interval '%s days' \
+                  """
+            users = execute_query(sql, [days, days - 1], fetch=True)
+
+            for user in users:
+                telegram_id = user["telegram_id"]
+                end_date = user["subscription_until"].strftime("%d.%m.%Y")
+
+                # Send notification
+                celery_app.send_task(
+                    'telegram_service.app.tasks.send_subscription_notification',
+                    args=[
+                        telegram_id,
+                        "expiration_reminder",
+                        {
+                            "days_left": days,
+                            "subscription_until": end_date
+                        }
+                    ]
+                )
+
+        # Also notify on the day of expiration
+        sql_today = """
+                    SELECT id, telegram_id, subscription_until
+                    FROM users
+                    WHERE subscription_until IS NOT NULL
+                      AND DATE (subscription_until) = CURRENT_DATE \
+                    """
+        today_users = execute_query(sql_today, fetch=True)
+
+        for user in today_users:
+            telegram_id = user["telegram_id"]
+            end_date = user["subscription_until"].strftime("%d.%m.%Y %H:%M")
+
+            # Send notification
+            celery_app.send_task(
+                'telegram_service.app.tasks.send_subscription_notification',
+                args=[
+                    telegram_id,
+                    "expiration_today",
+                    {"subscription_until": end_date}
+                ]
+            )
+
+    except Exception as e:
+        logger.error(f"Error checking expiring subscriptions: {e}")
+
+
+@celery_app.task(name='telegram_service.app.tasks.send_subscription_notification')
+def send_subscription_notification(telegram_id, notification_type, data):
+    """Send subscription-related notifications to users"""
+    try:
+        # Use aiogram to send message
+        async def send_message():
+            if notification_type == "payment_success":
+                message_text = (
+                    f"✅ Оплату успішно отримано!\n\n"
+                    f"🧾 Замовлення: {data['order_id']}\n"
+                    f"💰 Сума: {data['amount']} грн.\n"
+                    f"📅 Ваша підписка дійсна до: {data['subscription_until']}\n\n"
+                    f"Дякуємо за підтримку нашого сервісу! 🙏"
+                )
+
+                # Add payment success keyboard with "View My Subscription" button
+                kb = InlineKeyboardMarkup()
+                kb.add(InlineKeyboardButton("Переглянути підписку", callback_data="menu_my_subscription"))
+
+                await bot.send_message(
+                    chat_id=telegram_id,
+                    text=message_text,
+                    reply_markup=kb
+                )
+
+            elif notification_type == "expiration_reminder":
+                message_text = (
+                    f"⚠️ Нагадування про підписку\n\n"
+                    f"Ваша підписка закінчується через {data['days_left']} {'день' if data['days_left'] == 1 else 'дні' if data['days_left'] < 5 else 'днів'}.\n"
+                    f"Дата закінчення: {data['subscription_until']}\n\n"
+                    f"Щоб продовжити користуватися сервісом, оновіть підписку."
+                )
+
+                # Add renewal keyboard
+                kb = InlineKeyboardMarkup()
+                kb.add(InlineKeyboardButton("Оновити підписку", callback_data="payment_menu"))
+
+                await bot.send_message(
+                    chat_id=telegram_id,
+                    text=message_text,
+                    reply_markup=kb
+                )
+
+            elif notification_type == "expiration_today":
+                message_text = (
+                    f"⚠️ Ваша підписка закінчується сьогодні!\n\n"
+                    f"Час закінчення: {data['subscription_until']}\n\n"
+                    f"Щоб не втратити доступ до сервісу, оновіть підписку зараз."
+                )
+
+                # Add renewal keyboard with more urgency
+                kb = InlineKeyboardMarkup()
+                kb.add(InlineKeyboardButton("🔄 Оновити зараз", callback_data="payment_menu"))
+
+                await bot.send_message(
+                    chat_id=telegram_id,
+                    text=message_text,
+                    reply_markup=kb
+                )
+
+        # Run the async function
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(send_message())
+        loop.close()
+
+    except Exception as e:
+        logger.error(f"Error sending notification to {telegram_id}: {e}")

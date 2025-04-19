@@ -1,4 +1,5 @@
 # services/telegram_service/app/handlers/basic_handlers.py
+import logging
 
 from aiogram import types
 from aiogram.dispatcher import FSMContext
@@ -17,6 +18,8 @@ from ..utils.message_utils import (
     safe_send_message, safe_answer_callback_query,
     safe_edit_message, delete_message_safe
 )
+
+logger = logging.getLogger(__name__)
 
 # Список доступних міст (можна отримати з бази даних або конфігурації)
 AVAILABLE_CITIES = ['Івано-Франківськ', 'Вінниця', 'Дніпро', 'Житомир', 'Запоріжжя', 'Київ', 'Кропивницький', 'Луцьк',
@@ -287,3 +290,19 @@ async def edit_parameters(callback_query: types.CallbackQuery, state: FSMContext
         reply_markup=edit_parameters_keyboard()
     )
     await safe_answer_callback_query(callback_query.id)
+
+
+@dp.message_handler(lambda message: True, content_types=['text'], state=None)
+async def debug_all_messages(message: types.Message):
+    """Debug handler that logs all text messages when not in any state"""
+    logger.info(f"Received message: {message.text} from user {message.from_user.id}")
+
+    # If the message is /start, try to respond directly
+    if message.text == '/start':
+        try:
+            await message.answer("Debug response: Bot received your /start command. Trying to respond.")
+            # Also try to invoke the regular handler programmatically
+            await start_command(message)
+        except Exception as e:
+            logger.error(f"Error handling /start in debug handler: {e}")
+            await message.answer(f"Error in start command: {str(e)}")
