@@ -11,7 +11,8 @@ from ..states.basis_states import FilterStates
 from ..keyboards import (
     property_type_keyboard, city_keyboard, rooms_keyboard,
     price_keyboard, confirmation_keyboard,
-    edit_parameters_keyboard, floor_keyboard
+    edit_parameters_keyboard, floor_keyboard,
+    main_menu_keyboard
 )
 from common.db.models import get_or_create_user
 from ..utils.message_utils import (
@@ -306,3 +307,20 @@ async def debug_all_messages(message: types.Message):
         except Exception as e:
             logger.error(f"Error handling /start in debug handler: {e}")
             await message.answer(f"Error in start command: {str(e)}")
+    elif message.text == '/menu':
+        await show_main_menu(message)
+    elif message.text == "📱 Додати номер телефону":
+        from .phone_verification import start_phone_verification
+        await start_phone_verification(message, FSMContext)
+
+
+@dp.message_handler(commands=['menu'])
+async def show_main_menu(message: types.Message):
+    """
+    Sends the main menu keyboard when the user uses /menu.
+    """
+    await safe_send_message(
+        chat_id=message.chat.id,
+        text="Головне меню:",
+        reply_markup=main_menu_keyboard()
+    )
