@@ -27,8 +27,9 @@ STATE_EDITING_PARAMETERS = "editing_parameters"
 
 # City list
 AVAILABLE_CITIES = ['Івано-Франківськ', 'Вінниця', 'Дніпро', 'Житомир', 'Запоріжжя', 'Київ', 'Кропивницький', 'Луцьк',
-                   'Львів', 'Миколаїв', 'Одеса', 'Полтава', 'Рівне', 'Суми', 'Тернопіль', 'Ужгород', 'Харків',
-                   'Херсон', 'Хмельницький', 'Черкаси', 'Чернівці']
+                    'Львів', 'Миколаїв', 'Одеса', 'Полтава', 'Рівне', 'Суми', 'Тернопіль', 'Ужгород', 'Харків',
+                    'Херсон', 'Хмельницький', 'Черкаси', 'Чернівці']
+
 
 async def handle_message(user_id, text, media_urls=None, response=None):
     """
@@ -43,6 +44,27 @@ async def handle_message(user_id, text, media_urls=None, response=None):
     # Get user state from Redis
     user_data = await state_manager.get_state(user_id) or {"state": STATE_START}
     current_state = user_data.get("state", STATE_START)
+
+    # Handle phone verification states
+    from .phone_verification import (
+        STATE_WAITING_FOR_PHONE,
+        STATE_WAITING_FOR_CODE,
+        STATE_WAITING_FOR_CONFIRMATION,
+        handle_phone_input,
+        handle_verification_code,
+        handle_merge_confirmation
+    )
+
+    # Check for verification flow states first
+    if current_state == STATE_WAITING_FOR_PHONE:
+        await handle_phone_input(user_id, text, response)
+        return
+    elif current_state == STATE_WAITING_FOR_CODE:
+        await handle_verification_code(user_id, text, response)
+        return
+    elif current_state == STATE_WAITING_FOR_CONFIRMATION:
+        await handle_merge_confirmation(user_id, text, response)
+        return
 
     # If no state or new user, create user_db_id
     if "user_db_id" not in user_data:
@@ -78,6 +100,7 @@ async def handle_message(user_id, text, media_urls=None, response=None):
         # Handle main menu options
         await handle_menu_option(user_id, text, response)
 
+
 async def handle_start_command(user_id, response=None):
     """Handle /start command asynchronously"""
     welcome_message = (
@@ -107,6 +130,7 @@ async def handle_start_command(user_id, response=None):
         "user_db_id": user_db_id
     })
 
+
 async def handle_menu_command(user_id, response=None):
     """Handle /menu command asynchronously"""
     menu_text = (
@@ -115,7 +139,8 @@ async def handle_menu_command(user_id, response=None):
         "2. ❤️ Обрані\n"
         "3. 🤔 Як це працює?\n"
         "4. 💳 Оплатити підписку\n"
-        "5. 🧑‍💻 Техпідтримка\n\n"
+        "5. 🧑‍💻 Техпідтримка\n"
+        "6. 📱 Номер телефону\n\n"
         "Введіть номер опції"
     )
 
@@ -675,7 +700,7 @@ async def handle_menu_option(user_id, text, response=None):
         else:
             await safe_send_message(user_id, message)
 
-    elif text_lower in ["5", "техпідтримка", "🧑‍💻 техпідтримка"]:
+    elif text_lower in ["5", "🧑‍💻 техпідтримка", "техпідтримка", "🧑‍💻 техпідтримка"]:
         # Support
         support_message = (
             "Для зв'язку з техпідтримкою, будь ласка, опишіть вашу проблему.\n"
@@ -685,6 +710,11 @@ async def handle_menu_option(user_id, text, response=None):
             response.message(support_message)
         else:
             await safe_send_message(user_id, support_message)
+
+    elif text_lower in ["📱 номер телефону", "номер телефону", "верифікація"]:
+        # Phone verification
+        from .phone_verification import start_phone_verification
+        await start_phone_verification(user_id, response)
 
     else:
         # Check if this is a support request
@@ -706,54 +736,3 @@ async def handle_menu_option(user_id, text, response=None):
         command_parts = text.lower().split()
         if len(command_parts) == 2:
             command, ad_id_str = command_parts
-            try:
-                ad_id = int(ad_id_str)
-
-                if command in ["фото", "photo"]:
-                    # Schedule celery task to send more photos
-                    celery_app.send_task(
-                        'whatsapp_service.app.tasks.show_more_photos',
-                        args=[user_id, ad_id]
-                    )
-                    return
-
-                elif command in ["тел", "phone"]:
-                    # Schedule celery task to send phone numbers
-                    celery_app.send_task(
-                        'whatsapp_service.app.tasks.show_phone_numbers',
-                        args=[user_id, ad_id]
-                    )
-                    return
-
-                elif command in ["обр", "fav"]:
-                    # Schedule celery task to add to favorites
-                    celery_app.send_task(
-                        'whatsapp_service.app.tasks.handle_favorite_actions',
-                        args=[user_id, ad_id, "add"]
-                    )
-                    return
-
-                elif command in ["опис", "desc"]:
-                    # Schedule celery task to show full description
-                    celery_app.send_task(
-                        'whatsapp_service.app.tasks.show_full_description',
-                        args=[user_id, ad_id]
-                    )
-                    return
-            except ValueError:
-                pass  # Not a valid ad ID, continue to unknown command
-
-        # Unknown command
-        menu_message = (
-            "Не розумію цю команду. Ось доступні опції:\n\n"
-            "1. 📝 Мої підписки\n"
-            "2. ❤️ Обрані\n"
-            "3. 🤔 Як це працює?\n"
-            "4. 💳 Оплатити підписку\n"
-            "5. 🧑‍💻 Техпідтримка\n\n"
-            "Введіть номер опції або /start щоб почати з початку."
-        )
-        if response:
-            response.message(menu_message)
-        else:
-            await safe_send_message(user_id, menu_message)

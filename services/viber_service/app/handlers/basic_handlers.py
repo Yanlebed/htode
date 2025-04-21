@@ -1,19 +1,10 @@
 # services/viber_service/app/handlers/basic_handlers.py
 
 import logging
-import asyncio
-from viberbot.api.messages import TextMessage, PictureMessage, KeyboardMessage
+
 from ..bot import viber, state_manager
 from ..utils.message_utils import safe_send_message, safe_send_picture
-from ..keyboards import (
-    create_main_menu_keyboard,
-    create_property_type_keyboard,
-    create_city_keyboard,
-    create_rooms_keyboard,
-    create_price_keyboard,
-    create_confirmation_keyboard,
-    create_edit_parameters_keyboard
-)
+from viberbot.api.messages import TextMessage, PictureMessage, KeyboardMessage
 from common.db.models import (
     get_or_create_user,
     update_user_filter,
@@ -39,6 +30,75 @@ STATE_EDITING_PARAMETERS = "editing_parameters"
 AVAILABLE_CITIES = ['Івано-Франківськ', 'Вінниця', 'Дніпро', 'Житомир', 'Запоріжжя', 'Київ', 'Кропивницький', 'Луцьк',
                     'Львів', 'Миколаїв', 'Одеса', 'Полтава', 'Рівне', 'Суми', 'Тернопіль', 'Ужгород', 'Харків',
                     'Херсон', 'Хмельницький', 'Черкаси', 'Чернівці']
+
+
+async def handle_message(user_id, message):
+    """Handle text messages from users asynchronously"""
+    if not isinstance(message, TextMessage):
+        # For now, we only handle text messages
+        await safe_send_message(user_id, "Підтримуються тільки текстові повідомлення.")
+        return
+
+    text = message.text
+
+    # Get user state from Redis
+    user_data = await state_manager.get_state(user_id) or {"state": STATE_START}
+    current_state = user_data.get("state", STATE_START)
+
+    # Handle phone verification states
+    from .phone_verification import (
+        STATE_WAITING_FOR_PHONE,
+        STATE_WAITING_FOR_CODE,
+        STATE_WAITING_FOR_CONFIRMATION,
+        handle_phone_input,
+        handle_verification_code,
+        handle_merge_confirmation
+    )
+
+    # Check for verification flow states first
+    if current_state == STATE_WAITING_FOR_PHONE:
+        await handle_phone_input(user_id, text)
+        return
+    elif current_state == STATE_WAITING_FOR_CODE:
+        await handle_verification_code(user_id, text)
+        return
+    elif current_state == STATE_WAITING_FOR_CONFIRMATION:
+        await handle_merge_confirmation(user_id, text)
+        return
+
+    # If no state or new user, create user_db_id
+    if "user_db_id" not in user_data:
+        user_db_id = get_or_create_user(user_id, messenger_type="viber")
+        await state_manager.update_state(user_id, {
+            "user_db_id": user_db_id
+        })
+
+    # Handle commands first
+    if text == "/start":
+        await handle_start_command(user_id)
+        return
+    elif text == "/menu":
+        await handle_menu_command(user_id)
+        return
+
+    # Handle based on current state
+    if current_state == STATE_START:
+        await handle_start_command(user_id)
+    elif current_state == STATE_WAITING_PROPERTY_TYPE:
+        await handle_property_type(user_id, text)
+    elif current_state == STATE_WAITING_CITY:
+        await handle_city(user_id, text)
+    elif current_state == STATE_WAITING_ROOMS:
+        await handle_rooms(user_id, text)
+    elif current_state == STATE_WAITING_PRICE:
+        await handle_price(user_id, text)
+    elif current_state == STATE_CONFIRMATION:
+        await handle_confirmation(user_id, text)
+    elif current_state == STATE_EDITING_PARAMETERS:
+        await handle_edit_parameters(user_id, text)
+    else:
+        # Handle main menu options
+        await handle_menu_option(user_id, text)
 
 
 async def handle_conversation_started(user_id, viber_request):
@@ -76,54 +136,6 @@ async def handle_subscribed(user_id):
     )
 
 
-async def handle_message(user_id, message):
-    """Handle text messages from users asynchronously"""
-    if not isinstance(message, TextMessage):
-        # For now, we only handle text messages
-        await safe_send_message(user_id, "Підтримуються тільки текстові повідомлення.")
-        return
-
-    text = message.text
-
-    # Get user state from Redis
-    user_data = await state_manager.get_state(user_id) or {"state": STATE_START}
-    current_state = user_data.get("state", STATE_START)
-
-    # If no state or new user, create user_db_id
-    if "user_db_id" not in user_data:
-        user_db_id = get_or_create_user(user_id, messenger_type="viber")
-        await state_manager.update_state(user_id, {
-            "user_db_id": user_db_id
-        })
-
-    # Handle commands first
-    if text == "/start":
-        await handle_start_command(user_id)
-        return
-    elif text == "/menu":
-        await handle_menu_command(user_id)
-        return
-
-    # Handle based on current state
-    if current_state == STATE_START:
-        await handle_start_command(user_id)
-    elif current_state == STATE_WAITING_PROPERTY_TYPE:
-        await handle_property_type(user_id, text)
-    elif current_state == STATE_WAITING_CITY:
-        await handle_city(user_id, text)
-    elif current_state == STATE_WAITING_ROOMS:
-        await handle_rooms(user_id, text)
-    elif current_state == STATE_WAITING_PRICE:
-        await handle_price(user_id, text)
-    elif current_state == STATE_CONFIRMATION:
-        await handle_confirmation(user_id, text)
-    elif current_state == STATE_EDITING_PARAMETERS:
-        await handle_edit_parameters(user_id, text)
-    else:
-        # Handle main menu options
-        await handle_menu_option(user_id, text)
-
-
 async def handle_start_command(user_id):
     """Handle /start command asynchronously"""
     await safe_send_message(
@@ -150,42 +162,120 @@ async def handle_start_command(user_id):
 
 async def handle_menu_command(user_id):
     """Handle /menu command asynchronously"""
-    await safe_send_message(
-        user_id,
-        "Головне меню:",
-        keyboard=create_main_menu_keyboard()
-    )
+    menu_text = "Головне меню:"
 
     # Reset state to start
     await state_manager.update_state(user_id, {
         "state": STATE_START
     })
 
+    await safe_send_message(
+        user_id,
+        menu_text,
+        keyboard=create_main_menu_keyboard()
+    )
+
+
+def create_property_type_keyboard():
+    """Create keyboard for property type selection"""
+    return {
+        "Type": "keyboard",
+        "Buttons": [
+            {
+                "Columns": 3,
+                "Rows": 1,
+                "Text": "Квартира",
+                "ActionType": "reply",
+                "ActionBody": "apartment"
+            },
+            {
+                "Columns": 3,
+                "Rows": 1,
+                "Text": "Будинок",
+                "ActionType": "reply",
+                "ActionBody": "house"
+            }
+        ]
+    }
+
+
+def create_main_menu_keyboard():
+    """Create main menu keyboard"""
+    return {
+        "Type": "keyboard",
+        "Buttons": [
+            {
+                "Columns": 3,
+                "Rows": 1,
+                "Text": "📝 Мої підписки",
+                "ActionType": "reply",
+                "ActionBody": "📝 Мої підписки"
+            },
+            {
+                "Columns": 3,
+                "Rows": 1,
+                "Text": "❤️ Обрані",
+                "ActionType": "reply",
+                "ActionBody": "❤️ Обрані"
+            },
+            {
+                "Columns": 3,
+                "Rows": 1,
+                "Text": "🤔 Як це працює?",
+                "ActionType": "reply",
+                "ActionBody": "🤔 Як це працює?"
+            },
+            {
+                "Columns": 3,
+                "Rows": 1,
+                "Text": "💳 Оплатити підписку",
+                "ActionType": "reply",
+                "ActionBody": "💳 Оплатити підписку"
+            },
+            {
+                "Columns": 3,
+                "Rows": 1,
+                "Text": "🧑‍💻 Техпідтримка",
+                "ActionType": "reply",
+                "ActionBody": "🧑‍💻 Техпідтримка"
+            },
+            {
+                "Columns": 3,
+                "Rows": 1,
+                "Text": "📱 Номер телефону",
+                "ActionType": "reply",
+                "ActionBody": "📱 Номер телефону"
+            }
+        ]
+    }
+
 
 async def handle_property_type(user_id, text):
     """Handle property type selection asynchronously"""
-    # Get user data from state
-    user_data = await state_manager.get_state(user_id) or {}
-
-    # Map action body to property type
     property_mapping = {
-        "property_type_apartment": "apartment",
-        "property_type_house": "house"
+        "apartment": "apartment",
+        "house": "house",
+        "квартира": "apartment",
+        "будинок": "house"
     }
 
-    if text in property_mapping:
-        property_type = property_mapping[text]
+    text_lower = text.lower().strip()
+    if text_lower in property_mapping:
+        property_type = property_mapping[text_lower]
         # Update user state
         await state_manager.update_state(user_id, {
             "property_type": property_type,
             "state": STATE_WAITING_CITY
         })
 
+        # Create city keyboard
+        keyboard = create_city_keyboard(AVAILABLE_CITIES)
+
         # Move to city selection
         await safe_send_message(
             user_id,
             "🏙️ Оберіть місто:",
-            keyboard=create_city_keyboard(AVAILABLE_CITIES)
+            keyboard=keyboard
         )
     else:
         await safe_send_message(
@@ -195,35 +285,80 @@ async def handle_property_type(user_id, text):
         )
 
 
+def create_city_keyboard(cities):
+    """Create keyboard for city selection"""
+    buttons = []
+
+    # Create buttons for cities
+    for city in cities:
+        buttons.append({
+            "Columns": 3,
+            "Rows": 1,
+            "Text": city,
+            "ActionType": "reply",
+            "ActionBody": f"city_{city.lower()}"
+        })
+
+    return {
+        "Type": "keyboard",
+        "ButtonsGroupColumns": 6,
+        "ButtonsGroupRows": 7,
+        "Buttons": buttons
+    }
+
+
 async def handle_city(user_id, text):
     """Handle city selection asynchronously"""
-    # Get user data from state
-    user_data = await state_manager.get_state(user_id) or {}
-
-    # Check if the text starts with "city_"
+    # Check if input starts with "city_"
     if text.startswith("city_"):
         city_name = text.split("_", 1)[1].capitalize()
 
+        # Check if city is in available cities list
         if city_name.lower() in [city.lower() for city in AVAILABLE_CITIES]:
-            # Store city in user data
+            # Get city with proper capitalization
+            for city in AVAILABLE_CITIES:
+                if city.lower() == city_name.lower():
+                    city_name = city
+                    break
+
+            # Update state with city
             await state_manager.update_state(user_id, {
                 "city": city_name,
                 "state": STATE_WAITING_ROOMS
             })
 
             # Move to rooms selection
+            keyboard = create_rooms_keyboard()
             await safe_send_message(
                 user_id,
                 "🛏️ Виберіть кількість кімнат (можна обрати декілька):",
-                keyboard=create_rooms_keyboard()
+                keyboard=keyboard
             )
         else:
             await safe_send_message(
                 user_id,
-                "Будь ласка, оберіть місто зі списку.",
+                "Місто не знайдено. Будь ласка, оберіть місто зі списку.",
                 keyboard=create_city_keyboard(AVAILABLE_CITIES)
             )
     else:
+        # Try to match city name without prefix
+        for city in AVAILABLE_CITIES:
+            if city.lower() == text.lower():
+                await state_manager.update_state(user_id, {
+                    "city": city,
+                    "state": STATE_WAITING_ROOMS
+                })
+
+                # Move to rooms selection
+                keyboard = create_rooms_keyboard()
+                await safe_send_message(
+                    user_id,
+                    "🛏️ Виберіть кількість кімнат (можна обрати декілька):",
+                    keyboard=keyboard
+                )
+                return
+
+        # No match found
         await safe_send_message(
             user_id,
             "Будь ласка, оберіть місто зі списку.",
@@ -231,31 +366,68 @@ async def handle_city(user_id, text):
         )
 
 
+def create_rooms_keyboard(selected_rooms=None):
+    """Create keyboard for room selection"""
+    if selected_rooms is None:
+        selected_rooms = []
+
+    buttons = []
+
+    # Add number buttons 1-5
+    for room in range(1, 6):
+        text = f"✅ {room}" if room in selected_rooms else f"{room}"
+        buttons.append({
+            "Columns": 1,
+            "Rows": 1,
+            "Text": text,
+            "ActionType": "reply",
+            "ActionBody": f"room_{room}"
+        })
+
+    # Add Done and Any buttons
+    buttons.append({
+        "Columns": 3,
+        "Rows": 1,
+        "Text": "Далі",
+        "ActionType": "reply",
+        "ActionBody": "rooms_done"
+    })
+
+    buttons.append({
+        "Columns": 3,
+        "Rows": 1,
+        "Text": "Пропустити",
+        "ActionType": "reply",
+        "ActionBody": "rooms_any"
+    })
+
+    return {
+        "Type": "keyboard",
+        "ButtonsGroupColumns": 6,
+        "ButtonsGroupRows": 2,
+        "Buttons": buttons
+    }
+
+
 async def handle_rooms(user_id, text):
     """Handle rooms selection asynchronously"""
-    # Get user data from state
     user_data = await state_manager.get_state(user_id) or {}
+    selected_rooms = user_data.get("rooms", [])
 
     if text == "rooms_done":
-        if "rooms" not in user_data or not user_data["rooms"]:
+        if not selected_rooms:
             await safe_send_message(
                 user_id,
-                "Ви не обрали кількість кімнат.",
-                keyboard=create_rooms_keyboard(user_data.get("rooms", []))
+                "Ви не обрали кількість кімнат."
             )
             return
 
         # Move to price selection
+        city = user_data.get("city", "Київ")
         await state_manager.update_state(user_id, {
             "state": STATE_WAITING_PRICE
         })
-
-        await safe_send_message(
-            user_id,
-            "💰 Виберіть діапазон цін (грн):",
-            keyboard=create_price_keyboard(user_data.get("city", "Київ"))
-        )
-
+        await show_price_options(user_id, city)
     elif text == "rooms_any":
         # User selected "Any number of rooms"
         await state_manager.update_state(user_id, {
@@ -264,107 +436,182 @@ async def handle_rooms(user_id, text):
         })
 
         # Move to price selection
-        await safe_send_message(
-            user_id,
-            "💰 Виберіть діапазон цін (грн):",
-            keyboard=create_price_keyboard(user_data.get("city", "Київ"))
-        )
-
-    elif text.startswith("rooms_"):
+        city = user_data.get("city", "Київ")
+        await show_price_options(user_id, city)
+    elif text.startswith("room_"):
         try:
-            # Parse room number, e.g., "rooms_1" -> 1
             room_number = int(text.split("_")[1])
 
-            # Initialize rooms list if not exists
-            rooms = user_data.get("rooms", [])
-
             # Toggle room selection
-            if room_number in rooms:
-                rooms.remove(room_number)
+            if room_number in selected_rooms:
+                selected_rooms.remove(room_number)
             else:
-                rooms.append(room_number)
+                selected_rooms.append(room_number)
 
+            # Update state with selected rooms
             await state_manager.update_state(user_id, {
-                "rooms": rooms
+                "rooms": selected_rooms
             })
 
-            # Show updated room selection keyboard
+            # Show updated keyboard
+            keyboard = create_rooms_keyboard(selected_rooms)
             await safe_send_message(
                 user_id,
-                f"Вибрані кімнати: {', '.join(map(str, rooms))}",
-                keyboard=create_rooms_keyboard(rooms)
+                f"Обрані кімнати: {', '.join(map(str, selected_rooms))}",
+                keyboard=keyboard
             )
-        except (IndexError, ValueError):
+        except (ValueError, IndexError):
             await safe_send_message(
                 user_id,
-                "Виникла помилка при виборі кількості кімнат.",
-                keyboard=create_rooms_keyboard(user_data.get("rooms", []))
+                "Виникла помилка при виборі кількості кімнат."
             )
     else:
-        await safe_send_message(
-            user_id,
-            "Невідома команда.",
-            keyboard=create_rooms_keyboard(user_data.get("rooms", []))
-        )
+        # Try to parse room numbers from text
+        try:
+            # Parse room numbers, support both comma and space separated values
+            parts = text.replace(",", " ").split()
+            room_numbers = [int(part) for part in parts if part.isdigit() and 1 <= int(part) <= 5]
+
+            if not room_numbers:
+                raise ValueError("No valid room numbers found")
+
+            # Update selected rooms
+            await state_manager.update_state(user_id, {
+                "rooms": room_numbers
+            })
+
+            # Show confirmation and keyboard
+            keyboard = create_rooms_keyboard(room_numbers)
+            await safe_send_message(
+                user_id,
+                f"Обрані кімнати: {', '.join(map(str, room_numbers))}",
+                keyboard=keyboard
+            )
+        except ValueError:
+            await safe_send_message(
+                user_id,
+                "Невірний формат вибору кімнат. Використовуйте кнопки або введіть числа через кому.",
+                keyboard=create_rooms_keyboard(selected_rooms)
+            )
+
+
+async def show_price_options(user_id, city):
+    """Show price range options based on city asynchronously"""
+    # Get price ranges for the city
+    price_ranges = await get_price_ranges(city)
+
+    # Create keyboard with price range options
+    keyboard = create_price_keyboard(price_ranges)
+
+    await safe_send_message(
+        user_id,
+        "💰 Виберіть діапазон цін (грн):",
+        keyboard=keyboard
+    )
+
+
+async def get_price_ranges(city):
+    """Get price ranges for a city"""
+    # Group cities by size for price ranges
+    big_cities = {'Київ'}
+    medium_cities = {'Харків', 'Дніпро', 'Одеса', 'Львів'}
+
+    if city in big_cities:
+        # up to 15000, 15000–20000, 20000–30000, more than 30000
+        return [(0, 15000), (15000, 20000), (20000, 30000), (30000, None)]
+    elif city in medium_cities:
+        # up to 7000, 7000–10000, 10000–15000, more than 15000
+        return [(0, 7000), (7000, 10000), (10000, 15000), (15000, None)]
+    else:
+        # Default to "smaller" city intervals
+        # up to 5000, 5000–7000, 7000–10000, more than 10000
+        return [(0, 5000), (5000, 7000), (7000, 10000), (10000, None)]
+
+
+def create_price_keyboard(price_ranges):
+    """Create keyboard for price range selection"""
+    buttons = []
+
+    for i, (low, high) in enumerate(price_ranges):
+        if high is None:
+            label = f"Більше {low} грн."
+            callback = f"price_{low}_any"
+        else:
+            if low == 0:
+                label = f"До {high} грн."
+            else:
+                label = f"{low}-{high} грн."
+            callback = f"price_{low}_{high}"
+
+        buttons.append({
+            "Columns": 3,
+            "Rows": 1,
+            "Text": label,
+            "ActionType": "reply",
+            "ActionBody": callback
+        })
+
+    return {
+        "Type": "keyboard",
+        "ButtonsGroupColumns": 6,
+        "ButtonsGroupRows": 2,
+        "Buttons": buttons
+    }
 
 
 async def handle_price(user_id, text):
     """Handle price range selection asynchronously"""
-    # Get user data from state
     user_data = await state_manager.get_state(user_id) or {}
 
-    # Parse price range from callback data
-    # Format: "price_min_max" or "price_min_any"
     if text.startswith("price_"):
         parts = text.split("_")
-        if len(parts) >= 3:
-            try:
-                min_price = int(parts[1])
-                max_price = None if parts[2] == "any" else int(parts[2])
 
-                # Store price range
-                await state_manager.update_state(user_id, {
-                    "price_min": min_price,
-                    "price_max": max_price,
-                    "state": STATE_CONFIRMATION
-                })
+        try:
+            low = int(parts[1])
+            high = None if parts[2] == "any" else int(parts[2])
 
-                # Format price range for display
-                price_text = f"{min_price}+ грн." if not max_price else f"{min_price}–{max_price} грн."
-                await safe_send_message(
-                    user_id,
-                    f"Ви обрали діапазон: {price_text}"
-                )
+            # Update state with price range
+            await state_manager.update_state(user_id, {
+                "price_min": low if low > 0 else None,
+                "price_max": high,
+                "state": STATE_CONFIRMATION
+            })
 
-                # Show confirmation
-                await show_confirmation(user_id)
-            except (ValueError, IndexError):
-                await safe_send_message(
-                    user_id,
-                    "Невірний формат діапазону цін.",
-                    keyboard=create_price_keyboard(user_data.get("city", "Київ"))
-                )
-        else:
+            # Format price range for display
+            if high is None:
+                price_text = f"Більше {low} грн."
+            else:
+                if low == 0:
+                    price_text = f"До {high} грн."
+                else:
+                    price_text = f"{low}-{high} грн."
+
+            # Show confirmation message
             await safe_send_message(
                 user_id,
-                "Будь ласка, оберіть діапазон цін:",
-                keyboard=create_price_keyboard(user_data.get("city", "Київ"))
+                f"Ви обрали діапазон: {price_text}"
+            )
+
+            # Show summary and confirmation
+            await show_confirmation(user_id)
+        except (ValueError, IndexError):
+            await safe_send_message(
+                user_id,
+                "Невірний формат діапазону цін.",
+                keyboard=create_price_keyboard(await get_price_ranges(user_data.get("city", "Київ")))
             )
     else:
+        # Try to parse price range from text
         await safe_send_message(
             user_id,
-            "Будь ласка, оберіть діапазон цін:",
-            keyboard=create_price_keyboard(user_data.get("city", "Київ"))
+            "Будь ласка, оберіть діапазон цін за допомогою кнопок.",
+            keyboard=create_price_keyboard(await get_price_ranges(user_data.get("city", "Київ")))
         )
 
 
 async def show_confirmation(user_id):
     """Show subscription confirmation asynchronously"""
-    # Get user data from state
     user_data = await state_manager.get_state(user_id) or {}
-    await state_manager.update_state(user_id, {
-        "state": STATE_CONFIRMATION
-    })
 
     # Build summary text
     property_type = user_data.get("property_type", "")
@@ -387,27 +634,59 @@ async def show_confirmation(user_id):
     ua_lang_property_type = mapping_property.get(property_type, "")
 
     summary = (
-        f"**Обрані параметри пошуку:**\n"
+        "*Обрані параметри пошуку:*\n\n"
         f"🏷 Тип нерухомості: {ua_lang_property_type}\n"
         f"🏙️ Місто: {city}\n"
         f"🛏️ Кількість кімнат: {rooms}\n"
         f"💰 Діапазон цін: {price_range} грн.\n"
     )
 
-    # Send confirmation message
+    # Create confirmation keyboard
+    keyboard = create_confirmation_keyboard()
+
     await safe_send_message(
         user_id,
         summary,
-        keyboard=create_confirmation_keyboard()
+        keyboard=keyboard
     )
+
+
+def create_confirmation_keyboard():
+    """Create keyboard for subscription confirmation"""
+    return {
+        "Type": "keyboard",
+        "Buttons": [
+            {
+                "Columns": 6,
+                "Rows": 1,
+                "Text": "Розширений пошук",
+                "ActionType": "reply",
+                "ActionBody": "advanced_search"
+            },
+            {
+                "Columns": 3,
+                "Rows": 1,
+                "Text": "Редагувати",
+                "ActionType": "reply",
+                "ActionBody": "edit_parameters"
+            },
+            {
+                "Columns": 3,
+                "Rows": 1,
+                "Text": "Підписатися",
+                "ActionType": "reply",
+                "ActionBody": "subscribe"
+            }
+        ]
+    }
 
 
 async def handle_confirmation(user_id, text):
     """Handle confirmation of search parameters asynchronously"""
-    # Get user data from state
     user_data = await state_manager.get_state(user_id) or {}
+    text_lower = text.lower()
 
-    if text == "subscribe":
+    if text_lower == "subscribe" or text_lower == "підписатися":
         # Get user database ID
         user_db_id = user_data.get("user_db_id")
         if not user_db_id:
@@ -437,9 +716,7 @@ async def handle_confirmation(user_id, text):
                 "Ви успішно підписалися на пошук оголошень!"
             )
 
-            # Fetch some initial ads to show to the user
-            # This would typically be done with your existing fetch_ads_for_period function
-            # But for Viber we'll keep it simple for now
+            # Send additional message about notifications
             await safe_send_message(
                 user_id,
                 "Ми будемо надсилати вам нові оголошення, щойно вони з'являтимуться!",
@@ -456,47 +733,83 @@ async def handle_confirmation(user_id, text):
             await state_manager.update_state(user_id, {
                 "state": STATE_START
             })
-
         except Exception as e:
             logger.error(f"Error updating user filters: {e}")
             await safe_send_message(
                 user_id,
-                "Помилка при збереженні фільтрів. Спробуйте ще раз.",
-                keyboard=create_main_menu_keyboard()
+                "Помилка при збереженні фільтрів. Спробуйте ще раз."
             )
-
-    elif text == "edit_parameters":
+    elif text_lower == "edit_parameters" or text_lower == "редагувати":
         # Show parameter editing menu
         await state_manager.update_state(user_id, {
             "state": STATE_EDITING_PARAMETERS
         })
 
+        keyboard = create_edit_parameters_keyboard()
         await safe_send_message(
             user_id,
             "Оберіть параметр для редагування:",
-            keyboard=create_edit_parameters_keyboard()
+            keyboard=keyboard
         )
-
-    elif text == "advanced_search":
-        # Show advanced search options
-        # Implement this if you have advanced search in your Telegram bot
+    elif text_lower == "advanced_search" or text_lower == "розширений пошук":
         await safe_send_message(
             user_id,
-            "Розширений пошук поки не доступний в Viber.",
-            keyboard=create_confirmation_keyboard()
+            "Розширений пошук поки не доступний в Viber."
         )
-
     else:
         await safe_send_message(
             user_id,
-            "Невідома команда. Будь ласка, використовуйте кнопки нижче:",
+            "Невідома команда. Будь ласка, оберіть один з варіантів:",
             keyboard=create_confirmation_keyboard()
         )
 
 
+def create_edit_parameters_keyboard():
+    """Create keyboard for parameter editing"""
+    return {
+        "Type": "keyboard",
+        "Buttons": [
+            {
+                "Columns": 3,
+                "Rows": 1,
+                "Text": "Тип нерухомості",
+                "ActionType": "reply",
+                "ActionBody": "edit_property_type"
+            },
+            {
+                "Columns": 3,
+                "Rows": 1,
+                "Text": "Місто",
+                "ActionType": "reply",
+                "ActionBody": "edit_city"
+            },
+            {
+                "Columns": 3,
+                "Rows": 1,
+                "Text": "Кількість кімнат",
+                "ActionType": "reply",
+                "ActionBody": "edit_rooms"
+            },
+            {
+                "Columns": 3,
+                "Rows": 1,
+                "Text": "Діапазон цін",
+                "ActionType": "reply",
+                "ActionBody": "edit_price"
+            },
+            {
+                "Columns": 6,
+                "Rows": 1,
+                "Text": "Відмінити",
+                "ActionType": "reply",
+                "ActionBody": "cancel_edit"
+            }
+        ]
+    }
+
+
 async def handle_edit_parameters(user_id, text):
-    """Handle editing of parameters asynchronously"""
-    # Get user data from state
+    """Handle editing parameters asynchronously"""
     user_data = await state_manager.get_state(user_id) or {}
 
     if text == "edit_property_type":
@@ -510,7 +823,6 @@ async def handle_edit_parameters(user_id, text):
             "🏷 Оберіть тип нерухомості:",
             keyboard=create_property_type_keyboard()
         )
-
     elif text == "edit_city":
         # Reset state to city selection
         await state_manager.update_state(user_id, {
@@ -522,7 +834,6 @@ async def handle_edit_parameters(user_id, text):
             "🏙️ Оберіть місто:",
             keyboard=create_city_keyboard(AVAILABLE_CITIES)
         )
-
     elif text == "edit_rooms":
         # Reset state to rooms selection
         await state_manager.update_state(user_id, {
@@ -534,19 +845,14 @@ async def handle_edit_parameters(user_id, text):
             "🛏️ Виберіть кількість кімнат (можна обрати декілька):",
             keyboard=create_rooms_keyboard(user_data.get("rooms", []))
         )
-
     elif text == "edit_price":
         # Reset state to price selection
         await state_manager.update_state(user_id, {
             "state": STATE_WAITING_PRICE
         })
 
-        await safe_send_message(
-            user_id,
-            "💰 Виберіть діапазон цін (грн):",
-            keyboard=create_price_keyboard(user_data.get("city", "Київ"))
-        )
-
+        city = user_data.get("city", "Київ")
+        await show_price_options(user_id, city)
     elif text == "cancel_edit":
         # Return to confirmation
         await state_manager.update_state(user_id, {
@@ -554,11 +860,10 @@ async def handle_edit_parameters(user_id, text):
         })
 
         await show_confirmation(user_id)
-
     else:
         await safe_send_message(
             user_id,
-            "Невідома команда. Будь ласка, використовуйте кнопки нижче:",
+            "Невідомий параметр редагування.",
             keyboard=create_edit_parameters_keyboard()
         )
 
@@ -601,6 +906,10 @@ async def handle_menu_option(user_id, text):
             user_id,
             "Функція техпідтримки ще в розробці."
         )
+    elif text == "📱 Номер телефону" or text == "верифікація":
+        # Start phone verification
+        from .phone_verification import start_phone_verification
+        await start_phone_verification(user_id)
     else:
         await safe_send_message(
             user_id,

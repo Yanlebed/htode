@@ -48,7 +48,9 @@ def main_menu_keyboard():
         KeyboardButton("💳 Оплатити підписку")
     )
     keyboard.row(
-        KeyboardButton("🧑‍💻 Техпідтримка")
+        KeyboardButton("🧑‍💻 Техпідтримка"),
+        KeyboardButton("📱 Додати номер телефону"),
+        KeyboardButton("📧 Додати email")
     )
     return keyboard
 
@@ -322,3 +324,39 @@ def support_redirect_keyboard(template_data: str):
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton("Перейти до техпідтримки", url=url))
     return kb
+
+
+def phone_request_keyboard():
+    """
+    Create a keyboard with a button to share phone number.
+    """
+    keyboard = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    keyboard.add(
+        KeyboardButton(text="Поділитися номером телефону", request_contact=True)
+    )
+    keyboard.add(
+        KeyboardButton(text="Скасувати")
+    )
+    return keyboard
+
+
+def verification_code_keyboard():
+    """
+    Simple keyboard for when waiting for verification code.
+    """
+    keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.add(
+        KeyboardButton(text="Скасувати")
+    )
+    return keyboard
+
+
+def verification_success_keyboard():
+    """
+    Keyboard to show after successful verification.
+    """
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(
+        InlineKeyboardButton("Повернутися до головного меню", callback_data="return_to_main_menu")
+    )
+    return keyboard
