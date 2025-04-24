@@ -34,7 +34,7 @@ def mock_redis():
 def mock_db_connection():
     """Mock database connection for testing."""
     mock = MagicMock()
-    with patch("common.db.database.get_connection", return_value=mock):
+    with patch("common.db.database.get_db_connection", return_value=mock):
         with patch("common.db.database.return_connection"):
             yield mock
 

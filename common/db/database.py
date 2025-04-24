@@ -49,6 +49,13 @@ def get_db_connection():
             pool.putconn(conn)
 
 
+def return_connection(conn):
+    """Return a connection to the pool"""
+    global pool
+    if pool is not None and conn is not None:
+        pool.putconn(conn)
+
+
 @contextmanager
 def get_db_cursor(commit=True):
     """
