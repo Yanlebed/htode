@@ -389,6 +389,32 @@ services:
       timeout: 10s
       retries: 3
 
+
+  maintenance_worker_service:
+    container_name: maintenance_worker
+    <<: *service-settings
+    <<: *resource-limits
+    build:
+      context: .
+      dockerfile: services/scraper_service/Dockerfile  # Reuse scraper Dockerfile as it has similar dependencies
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *common-variables
+      <<: *aws-variables
+    volumes:
+      - ./common:/app/common
+      - ./system:/app/system  # Mount the new maintenance module
+    command: celery -A common.celery_app worker --loglevel=info -Q maintenance_queue --max-tasks-per-child=50
+    healthcheck:
+      test: [ "CMD", "celery", "inspect", "ping", "-d", "celery@maintenance_worker" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
 networks:
   app_net:
     driver: bridge

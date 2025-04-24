@@ -52,6 +52,7 @@ celery_app.conf.update(
         'viber_service.app.tasks.*': {'queue': 'viber_queue'},
         'whatsapp_service.app.tasks.*': {'queue': 'whatsapp_queue'},
         'scraper_service.app.tasks.*': {'queue': 'scrape_queue'},
+        'system.maintenance.*': {'queue': 'maintenance_queue'},  # New maintenance queue
     },
 )
 
@@ -68,10 +69,26 @@ celery_app.conf.beat_schedule = {
     'system-maintenance-weekly': {
         'task': 'system.maintenance.cleanup_old_ads',
         'schedule': crontab(day_of_week='sun', hour=2, minute=0),  # Sunday at 2 AM
-        'kwargs': {'days_old': 30},  # Clean ads older than 30 days
+        'kwargs': {'days_old': 30, 'check_activity': True},  # Clean ads older than 30 days and check if they're inactive
     },
     'check-expiring-subscriptions-daily': {
         'task': 'telegram_service.app.tasks.check_expiring_subscriptions',
         'schedule': crontab(hour=9, minute=0),  # Run daily at 9:00 AM
+    },
+    # New daily maintenance task for cleaning inactive ads
+    'cleanup-inactive-ads-daily': {
+        'task': 'system.maintenance.cleanup_old_ads',
+        'schedule': crontab(hour=3, minute=0),  # Daily at 3 AM
+        'kwargs': {'days_old': 7, 'check_activity': True},  # Check and clean inactive ads older than 7 days
+    },
+    # Daily cleanup of expired verification codes
+    'cleanup-expired-verification-codes': {
+        'task': 'system.maintenance.cleanup_expired_verification_codes',
+        'schedule': crontab(hour=1, minute=30),  # Daily at 1:30 AM
+    },
+    # Weekly subscription statistics
+    'generate-subscription-statistics': {
+        'task': 'system.maintenance.check_subscription_statistics',
+        'schedule': crontab(day_of_week='mon', hour=7, minute=0),  # Monday at 7 AM
     },
 }
