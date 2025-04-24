@@ -41,6 +41,9 @@ celery_app.conf.update(
     task_annotations={
         'scraper_service.app.tasks.fetch_new_ads': {'rate_limit': '1/m'},  # 1 per minute
         'notifier_service.app.tasks.notify_user_with_ads': {'rate_limit': '10/m'},  # 10 per minute
+        # Add rate limits for resource-intensive maintenance tasks
+        'system.maintenance.optimize_database': {'rate_limit': '1/d'},  # Once per day
+        'system.maintenance.cleanup_redis_cache': {'rate_limit': '1/h'},  # Once per hour
     },
 )
 
@@ -52,7 +55,7 @@ celery_app.conf.update(
         'viber_service.app.tasks.*': {'queue': 'viber_queue'},
         'whatsapp_service.app.tasks.*': {'queue': 'whatsapp_queue'},
         'scraper_service.app.tasks.*': {'queue': 'scrape_queue'},
-        'system.maintenance.*': {'queue': 'maintenance_queue'},  # New maintenance queue
+        'system.maintenance.*': {'queue': 'maintenance_queue'},  # Maintenance queue
     },
 )
 
@@ -75,7 +78,7 @@ celery_app.conf.beat_schedule = {
         'task': 'telegram_service.app.tasks.check_expiring_subscriptions',
         'schedule': crontab(hour=9, minute=0),  # Run daily at 9:00 AM
     },
-    # New daily maintenance task for cleaning inactive ads
+    # Daily maintenance task for cleaning inactive ads
     'cleanup-inactive-ads-daily': {
         'task': 'system.maintenance.cleanup_old_ads',
         'schedule': crontab(hour=3, minute=0),  # Daily at 3 AM
@@ -90,5 +93,27 @@ celery_app.conf.beat_schedule = {
     'generate-subscription-statistics': {
         'task': 'system.maintenance.check_subscription_statistics',
         'schedule': crontab(day_of_week='mon', hour=7, minute=0),  # Monday at 7 AM
+    },
+    # New maintenance tasks
+    # Daily cleanup of Redis cache
+    'cleanup-redis-cache-daily': {
+        'task': 'system.maintenance.cleanup_redis_cache',
+        'schedule': crontab(hour=4, minute=30),  # Daily at 4:30 AM
+        'kwargs': {'pattern': '*', 'older_than_days': 7},  # Clean all cache items older than 7 days
+    },
+    # Weekly database optimization
+    'optimize-database-weekly': {
+        'task': 'system.maintenance.optimize_database',
+        'schedule': crontab(day_of_week='sat', hour=3, minute=0),  # Saturday at 3 AM
+    },
+    # Cache warming every 6 hours
+    'cache-warming': {
+        'task': 'system.maintenance.cache_warming',
+        'schedule': crontab(minute=0, hour='*/6'),  # Every 6 hours
+    },
+    # Check database connections every hour
+    'check-database-connections': {
+        'task': 'system.maintenance.check_database_connections',
+        'schedule': crontab(minute=15, hour='*/1'),  # Every hour at 15 minutes past
     },
 }

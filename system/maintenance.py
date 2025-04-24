@@ -2,14 +2,17 @@
 
 import logging
 import time
+import json
 from datetime import datetime, timedelta
 import requests
 from typing import List, Tuple, Optional, Dict, Any
 
 from common.celery_app import celery_app
-from common.db.database import execute_query
+from common.db.database import execute_query, get_db_connection
 from common.utils.s3_utils import delete_s3_image
 from common.utils.request_utils import make_request
+from common.utils.cache import redis_client, CacheTTL
+from common.config import GEO_ID_MAPPING
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +153,9 @@ def process_ads_batch(batch: List[Dict[str, Any]], check_activity: bool) -> Tupl
                     else:
                         logger.warning(f"Failed to delete image: {image_url}")
 
+                # Clear cache for the deleted ad
+                clear_ad_cache(ad_id, resource_url)
+
     return deleted_count, images_deleted_count, checked_count
 
 
@@ -205,7 +211,7 @@ def get_ad_images(ad_id: int) -> List[str]:
 
 def delete_ad(ad_id: int) -> bool:
     """
-    Delete an ad and all its related data (images, phones, favorites).
+    Delete an ad and all its related data (images, phones, favorites) using transaction.
 
     Args:
         ad_id: ID of the ad to delete
@@ -214,88 +220,64 @@ def delete_ad(ad_id: int) -> bool:
         True if the ad was deleted successfully, False otherwise
     """
     try:
-        # Start with related tables to maintain referential integrity
-        # No need to delete from ad_images and ad_phones separately due to CASCADE
+        # Use a transaction to ensure atomic deletion
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                try:
+                    # Start transaction
+                    cursor.execute("BEGIN")
 
-        # Delete from favorite_ads
-        execute_query("DELETE FROM favorite_ads WHERE ad_id = %s", [ad_id])
+                    # Delete from favorite_ads
+                    cursor.execute("DELETE FROM favorite_ads WHERE ad_id = %s", [ad_id])
 
-        # Finally delete the ad itself
-        execute_query("DELETE FROM ads WHERE id = %s", [ad_id])
+                    # Delete from ad_phones
+                    cursor.execute("DELETE FROM ad_phones WHERE ad_id = %s", [ad_id])
 
-        logger.info(f"Successfully deleted ad {ad_id} and related data")
-        return True
+                    # Delete from ad_images
+                    cursor.execute("DELETE FROM ad_images WHERE ad_id = %s", [ad_id])
+
+                    # Finally delete the ad itself
+                    cursor.execute("DELETE FROM ads WHERE id = %s", [ad_id])
+
+                    # Commit the transaction
+                    conn.commit()
+
+                    logger.info(f"Successfully deleted ad {ad_id} and related data")
+                    return True
+                except Exception as e:
+                    # Rollback on error
+                    conn.rollback()
+                    logger.error(f"Transaction error deleting ad {ad_id}: {e}")
+                    return False
     except Exception as e:
-        logger.error(f"Error deleting ad {ad_id}: {e}")
+        logger.error(f"Error getting connection to delete ad {ad_id}: {e}")
         return False
 
 
-@celery_app.task(name='system.maintenance.check_subscription_statistics')
-def check_subscription_statistics() -> Dict[str, Any]:
+def clear_ad_cache(ad_id: int, resource_url: str = None):
     """
-    Generate statistics about user subscriptions.
+    Clear all cache entries related to a specific ad
 
-    Returns:
-        Dictionary with subscription statistics
+    Args:
+        ad_id: ID of the ad
+        resource_url: Optional resource URL for additional cache keys
     """
-    stats = {}
+    keys_to_delete = [
+        f"full_ad:{ad_id}",
+        f"matching_users:{ad_id}"
+    ]
 
-    # Total users
-    total_users_query = "SELECT COUNT(*) as count FROM users"
-    total_users_result = execute_query(total_users_query, fetchone=True)
-    stats['total_users'] = total_users_result['count'] if total_users_result else 0
+    if resource_url:
+        keys_to_delete.extend([
+            f"extra_images:{resource_url}",
+            f"ad_description:{resource_url}"
+        ])
 
-    # Active subscribers (paid or free)
-    active_users_query = """
-                         SELECT COUNT(*) as count \
-                         FROM users
-                         WHERE subscription_until > NOW() OR free_until > NOW() \
-                         """
-    active_users_result = execute_query(active_users_query, fetchone=True)
-    stats['active_subscribers'] = active_users_result['count'] if active_users_result else 0
-
-    # Paid subscribers
-    paid_users_query = "SELECT COUNT(*) as count FROM users WHERE subscription_until > NOW()"
-    paid_users_result = execute_query(paid_users_query, fetchone=True)
-    stats['paid_subscribers'] = paid_users_result['count'] if paid_users_result else 0
-
-    # Free trial users
-    free_users_query = """
-                       SELECT COUNT(*) as count \
-                       FROM users
-                       WHERE free_until > NOW() AND (subscription_until IS NULL OR subscription_until < NOW()) \
-                       """
-    free_users_result = execute_query(free_users_query, fetchone=True)
-    stats['free_trial_users'] = free_users_result['count'] if free_users_result else 0
-
-    # Users by messenger type
-    messenger_stats_query = """
-                            SELECT COUNT(CASE WHEN telegram_id IS NOT NULL THEN 1 END) as telegram_users, \
-                                   COUNT(CASE WHEN viber_id IS NOT NULL THEN 1 END)    as viber_users, \
-                                   COUNT(CASE WHEN whatsapp_id IS NOT NULL THEN 1 END) as whatsapp_users
-                            FROM users \
-                            """
-    messenger_stats = execute_query(messenger_stats_query, fetchone=True)
-    if messenger_stats:
-        stats['telegram_users'] = messenger_stats['telegram_users']
-        stats['viber_users'] = messenger_stats['viber_users']
-        stats['whatsapp_users'] = messenger_stats['whatsapp_users']
-
-    # Active subscriptions by city
-    city_stats_query = """
-                       SELECT uf.city, COUNT(DISTINCT uf.user_id) as user_count
-                       FROM user_filters uf
-                                JOIN users u ON uf.user_id = u.id
-                       WHERE (u.subscription_until > NOW() OR u.free_until > NOW())
-                         AND uf.city IS NOT NULL
-                       GROUP BY uf.city
-                       ORDER BY user_count DESC \
-                       """
-    city_stats = execute_query(city_stats_query, fetch=True) or []
-    stats['subscriptions_by_city'] = city_stats
-
-    logger.info(f"Generated subscription statistics: {stats}")
-    return stats
+    # Delete all keys that exist
+    existing_keys = [key for key in keys_to_delete if redis_client.exists(key)]
+    if existing_keys:
+        redis_client.delete(*existing_keys)
+        logger.debug(f"Cleared {len(existing_keys)} cache keys for ad {ad_id}")
 
 
 @celery_app.task(name='system.maintenance.cleanup_expired_verification_codes')
@@ -318,4 +300,276 @@ def cleanup_expired_verification_codes() -> Dict[str, int]:
     return {
         "verification_codes_deleted": codes_result.rowcount if hasattr(codes_result, 'rowcount') else 0,
         "email_tokens_deleted": tokens_result.rowcount if hasattr(tokens_result, 'rowcount') else 0
+    }
+
+
+@celery_app.task(name='system.maintenance.cleanup_redis_cache')
+def cleanup_redis_cache(pattern: str = None, older_than_days: int = None) -> Dict[str, int]:
+    """
+    Clean up Redis cache entries matching a pattern and/or older than specified days
+
+    Args:
+        pattern: Optional Redis key pattern to match (e.g., "user_filters:*")
+        older_than_days: Optional age threshold in days
+
+    Returns:
+        Dictionary with count of deleted cache entries
+    """
+    start_time = time.time()
+    deleted_count = 0
+
+    if not pattern:
+        # Use a generic pattern to match all cache keys
+        pattern = "*"
+
+    # Get all keys matching the pattern
+    matching_keys = redis_client.keys(pattern)
+    logger.info(f"Found {len(matching_keys)} keys matching pattern: {pattern}")
+
+    if not matching_keys:
+        return {"deleted_count": 0, "execution_time_seconds": time.time() - start_time}
+
+    if older_than_days is not None:
+        # Only delete keys older than the specified threshold
+        keys_to_delete = []
+
+        # Use pipeline for efficiency
+        pipe = redis_client.pipeline()
+        for key in matching_keys:
+            pipe.ttl(key)
+        ttls = pipe.execute()
+
+        # Calculate which keys to delete based on TTL
+        for i, key in enumerate(matching_keys):
+            ttl = ttls[i]
+
+            # If TTL is -1 (no expiration) or -2 (key doesn't exist), skip
+            if ttl < 0:
+                continue
+
+            # Calculate original TTL based on remaining TTL
+            max_ttl = CacheTTL.EXTENDED  # Assume 7 days as maximum TTL
+            age_seconds = max_ttl - ttl
+            age_days = age_seconds / 86400  # Convert to days
+
+            if age_days > older_than_days:
+                keys_to_delete.append(key)
+
+        if keys_to_delete:
+            redis_client.delete(*keys_to_delete)
+            deleted_count = len(keys_to_delete)
+    else:
+        # Delete all matching keys
+        redis_client.delete(*matching_keys)
+        deleted_count = len(matching_keys)
+
+    execution_time = time.time() - start_time
+    logger.info(f"Deleted {deleted_count} cache keys in {execution_time:.2f} seconds")
+
+    return {
+        "deleted_count": deleted_count,
+        "execution_time_seconds": execution_time
+    }
+
+
+@celery_app.task(name='system.maintenance.optimize_database')
+def optimize_database() -> Dict[str, Any]:
+    """
+    Perform database maintenance tasks like VACUUM and ANALYZE to optimize performance
+
+    Returns:
+        Dictionary with operation status
+    """
+    start_time = time.time()
+    operations = []
+
+    try:
+        # List of tables to optimize
+        tables = [
+            "ads", "ad_images", "ad_phones", "users",
+            "user_filters", "favorite_ads", "verification_codes",
+            "email_verification_tokens", "payment_orders", "payment_history"
+        ]
+
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                # Turn off auto-commit for these operations
+                conn.autocommit = True
+
+                # VACUUM ANALYZE on each table
+                for table in tables:
+                    logger.info(f"Running VACUUM ANALYZE on {table}")
+                    cursor.execute(f"VACUUM ANALYZE {table}")
+                    operations.append(f"VACUUM ANALYZE {table}")
+
+                # Update table statistics
+                for table in tables:
+                    logger.info(f"Running ANALYZE on {table}")
+                    cursor.execute(f"ANALYZE {table}")
+                    operations.append(f"ANALYZE {table}")
+
+                # Optimize indexes
+                logger.info("Reindexing tables")
+                cursor.execute("REINDEX DATABASE current_database()")
+                operations.append("REINDEX DATABASE")
+
+                # Reset auto-commit to default
+                conn.autocommit = False
+
+    except Exception as e:
+        logger.error(f"Error during database optimization: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "execution_time_seconds": time.time() - start_time
+        }
+
+    execution_time = time.time() - start_time
+    logger.info(f"Database optimization completed in {execution_time:.2f} seconds")
+
+    return {
+        "status": "success",
+        "operations": operations,
+        "execution_time_seconds": execution_time
+    }
+
+
+@celery_app.task(name='system.maintenance.cache_warming')
+def cache_warming() -> Dict[str, int]:
+    """
+    Warm up cache for frequently accessed data
+
+    Returns:
+        Dictionary with count of items cached
+    """
+    start_time = time.time()
+    cached_items = 0
+
+    try:
+        # 1. Warm up cache for active cities
+        sql_cities = """
+                     SELECT DISTINCT uf.city
+                     FROM user_filters uf
+                              JOIN users u ON uf.user_id = u.id
+                     WHERE uf.city IS NOT NULL
+                       AND (u.subscription_until > NOW() OR u.free_until > NOW()) \
+                     """
+        cities = execute_query(sql_cities, fetch=True)
+        if cities:
+            city_ids = [city['city'] for city in cities if city.get('city')]
+
+            # Cache city data
+            for city_id in city_ids:
+                city_key = f"city:{city_id}"
+                redis_client.set(city_key, json.dumps({
+                    "id": city_id,
+                    "name": GEO_ID_MAPPING.get(city_id, "Unknown")
+                }), ex=CacheTTL.LONG)  # City data rarely changes
+                cached_items += 1
+
+        # 2. Warm up cache for most viewed ads
+        sql_top_ads = """
+                      SELECT ad_id, COUNT(*) as view_count
+                      FROM (SELECT fa.ad_id \
+                            FROM favorite_ads fa \
+                            ORDER BY fa.created_at DESC LIMIT 1000) as recent_views
+                      GROUP BY ad_id
+                      ORDER BY view_count DESC LIMIT 50 \
+                      """
+        top_ads = execute_query(sql_top_ads, fetch=True)
+        if top_ads:
+            ad_ids = [ad['ad_id'] for ad in top_ads if ad.get('ad_id')]
+
+            # Batch fetch ad data
+            from common.db.models_improved import batch_get_full_ad_data
+            batch_get_full_ad_data(ad_ids)
+            cached_items += len(ad_ids)
+
+        # 3. Warm up cache for active users
+        sql_active_users = """
+                           SELECT id
+                           FROM users
+                           WHERE last_active > NOW() - interval '7 days'
+                               LIMIT 100 \
+                           """
+        active_users = execute_query(sql_active_users, fetch=True)
+        if active_users:
+            user_ids = [user['id'] for user in active_users if user.get('id')]
+
+            # Batch fetch user filters
+            from common.db.models_improved import batch_get_user_filters
+            batch_get_user_filters(user_ids)
+            cached_items += len(user_ids)
+
+    except Exception as e:
+        logger.error(f"Error during cache warming: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "cached_items": cached_items,
+            "execution_time_seconds": time.time() - start_time
+        }
+
+    execution_time = time.time() - start_time
+    logger.info(f"Cache warming completed in {execution_time:.2f} seconds, cached {cached_items} items")
+
+    return {
+        "status": "success",
+        "cached_items": cached_items,
+        "execution_time_seconds": execution_time
+    }
+
+
+@celery_app.task(name='system.maintenance.check_database_connections')
+def check_database_connections() -> Dict[str, Any]:
+    """
+    Check database connection pool health and reset if necessary
+
+    Returns:
+        Dictionary with pool statistics
+    """
+    from common.db.database import pool, initialize_pool
+
+    if not pool:
+        logger.warning("Database connection pool not initialized, initializing now")
+        initialize_pool()
+        return {
+            "status": "initialized",
+            "min_connections": pool.minconn,
+            "max_connections": pool.maxconn,
+            "used_connections": 0
+        }
+
+    # Get pool statistics
+    min_conn = pool.minconn
+    max_conn = pool.maxconn
+    used_conn = len(pool._used)
+
+    logger.info(f"Database connection pool status: {used_conn} used of {max_conn} max connections")
+
+    # Check if pool is near capacity and should be reset
+    if used_conn > max_conn * 0.8:
+        logger.warning(
+            f"Database connection pool is at {(used_conn / max_conn) * 100:.1f}% capacity, consider increasing max_connections")
+
+    # Check for leaked connections (connections used for very long periods)
+    if hasattr(pool, '_used') and pool._used:
+        old_connections = []
+        current_time = time.time()
+
+        for conn_id, (conn, timestamp) in pool._used.items():
+            # Check if connection has been held for more than 10 minutes
+            if current_time - timestamp > 600:
+                old_connections.append((conn_id, current_time - timestamp))
+
+        if old_connections:
+            logger.warning(f"Found {len(old_connections)} potentially leaked database connections")
+            for conn_id, age in old_connections:
+                logger.warning(f"Connection {conn_id} has been active for {age:.1f} seconds")
+
+    return {
+        "status": "checked",
+        "min_connections": min_conn,
+        "max_connections": max_conn,
+        "used_connections": used_conn
     }

@@ -4,7 +4,7 @@ from typing import Dict, Any, Optional, List, Union
 from common.db.database import execute_query
 from common.utils.s3_utils import _upload_image_to_s3
 from psycopg2.extras import RealDictCursor
-from common.db.database import get_connection, return_connection
+from common.db.database import get_db_connection, return_connection
 
 logger = logging.getLogger(__name__)
 from common.utils.phone_parser import extract_phone_numbers_from_resource
