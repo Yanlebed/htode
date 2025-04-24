@@ -40,7 +40,7 @@ def process_and_insert_ad(
     # STEP 2: Insert the ad record and get its ID
     conn = None
     try:
-        conn = get_connection()
+        conn = get_db_connection()
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             # Check if ad already exists
             check_sql = "SELECT id FROM ads WHERE external_id = %s"
