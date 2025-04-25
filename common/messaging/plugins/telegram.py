@@ -1,4 +1,4 @@
-# common/messaging/plugins/telegram.py
+# common/messaging/plugins/telegram_messaging.py
 
 import logging
 import asyncio

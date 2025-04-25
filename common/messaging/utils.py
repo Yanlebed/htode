@@ -3,7 +3,8 @@
 import logging
 import asyncio
 import functools
-from typing import Callable, List, Any, Type, Dict, Optional, TypeVar, Union, Tuple
+import random
+from typing import Callable, List, Type, Dict, Any, Optional, TypeVar, Tuple, Union
 
 logger = logging.getLogger(__name__)
 
@@ -12,83 +13,89 @@ T = TypeVar('T')
 
 
 def retry_with_exponential_backoff(
-        retryable_exceptions: List[Type[Exception]] = None,
         max_retries: int = 3,
         initial_delay: float = 1.0,
-        backoff_factor: float = 2.0
+        backoff_factor: float = 2.0,
+        retryable_exceptions: List[Type[Exception]] = None
 ):
     """
-    Decorator for retrying asynchronous functions with exponential backoff.
+    Decorator for retrying async functions with exponential backoff.
 
     Args:
-        retryable_exceptions: List of exception types to retry on (default: retry on all exceptions)
         max_retries: Maximum number of retry attempts
         initial_delay: Initial delay between retries in seconds
-        backoff_factor: Multiplier for delay after each retry attempt
+        backoff_factor: Multiplier for delay after each retry
+        retryable_exceptions: List of exception types to retry on (defaults to all)
 
     Returns:
-        Decorator function
+        Decorated function
     """
 
-    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+    def decorator(func: Callable[..., Any]):
         @functools.wraps(func)
-        async def wrapper(*args, **kwargs) -> Any:
-            nonlocal retryable_exceptions
-
+        async def wrapper(*args, **kwargs):
             if retryable_exceptions is None:
-                retryable_exceptions = [Exception]
+                retry_on = (Exception,)
+            else:
+                retry_on = tuple(retryable_exceptions)
+
+            last_exception = None
 
             for attempt in range(max_retries):
                 try:
                     return await func(*args, **kwargs)
-                except tuple(retryable_exceptions) as e:
+                except retry_on as e:
+                    last_exception = e
                     if attempt < max_retries - 1:
                         # Calculate exponential delay with jitter
                         delay = initial_delay * (backoff_factor ** attempt)
-                        # Add a small random jitter to avoid thundering herd problem
-                        import random
                         jitter = random.uniform(0.8, 1.2)
-                        delay = delay * jitter
+                        final_delay = delay * jitter
 
                         logger.warning(
                             f"Attempt {attempt + 1}/{max_retries} failed: {e}. "
-                            f"Retrying in {delay:.2f}s"
+                            f"Retrying in {final_delay:.2f}s"
                         )
-                        await asyncio.sleep(delay)
+                        await asyncio.sleep(final_delay)
                     else:
-                        logger.error(f"All {max_retries} retry attempts failed")
+                        logger.error(f"All {max_retries} retry attempts failed. Last error: {e}")
                         raise
                 except Exception as e:
                     # Don't retry on non-retryable exceptions
-                    logger.error(f"Non-retryable exception: {e}")
+                    logger.error(f"Non-retryable exception occurred: {e}")
                     raise
 
-            # This should never be reached due to the raise in the loop
-            return None  # For type checking only
+            # This will only be reached if max_retries is 0
+            if last_exception:
+                raise last_exception
+            return None
 
         return wrapper
 
     return decorator
 
 
-class MessageRenderer:
-    """Utility class for rendering messages across different platforms"""
+class MessageFormatter:
+    """
+    Utility class for formatting messages based on platform.
+    Provides consistent formatting across different messaging platforms.
+    """
 
     @staticmethod
-    def render_ad_text(ad_data: Dict[str, Any], platform: str = None) -> str:
+    def format_ad_text(ad_data: Dict[str, Any], platform: str = "default") -> str:
         """
-        Generate text for an ad listing with optional platform-specific formatting.
+        Format ad text based on platform-specific requirements.
 
         Args:
-            ad_data: Dictionary containing ad data
-            platform: Optional platform identifier for customized formatting
+            ad_data: Dictionary with ad information
+            platform: Target platform (telegram, viber, whatsapp)
 
         Returns:
-            Formatted ad text
+            Formatted ad text string
         """
         from common.config import GEO_ID_MAPPING
 
-        # Get required fields with fallbacks
+        # Extract ad data with defaults
         city_id = ad_data.get('city')
         city_name = GEO_ID_MAPPING.get(city_id, "Невідомо")
         price = ad_data.get('price', 0)
@@ -98,9 +105,9 @@ class MessageRenderer:
         floor = ad_data.get('floor', "Невідомо")
         total_floors = ad_data.get('total_floors', "Невідомо")
 
-        # Format differently based on platform
+        # Apply platform-specific formatting
         if platform == "telegram":
-            # Telegram supports Markdown
+            # Telegram supports markdown
             text = (
                 f"💰 Ціна: *{int(price)}* грн.\n"
                 f"🏙️ Місто: *{city_name}*\n"
@@ -109,18 +116,8 @@ class MessageRenderer:
                 f"📐 Площа: *{square_feet}* кв.м.\n"
                 f"🏢 Поверх: *{floor}* з *{total_floors}*\n"
             )
-        elif platform == "viber":
-            # Viber has limited formatting capabilities
-            text = (
-                f"💰 Ціна: {int(price)} грн.\n"
-                f"🏙️ Місто: {city_name}\n"
-                f"📍 Адреса: {address}\n"
-                f"🛏️ Кіл-сть кімнат: {rooms_count}\n"
-                f"📐 Площа: {square_feet} кв.м.\n"
-                f"🏢 Поверх: {floor} з {total_floors}\n"
-            )
-        elif platform == "whatsapp":
-            # WhatsApp supports plain text with emoji
+        elif platform in ["viber", "whatsapp"]:
+            # Standard text formatting for platforms without markdown
             text = (
                 f"💰 Ціна: {int(price)} грн.\n"
                 f"🏙️ Місто: {city_name}\n"
@@ -130,7 +127,7 @@ class MessageRenderer:
                 f"🏢 Поверх: {floor} з {total_floors}\n"
             )
         else:
-            # Default formatting
+            # Default format for unknown platforms
             text = (
                 f"💰 Ціна: {int(price)} грн.\n"
                 f"🏙️ Місто: {city_name}\n"
@@ -142,157 +139,20 @@ class MessageRenderer:
 
         return text
 
-    @staticmethod
-    def create_ad_buttons(
-            platform: str,
-            ad_id: int,
-            resource_url: str,
-            images: Optional[List[str]] = None,
-            phones: Optional[List[str]] = None
-    ) -> Any:
-        """
-        Create platform-specific buttons/actions for an ad.
 
-        Args:
-            platform: Platform identifier (telegram, viber, whatsapp)
-            ad_id: Ad database ID
-            resource_url: Ad source URL
-            images: Optional list of image URLs
-            phones: Optional list of phone numbers
-
-        Returns:
-            Platform-specific buttons object or None
-        """
-        if platform == "telegram":
-            from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
-
-            markup = InlineKeyboardMarkup(row_width=2)
-
-            # Add gallery button if images are available
-            if images and len(images) > 0:
-                image_str = ",".join(images)
-                gallery_url = f"https://example.com/gallery?images={image_str}"
-                markup.add(InlineKeyboardButton(
-                    text="🖼 Більше фото",
-                    web_app=WebAppInfo(url=gallery_url)
-                ))
-
-            # Add phone button if phones are available
-            if phones and len(phones) > 0:
-                phone_str = ",".join(phones)
-                phone_webapp_url = f"https://example.com/phones?numbers={phone_str}"
-                markup.add(InlineKeyboardButton(
-                    text="📲 Подзвонити",
-                    web_app=WebAppInfo(url=phone_webapp_url)
-                ))
-
-            # Add favorite and full description buttons
-            markup.add(
-                InlineKeyboardButton("❤️ Додати в обрані", callback_data=f"add_fav:{ad_id}"),
-                InlineKeyboardButton("ℹ️ Повний опис", callback_data=f"show_more:{resource_url}")
-            )
-
-            return markup
-
-        elif platform == "viber":
-            keyboard = {
-                "Type": "keyboard",
-                "Buttons": [
-                    {
-                        "Columns": 3,
-                        "Rows": 1,
-                        "Text": "🖼 Більше фото",
-                        "ActionType": "reply",
-                        "ActionBody": f"more_photos:{ad_id}"
-                    },
-                    {
-                        "Columns": 3,
-                        "Rows": 1,
-                        "Text": "📲 Подзвонити",
-                        "ActionType": "reply",
-                        "ActionBody": f"call_contact:{ad_id}"
-                    },
-                    {
-                        "Columns": 3,
-                        "Rows": 1,
-                        "Text": "❤️ Додати в обрані",
-                        "ActionType": "reply",
-                        "ActionBody": f"add_fav:{ad_id}"
-                    },
-                    {
-                        "Columns": 3,
-                        "Rows": 1,
-                        "Text": "ℹ️ Повний опис",
-                        "ActionType": "reply",
-                        "ActionBody": f"show_more:{resource_url}"
-                    }
-                ]
-            }
-
-            return keyboard
-
-        elif platform == "whatsapp":
-            # WhatsApp doesn't support buttons, so we return instructions as text
-            instructions = (
-                "\n\nДоступні дії:\n"
-                f"- Відповідь 'фото {ad_id}' для більше фото\n"
-                f"- Відповідь 'тел {ad_id}' для номерів телефону\n"
-                f"- Відповідь 'обр {ad_id}' щоб додати в обрані\n"
-                f"- Відповідь 'опис {ad_id}' для повного опису"
-            )
-
-            return instructions
-
-        else:
-            return None
-
-
-class MessengerFactory:
-    """Factory for creating messenger instances for different platforms"""
-
-    @staticmethod
-    def create_messenger(platform: str) -> Optional['AbstractMessenger']:
-        """
-        Create a messenger instance for the specified platform.
-
-        Args:
-            platform: Platform identifier (telegram, viber, whatsapp)
-
-        Returns:
-            AbstractMessenger implementation for the platform or None if not supported
-        """
-        if platform == "telegram":
-            from .plugins.telegram import TelegramMessenger
-            from services.telegram_service.app.bot import bot
-            return TelegramMessenger(bot)
-
-        elif platform == "viber":
-            from .plugins.viber import ViberMessenger
-            from services.viber_service.app.bot import viber
-            return ViberMessenger(viber)
-
-        elif platform == "whatsapp":
-            from .plugins.whatsapp import WhatsAppMessenger
-            from services.whatsapp_service.app.bot import client
-            return WhatsAppMessenger(client)
-
-        else:
-            logger.error(f"Unsupported platform: {platform}")
-            return None
-
-
-def get_messenger_for_user(user_id: int) -> Tuple[Optional[str], Optional[str], Optional['AbstractMessenger']]:
+def get_messenger_for_user(user_id: int) -> Tuple[Optional[str], Optional[str], Optional[Any]]:
     """
-    Get messenger type, messenger-specific ID, and messenger instance for a user.
+    Determine the messenger type and platform-specific ID for a user.
 
     Args:
         user_id: Database user ID
 
     Returns:
-        Tuple of (messenger_type, messenger_id, messenger_instance) or (None, None, None) if not found
+        Tuple of (platform_name, platform_id, messenger_instance)
     """
     from common.db.database import execute_query
 
+    # Get user's messenger IDs from database
     sql = """
           SELECT telegram_id, viber_id, whatsapp_id
           FROM users
@@ -301,16 +161,23 @@ def get_messenger_for_user(user_id: int) -> Tuple[Optional[str], Optional[str], 
     user = execute_query(sql, [user_id], fetchone=True)
 
     if not user:
+        logger.warning(f"User with ID {user_id} not found in database")
         return None, None, None
 
-    # Check each platform in order of preference
+    # Try each platform in order of preference
     if user.get("telegram_id"):
-        return "telegram", str(user["telegram_id"]), MessengerFactory.create_messenger("telegram")
+        from .telegram_messaging import TelegramMessaging
+        from services.telegram_service.app.bot import bot
+        return "telegram", str(user["telegram_id"]), TelegramMessaging(bot)
 
     if user.get("viber_id"):
-        return "viber", user["viber_id"], MessengerFactory.create_messenger("viber")
+        from .viber_messaging import ViberMessaging
+        from services.viber_service.app.bot import viber
+        return "viber", user["viber_id"], ViberMessaging(viber)
 
     if user.get("whatsapp_id"):
-        return "whatsapp", user["whatsapp_id"], MessengerFactory.create_messenger("whatsapp")
+        from .whatsapp_messaging import WhatsAppMessaging
+        from services.whatsapp_service.app.bot import client
+        return "whatsapp", user["whatsapp_id"], WhatsAppMessaging(client)
 
     return None, None, None

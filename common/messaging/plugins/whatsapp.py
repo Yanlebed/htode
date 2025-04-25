@@ -1,4 +1,4 @@
-# common/messaging/plugins/whatsapp.py
+# common/messaging/plugins/whatsapp_messaging.py
 
 import logging
 import asyncio

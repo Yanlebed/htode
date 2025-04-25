@@ -1,4 +1,4 @@
-# common/messaging/plugins/viber.py
+# common/messaging/plugins/viber_messaging.py
 
 import logging
 import asyncio

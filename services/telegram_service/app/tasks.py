@@ -260,9 +260,9 @@ def send_subscription_notification(user_id, notification_type, data):
     try:
         # Get messenger type and ID
         from common.messaging.service import MessagingService
-        from common.messaging.telegram import TelegramMessenger
-        from common.messaging.viber import ViberMessenger
-        from common.messaging.whatsapp import WhatsAppMessenger
+        from common.messaging.telegram_messaging import TelegramMessenger
+        from common.messaging.viber_messaging import ViberMessenger
+        from common.messaging.whatsapp_messaging import WhatsAppMessenger
         from services.telegram_service.app.bot import bot
         from services.viber_service.app.bot import viber
         from services.whatsapp_service.app.bot import client as twilio_client

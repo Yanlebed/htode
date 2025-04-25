@@ -1,31 +1,44 @@
-"""
-Common messaging interface for all platform services.
-Defines the contract that all messaging implementations must follow.
-"""
+# common/messaging/interface.py
+
 from abc import ABC, abstractmethod
 from typing import Optional, List, Dict, Any, Union
 
 
 class MessagingInterface(ABC):
-    """Abstract base class defining the contract for all messaging platforms."""
+    """
+    Enhanced abstract interface for messaging platforms.
+    Provides a unified API for sending messages across different platforms.
+    """
+
+    @abstractmethod
+    def get_platform_name(self) -> str:
+        """
+        Get the name of the platform this implementation handles.
+
+        Returns:
+            Platform identifier (e.g., telegram, viber, whatsapp)
+        """
+        pass
 
     @abstractmethod
     async def send_text(
             self,
             user_id: str,
             text: str,
+            keyboard: Optional[Any] = None,
             **kwargs
-    ) -> Union[str, Dict[str, Any], None]:
+    ) -> Union[Any, None]:
         """
         Send a text message to a user.
 
         Args:
             user_id: Platform-specific user identifier
-            text: The message text to send
-            **kwargs: Platform-specific optional parameters
+            text: Message text to send
+            keyboard: Optional keyboard/buttons
+            **kwargs: Additional platform-specific options
 
         Returns:
-            Message ID or response object, or None if sending failed
+            Platform-specific response or None if failed
         """
         pass
 
@@ -35,19 +48,21 @@ class MessagingInterface(ABC):
             user_id: str,
             media_url: str,
             caption: Optional[str] = None,
+            keyboard: Optional[Any] = None,
             **kwargs
-    ) -> Union[str, Dict[str, Any], None]:
+    ) -> Union[Any, None]:
         """
         Send a media message to a user.
 
         Args:
             user_id: Platform-specific user identifier
             media_url: URL of the media to send
-            caption: Optional text caption for the media
-            **kwargs: Platform-specific optional parameters
+            caption: Optional caption text
+            keyboard: Optional keyboard/buttons
+            **kwargs: Additional platform-specific options
 
         Returns:
-            Message ID or response object, or None if sending failed
+            Platform-specific response or None if failed
         """
         pass
 
@@ -58,45 +73,71 @@ class MessagingInterface(ABC):
             text: str,
             options: List[Dict[str, str]],
             **kwargs
-    ) -> Union[str, Dict[str, Any], None]:
+    ) -> Union[Any, None]:
         """
         Send an interactive menu to a user.
 
         Args:
             user_id: Platform-specific user identifier
-            text: Menu title or description
-            options: List of menu options as dicts with at least 'text' and 'value' keys
-            **kwargs: Platform-specific optional parameters
+            text: Menu title or description text
+            options: List of options with 'text' and 'value' keys
+            **kwargs: Additional platform-specific options
 
         Returns:
-            Message ID or response object, or None if sending failed
+            Platform-specific response or None if failed
         """
         pass
 
     @abstractmethod
-    def sanitize_user_id(self, user_id: str) -> str:
+    async def format_user_id(self, user_id: str) -> str:
         """
-        Ensure user ID is in the proper format for this platform.
+        Format a user ID for the specific platform.
 
         Args:
-            user_id: User identifier that may need formatting
+            user_id: Raw user identifier
 
         Returns:
-            Properly formatted user ID
+            Properly formatted user ID for the platform
+        """
+        pass
+
+    @abstractmethod
+    async def send_ad(
+            self,
+            user_id: str,
+            ad_data: Dict[str, Any],
+            image_url: Optional[str] = None,
+            **kwargs
+    ) -> Union[Any, None]:
+        """
+        Send a real estate ad with platform-specific formatting.
+
+        Args:
+            user_id: Platform-specific user identifier
+            ad_data: Dictionary with ad information
+            image_url: Optional primary image URL
+            **kwargs: Additional platform-specific options
+
+        Returns:
+            Platform-specific response or None if failed
         """
         pass
 
     @classmethod
     @abstractmethod
-    def create_keyboard(cls, options: List[Dict[str, str]], **kwargs) -> Any:
+    def create_keyboard(
+            cls,
+            options: List[Dict[str, str]],
+            **kwargs
+    ) -> Any:
         """
-        Create a platform-specific keyboard/menu from standardized options.
+        Create a platform-specific keyboard from standardized options.
 
         Args:
-            options: List of menu options as dicts with at least 'text' and 'value' keys
-            **kwargs: Platform-specific keyboard parameters
+            options: List of options with 'text' and 'value' keys
+            **kwargs: Additional platform-specific parameters
 
         Returns:
-            A platform-specific keyboard object
+            Platform-specific keyboard object
         """
         pass
