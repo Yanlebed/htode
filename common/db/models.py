@@ -165,6 +165,41 @@ def batch_get_user_filters(user_ids):
     return results
 
 
+def get_db_user_id_by_telegram_id(messenger_id, messenger_type="telegram"):
+    """
+    Get database user ID from messenger-specific ID (telegram_id, viber_id, or whatsapp_id).
+
+    Args:
+        messenger_id: Platform-specific user ID (telegram_id, viber_id, or whatsapp_id)
+        messenger_type: Type of messenger ("telegram", "viber", or "whatsapp")
+
+    Returns:
+        Database user ID or None if not found
+    """
+    logger.info(f"Getting database user ID for {messenger_type} ID: {messenger_id}")
+
+    # Choose the appropriate SQL query based on messenger type
+    if messenger_type == "telegram":
+        sql = "SELECT id FROM users WHERE telegram_id = %s"
+    elif messenger_type == "viber":
+        sql = "SELECT id FROM users WHERE viber_id = %s"
+    elif messenger_type == "whatsapp":
+        sql = "SELECT id FROM users WHERE whatsapp_id = %s"
+    else:
+        logger.error(f"Invalid messenger type: {messenger_type}")
+        return None
+
+    # Execute the query
+    row = execute_query(sql, [messenger_id], fetchone=True)
+
+    if row:
+        logger.info(f"Found database user ID {row['id']} for {messenger_type} ID: {messenger_id}")
+        return row['id']
+
+    logger.warning(f"No database user found for {messenger_type} ID: {messenger_id}")
+    return None
+
+
 def find_users_for_ad(ad):
     """
     Finds users whose subscription filters match this ad.
@@ -630,7 +665,7 @@ def add_favorite_ad(user_id, ad_id):
 
     sql_insert = """
                  INSERT INTO favorite_ads (user_id, ad_id)
-                 VALUES (%s, %s) ON CONFLICT (user_id, ad_id) DO NOTHING -- if you have unique constraint    \
+                 VALUES (%s, %s) ON CONFLICT (user_id, ad_id) DO NOTHING -- if you have unique constraint     \
                  """
     execute_query(sql_insert, [user_id, ad_id])
 
