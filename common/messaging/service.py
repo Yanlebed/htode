@@ -52,29 +52,12 @@ class MessagingService:
         Returns:
             Tuple of (platform_name, platform_specific_id) or (None, None)
         """
-        from common.db.database import execute_query
+        from common.messaging.platform_utils import resolve_user_id
 
-        sql = """
-              SELECT telegram_id, viber_id, whatsapp_id
-              FROM users
-              WHERE id = %s
-              """
-        user = execute_query(sql, [user_id], fetchone=True)
+        # Use the centralized resolve_user_id function
+        _, platform_name, platform_id = resolve_user_id(user_id)
 
-        if not user:
-            return None, None
-
-        # Check each platform ID
-        if user.get("telegram_id"):
-            return "telegram", str(user["telegram_id"])
-
-        if user.get("viber_id"):
-            return "viber", user["viber_id"]
-
-        if user.get("whatsapp_id"):
-            return "whatsapp", user["whatsapp_id"]
-
-        return None, None
+        return platform_name, platform_id
 
     async def send_notification(
             self,
@@ -97,20 +80,23 @@ class MessagingService:
         Returns:
             True if sent successfully, False otherwise
         """
-        platform, platform_id = await self.get_user_platform(user_id)
+        from common.messaging.platform_utils import resolve_user_id, format_user_id_for_platform
 
-        if not platform or not platform_id:
+        # Get platform info using resolve_user_id
+        _, platform_name, platform_id = resolve_user_id(user_id)
+
+        if not platform_name or not platform_id:
             logger.warning(f"No messaging platform found for user {user_id}")
             return False
 
-        messenger = self.get_messenger(platform)
+        messenger = self.get_messenger(platform_name)
         if not messenger:
-            logger.error(f"No messenger implementation registered for platform {platform}")
+            logger.error(f"No messenger implementation registered for platform {platform_name}")
             return False
 
         try:
             # Format the user ID for the specific platform
-            formatted_id = await messenger.format_user_id(platform_id)
+            formatted_id = format_user_id_for_platform(platform_id, platform_name)
 
             if options:
                 # Send as a menu
@@ -124,7 +110,7 @@ class MessagingService:
 
             return True
         except Exception as e:
-            logger.error(f"Error sending notification to user {user_id} via {platform}: {e}")
+            logger.error(f"Error sending notification to user {user_id} via {platform_name}: {e}")
             return False
 
     async def send_ad(
@@ -146,26 +132,29 @@ class MessagingService:
         Returns:
             True if sent successfully, False otherwise
         """
-        platform, platform_id = await self.get_user_platform(user_id)
+        from common.messaging.platform_utils import resolve_user_id, format_user_id_for_platform
 
-        if not platform or not platform_id:
+        # Get platform info using resolve_user_id
+        _, platform_name, platform_id = resolve_user_id(user_id)
+
+        if not platform_name or not platform_id:
             logger.warning(f"No messaging platform found for user {user_id}")
             return False
 
-        messenger = self.get_messenger(platform)
+        messenger = self.get_messenger(platform_name)
         if not messenger:
-            logger.error(f"No messenger implementation registered for platform {platform}")
+            logger.error(f"No messenger implementation registered for platform {platform_name}")
             return False
 
         try:
             # Format the user ID for the specific platform
-            formatted_id = await messenger.format_user_id(platform_id)
+            formatted_id = format_user_id_for_platform(platform_id, platform_name)
 
             # Send the ad using platform-specific formatting
             await messenger.send_ad(formatted_id, ad_data, image_url, **kwargs)
             return True
         except Exception as e:
-            logger.error(f"Error sending ad to user {user_id} via {platform}: {e}")
+            logger.error(f"Error sending ad to user {user_id} via {platform_name}: {e}")
             return False
 
     @classmethod

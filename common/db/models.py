@@ -200,6 +200,40 @@ def get_db_user_id_by_telegram_id(messenger_id, messenger_type="telegram"):
     return None
 
 
+def get_platform_ids_for_user(user_id: int) -> dict:
+    """
+    Get all messaging platform IDs for a user.
+
+    Args:
+        user_id: Database user ID
+
+    Returns:
+        Dictionary with platform IDs (telegram_id, viber_id, whatsapp_id)
+    """
+    sql = """
+          SELECT telegram_id, viber_id, whatsapp_id
+          FROM users
+          WHERE id = %s
+          """
+    user = execute_query(sql, [user_id], fetchone=True)
+
+    if not user:
+        return {}
+
+    # Create a cleaned dictionary with only non-None values
+    platform_ids = {}
+    if user.get("telegram_id") is not None:
+        platform_ids["telegram_id"] = user["telegram_id"]
+
+    if user.get("viber_id") is not None:
+        platform_ids["viber_id"] = user["viber_id"]
+
+    if user.get("whatsapp_id") is not None:
+        platform_ids["whatsapp_id"] = user["whatsapp_id"]
+
+    return platform_ids
+
+
 def find_users_for_ad(ad):
     """
     Finds users whose subscription filters match this ad.
@@ -665,7 +699,7 @@ def add_favorite_ad(user_id, ad_id):
 
     sql_insert = """
                  INSERT INTO favorite_ads (user_id, ad_id)
-                 VALUES (%s, %s) ON CONFLICT (user_id, ad_id) DO NOTHING -- if you have unique constraint     \
+                 VALUES (%s, %s) ON CONFLICT (user_id, ad_id) DO NOTHING -- if you have unique constraint      \
                  """
     execute_query(sql_insert, [user_id, ad_id])
 

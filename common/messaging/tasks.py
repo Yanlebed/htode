@@ -470,46 +470,45 @@ def process_show_more_description(user_id, resource_url, message_id=None, platfo
                 logger.warning(f"No description found for resource {resource_url}")
                 return False
 
-            # Use the unified messaging service if possible
-            try:
-                # Convert string user_id to int if it's a numeric string
-                numeric_user_id = None
-                if isinstance(user_id, str) and user_id.isdigit():
-                    numeric_user_id = int(user_id)
-                elif isinstance(user_id, int):
-                    numeric_user_id = user_id
+            # Use the platform_utils to resolve user ID and platform info
+            from common.messaging.platform_utils import resolve_user_id, get_messenger_instance
 
-                # For database user ID, use the unified messaging service
-                if numeric_user_id is not None:
+            # Get database user ID, platform and platform-specific ID
+            db_user_id, platform_name, platform_id = resolve_user_id(user_id, platform)
+
+            # If we have a database user ID, try to use the unified messaging service
+            if db_user_id:
+                try:
                     success = await messaging_service.send_notification(
-                        user_id=numeric_user_id,
+                        user_id=db_user_id,
                         text=full_description
                     )
                     if success:
                         return True
+                except Exception as e:
+                    logger.warning(f"Error using messaging service for DB user {db_user_id}: {e}")
 
-                # For platform-specific user IDs
-                if platform:
-                    # Get platform-specific messenger through the abstraction layer
-                    messenger = messaging_service.get_messenger(platform)
-                    if messenger:
-                        formatted_id = await messenger.format_user_id(str(user_id))
-                        await messenger.send_text(formatted_id, full_description)
-                        return True
-
-                # If we're still here and have a message_id for Telegram, try to edit
-                if platform == "telegram" and message_id:
-                    from common.messaging.utils import safe_edit_message_telegram
-
-                    # Try to append the description to the current message
+            # If no success with unified service, try platform-specific approach
+            if platform_name and platform_id:
+                # For Telegram and if we have a message_id, try to edit the message
+                if platform_name == "telegram" and message_id:
                     try:
+                        from common.messaging.utils import safe_edit_message_telegram
                         from services.telegram_service.app.bot import bot
-                        message = await bot.get_message(chat_id=user_id, message_id=message_id)
+
+                        # Try to get the original message
+                        message = await bot.get_message(
+                            chat_id=platform_id,
+                            message_id=message_id
+                        )
                         original_content = message.caption or message.text or ""
+
+                        # Add the full description to the original content
                         new_content = original_content + "\n\n" + full_description
 
+                        # Try to edit the message
                         await safe_edit_message_telegram(
-                            chat_id=user_id,
+                            chat_id=platform_id,
                             message_id=message_id,
                             text=new_content,
                             parse_mode='Markdown',
@@ -517,22 +516,34 @@ def process_show_more_description(user_id, resource_url, message_id=None, platfo
                         )
                         return True
                     except Exception as e:
-                        logger.warning(f"Failed to edit message: {e}, falling back to new message")
+                        logger.warning(f"Failed to edit Telegram message: {e}, falling back to new message")
 
-                # As a last resort, use the unified send_message utility
-                from common.messaging.utils import safe_send_message
-                await safe_send_message(
-                    user_id=user_id,
-                    text=full_description,
-                    platform=platform
-                )
-                return True
+                # If editing failed or not applicable, send as a new message
+                # Get the messenger instance
+                messenger = get_messenger_instance(platform_name)
+                if messenger:
+                    # Format the user ID
+                    from common.messaging.platform_utils import format_user_id_for_platform
+                    formatted_id = format_user_id_for_platform(platform_id, platform_name)
 
-            except Exception as service_error:
-                logger.error(f"Error using messaging service: {service_error}")
-                # Continue to fallback methods
+                    # Send the message
+                    await messenger.send_text(
+                        user_id=formatted_id,
+                        text=full_description
+                    )
+                    return True
 
-            return False
+            # If we couldn't resolve the user ID or platform, use safe_send_message
+            # which will try its best to determine the right approach
+            from common.messaging.utils import safe_send_message
+            success = await safe_send_message(
+                user_id=user_id,
+                text=full_description,
+                platform=platform
+            )
+
+            return success
+
         except Exception as e:
             logger.error(f"Error processing show more description: {e}")
             return False
@@ -541,6 +552,7 @@ def process_show_more_description(user_id, resource_url, message_id=None, platfo
     try:
         return asyncio.run(process())
     except RuntimeError as e:
+        # Handle case where there's already an event loop
         logger.warning(f"RuntimeError in process_show_more_description: {e}")
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
