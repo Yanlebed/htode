@@ -470,95 +470,67 @@ def process_show_more_description(user_id, resource_url, message_id=None, platfo
                 logger.warning(f"No description found for resource {resource_url}")
                 return False
 
-            # Determine if this is a database user ID or platform-specific ID
-            db_user_id = None
-            if isinstance(user_id, int) or (isinstance(user_id, str) and user_id.isdigit()):
-                # This is likely a database user ID
-                db_user_id = int(user_id)
-            elif platform:
-                # Try to get database user ID from platform-specific ID
-                db_user_id = get_db_user_id_by_telegram_id(user_id, messenger_type=platform)
+            # Use the unified messaging service if possible
+            try:
+                # Convert string user_id to int if it's a numeric string
+                numeric_user_id = None
+                if isinstance(user_id, str) and user_id.isdigit():
+                    numeric_user_id = int(user_id)
+                elif isinstance(user_id, int):
+                    numeric_user_id = user_id
 
-            if db_user_id:
-                # We have a database user ID, use the unified messaging service
-                success = await messaging_service.send_notification(
-                    user_id=db_user_id,
-                    text=full_description
+                # For database user ID, use the unified messaging service
+                if numeric_user_id is not None:
+                    success = await messaging_service.send_notification(
+                        user_id=numeric_user_id,
+                        text=full_description
+                    )
+                    if success:
+                        return True
+
+                # For platform-specific user IDs
+                if platform:
+                    # Get platform-specific messenger through the abstraction layer
+                    messenger = messaging_service.get_messenger(platform)
+                    if messenger:
+                        formatted_id = await messenger.format_user_id(str(user_id))
+                        await messenger.send_text(formatted_id, full_description)
+                        return True
+
+                # If we're still here and have a message_id for Telegram, try to edit
+                if platform == "telegram" and message_id:
+                    from common.messaging.utils import safe_edit_message_telegram
+
+                    # Try to append the description to the current message
+                    try:
+                        from services.telegram_service.app.bot import bot
+                        message = await bot.get_message(chat_id=user_id, message_id=message_id)
+                        original_content = message.caption or message.text or ""
+                        new_content = original_content + "\n\n" + full_description
+
+                        await safe_edit_message_telegram(
+                            chat_id=user_id,
+                            message_id=message_id,
+                            text=new_content,
+                            parse_mode='Markdown',
+                            reply_markup=message.reply_markup
+                        )
+                        return True
+                    except Exception as e:
+                        logger.warning(f"Failed to edit message: {e}, falling back to new message")
+
+                # As a last resort, use the unified send_message utility
+                from common.messaging.utils import safe_send_message
+                await safe_send_message(
+                    user_id=user_id,
+                    text=full_description,
+                    platform=platform
                 )
-                return success
+                return True
 
-            # If we don't have a database user ID, try platform-specific approach
-            if platform == "telegram" and message_id:
-                # For Telegram, we can try to edit the existing message
-                from services.telegram_service.app.bot import bot
-                try:
-                    # Try to get the original message caption
-                    message = await bot.get_message(
-                        chat_id=user_id,
-                        message_id=message_id
-                    )
-                    original_caption = message.caption or message.text or ""
-
-                    # Add the full description
-                    new_caption = original_caption + "\n\n" + full_description
-
-                    # Edit the message
-                    await bot.edit_message_caption(
-                        chat_id=user_id,
-                        message_id=message_id,
-                        caption=new_caption,
-                        parse_mode='Markdown',
-                        reply_markup=message.reply_markup
-                    )
-                    return True
-                except Exception as e:
-                    logger.warning(f"Failed to edit Telegram message: {e}")
-                    # Fall back to sending a new message
-                    await bot.send_message(
-                        chat_id=user_id,
-                        text=full_description
-                    )
-                    return True
-            else:
-                # For other platforms, just send as a new message
-                # Detect platform from user ID format if not specified
-                detected_platform = platform
-                if not detected_platform:
-                    if isinstance(user_id, str):
-                        if user_id.startswith("whatsapp:"):
-                            detected_platform = "whatsapp"
-                        elif len(user_id) > 20:  # Viber IDs are typically long UUIDs
-                            detected_platform = "viber"
-                        else:
-                            detected_platform = "telegram"
-
-                # Send using platform-specific method
-                if detected_platform == "viber":
-                    from services.viber_service.app.bot import viber
-                    viber.send_messages(
-                        user_id,
-                        [TextMessage(text=full_description)]
-                    )
-                    return True
-                elif detected_platform == "whatsapp":
-                    from services.whatsapp_service.app.bot import client, TWILIO_PHONE_NUMBER
-                    # Ensure proper WhatsApp formatting
-                    if not user_id.startswith("whatsapp:"):
-                        user_id = f"whatsapp:{user_id}"
-
-                    client.messages.create(
-                        from_=TWILIO_PHONE_NUMBER,
-                        body=full_description,
-                        to=user_id
-                    )
-                    return True
-                elif detected_platform == "telegram":
-                    from services.telegram_service.app.bot import bot
-                    await bot.send_message(
-                        chat_id=user_id,
-                        text=full_description
-                    )
-                    return True
+            except Exception as service_error:
+                logger.error(f"Error using messaging service: {service_error}")
+                # Continue to fallback methods
 
             return False
         except Exception as e:
