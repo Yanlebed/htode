@@ -10,7 +10,13 @@ from aiogram.utils.exceptions import (
     InvalidQueryID, MessageToDeleteNotFound
 )
 from ..bot import bot
-from common.messaging.service import messaging_service
+from common.messaging.utils import (
+    safe_send_message as unified_send_message,
+    safe_send_media as unified_send_media,
+    safe_edit_message_telegram,
+    safe_answer_callback_query_telegram,
+    delete_message_safe_telegram
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +32,7 @@ async def safe_send_message(
 ) -> Optional[Message]:
     """
     Safely send a message with error handling and retries.
-    Now leverages the unified messaging service for better consistency.
+    This is a wrapper around the unified messaging utility.
 
     Args:
         chat_id: User or chat ID to send message to
@@ -40,69 +46,16 @@ async def safe_send_message(
     Returns:
         The sent Message object or None if all retries failed
     """
-    try:
-        # For backward compatibility, convert chat_id to string if it's an integer
-        user_id = str(chat_id)
+    kwargs = {
+        "parse_mode": parse_mode,
+        "reply_markup": reply_markup,
+        "disable_web_page_preview": disable_web_page_preview,
+        "retry_count": retry_count,
+        "retry_delay": retry_delay,
+        "platform": "telegram"
+    }
 
-        # Get the user's database ID (for messaging service)
-        from common.db.models import get_db_user_id_by_telegram_id
-        db_user_id = get_db_user_id_by_telegram_id(user_id)
-
-        if db_user_id:
-            # Use messaging service if we have a database user ID
-            kwargs = {
-                "parse_mode": parse_mode,
-                "reply_markup": reply_markup,
-                "disable_web_page_preview": disable_web_page_preview
-            }
-
-            success = await messaging_service.send_notification(
-                user_id=db_user_id,
-                text=text,
-                **kwargs
-            )
-
-            if success:
-                # If needed, we could fetch and return the sent message,
-                # but for now we'll return a simple indicator of success
-                return True
-
-        # Fall back to direct bot usage if no database user ID found
-        # or for backward compatibility
-        for attempt in range(retry_count):
-            try:
-                return await bot.send_message(
-                    chat_id=chat_id,
-                    text=text,
-                    parse_mode=parse_mode,
-                    reply_markup=reply_markup,
-                    disable_web_page_preview=disable_web_page_preview
-                )
-            except RetryAfter as e:
-                # Respect Telegram's rate limiting
-                logger.warning(f"Rate limit exceeded. Retrying in {e.timeout} seconds.")
-                await asyncio.sleep(e.timeout)
-                # Don't count this as an attempt since it's just rate limiting
-                continue
-            except (BotBlocked, ChatNotFound, UserDeactivated) as e:
-                # These are permanent errors, no need to retry
-                logger.warning(f"Permanent error when sending message to {chat_id}: {e}")
-                return None
-            except TelegramAPIError as e:
-                # For other Telegram API errors, we'll retry with backoff
-                if attempt < retry_count - 1:
-                    # Exponential backoff
-                    current_delay = retry_delay * (2 ** attempt)
-                    logger.warning(
-                        f"Failed to send message (attempt {attempt + 1}/{retry_count}): {e}. Retrying in {current_delay}s")
-                    await asyncio.sleep(current_delay)
-                else:
-                    logger.error(f"Failed to send message after {retry_count} attempts: {e}")
-                    return None
-
-    except Exception as e:
-        logger.error(f"Error in safe_send_message: {e}")
-        return None
+    return await unified_send_message(chat_id, text, **kwargs)
 
 
 async def safe_send_photo(
@@ -116,7 +69,7 @@ async def safe_send_photo(
 ) -> Optional[Message]:
     """
     Safely send a photo with error handling and retries.
-    Now uses the unified messaging service when possible.
+    This is a wrapper around the unified messaging utility.
 
     Args:
         chat_id: User or chat ID to send photo to
@@ -130,65 +83,53 @@ async def safe_send_photo(
     Returns:
         The sent Message object or None if all retries failed
     """
-    try:
-        # For backward compatibility, convert chat_id to string if it's an integer
-        user_id = str(chat_id)
+    # Only handle URL-based photos in the unified way
+    # For InputFile, use the original implementation
+    if isinstance(photo, str):
+        kwargs = {
+            "parse_mode": parse_mode,
+            "reply_markup": reply_markup,
+            "retry_count": retry_count,
+            "retry_delay": retry_delay,
+            "platform": "telegram"
+        }
 
-        # Get the user's database ID (for messaging service)
-        from common.db.models import get_db_user_id_by_telegram_id
-        db_user_id = get_db_user_id_by_telegram_id(user_id)
-
-        if db_user_id and isinstance(photo, str):
-            # Use messaging service if we have a database user ID and photo is a URL
-            kwargs = {
-                "parse_mode": parse_mode,
-                "reply_markup": reply_markup
-            }
-
-            success = await messaging_service.send_notification(
-                user_id=db_user_id,
-                text=caption,
-                image_url=photo,
-                **kwargs
-            )
-
-            if success:
-                return True
-
-        # Fall back to direct bot usage
-        for attempt in range(retry_count):
-            try:
-                return await bot.send_photo(
-                    chat_id=chat_id,
-                    photo=photo,
-                    caption=caption,
-                    parse_mode=parse_mode,
-                    reply_markup=reply_markup
-                )
-            except RetryAfter as e:
-                logger.warning(f"Rate limit exceeded. Retrying in {e.timeout} seconds.")
-                await asyncio.sleep(e.timeout)
-                continue
-            except (BotBlocked, ChatNotFound, UserDeactivated) as e:
-                logger.warning(f"Permanent error when sending photo to {chat_id}: {e}")
-                return None
-            except TelegramAPIError as e:
-                if attempt < retry_count - 1:
-                    current_delay = retry_delay * (2 ** attempt)
-                    logger.warning(
-                        f"Failed to send photo (attempt {attempt + 1}/{retry_count}): {e}. Retrying in {current_delay}s")
-                    await asyncio.sleep(current_delay)
-                else:
-                    logger.error(f"Failed to send photo after {retry_count} attempts: {e}")
+        return await unified_send_media(chat_id, photo, caption, **kwargs)
+    else:
+        # Fall back to original implementation for InputFile
+        try:
+            for attempt in range(retry_count):
+                try:
+                    return await bot.send_photo(
+                        chat_id=chat_id,
+                        photo=photo,
+                        caption=caption,
+                        parse_mode=parse_mode,
+                        reply_markup=reply_markup
+                    )
+                except RetryAfter as e:
+                    logger.warning(f"Rate limit exceeded. Retrying in {e.timeout} seconds.")
+                    await asyncio.sleep(e.timeout)
+                    continue
+                except (BotBlocked, ChatNotFound, UserDeactivated) as e:
+                    logger.warning(f"Permanent error when sending photo to {chat_id}: {e}")
                     return None
+                except TelegramAPIError as e:
+                    if attempt < retry_count - 1:
+                        current_delay = retry_delay * (2 ** attempt)
+                        logger.warning(
+                            f"Failed to send photo (attempt {attempt + 1}/{retry_count}): {e}. "
+                            f"Retrying in {current_delay}s"
+                        )
+                        await asyncio.sleep(current_delay)
+                    else:
+                        logger.error(f"Failed to send photo after {retry_count} attempts: {e}")
+                        return None
 
-    except Exception as e:
-        logger.error(f"Error in safe_send_photo: {e}")
-        return None
+        except Exception as e:
+            logger.error(f"Error in safe_send_photo with InputFile: {e}")
+            return None
 
-
-# Keep other Telegram-specific utility functions
-# These remain unchanged because they handle Telegram-specific features
 
 async def safe_edit_message(
         chat_id: Union[int, str],
@@ -198,22 +139,18 @@ async def safe_edit_message(
         reply_markup: Optional[InlineKeyboardMarkup] = None,
         disable_web_page_preview: bool = False
 ) -> Optional[Message]:
-    """Safely edit a message with error handling."""
-    try:
-        return await bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=message_id,
-            text=text,
-            parse_mode=parse_mode,
-            reply_markup=reply_markup,
-            disable_web_page_preview=disable_web_page_preview
-        )
-    except MessageNotModified:
-        logger.debug("Message not modified (content is the same)")
-        return None
-    except TelegramAPIError as e:
-        logger.error(f"Failed to edit message: {e}")
-        return None
+    """
+    Safely edit a message with error handling.
+    This is a wrapper around the platform-specific function.
+    """
+    return await safe_edit_message_telegram(
+        chat_id=chat_id,
+        message_id=message_id,
+        text=text,
+        parse_mode=parse_mode,
+        reply_markup=reply_markup,
+        disable_web_page_preview=disable_web_page_preview
+    )
 
 
 async def safe_answer_callback_query(
@@ -221,33 +158,26 @@ async def safe_answer_callback_query(
         text: Optional[str] = None,
         show_alert: bool = False
 ) -> bool:
-    """Safely answer a callback query with error handling."""
-    try:
-        await bot.answer_callback_query(
-            callback_query_id=callback_query_id,
-            text=text,
-            show_alert=show_alert
-        )
-        return True
-    except InvalidQueryID:
-        logger.warning("Invalid query ID (callback is too old)")
-        return False
-    except TelegramAPIError as e:
-        logger.error(f"Failed to answer callback query: {e}")
-        return False
+    """
+    Safely answer a callback query with error handling.
+    This is a wrapper around the platform-specific function.
+    """
+    return await safe_answer_callback_query_telegram(
+        callback_query_id=callback_query_id,
+        text=text,
+        show_alert=show_alert
+    )
 
 
 async def delete_message_safe(
         chat_id: Union[int, str],
         message_id: int
 ) -> bool:
-    """Safely delete a message with error handling."""
-    try:
-        await bot.delete_message(chat_id=chat_id, message_id=message_id)
-        return True
-    except MessageToDeleteNotFound:
-        logger.debug("Message to delete not found (already deleted)")
-        return True
-    except TelegramAPIError as e:
-        logger.error(f"Failed to delete message: {e}")
-        return False
+    """
+    Safely delete a message with error handling.
+    This is a wrapper around the platform-specific function.
+    """
+    return await delete_message_safe_telegram(
+        chat_id=chat_id,
+        message_id=message_id
+    )
