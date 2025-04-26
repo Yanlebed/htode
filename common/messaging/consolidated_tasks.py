@@ -6,10 +6,9 @@ import asyncio
 from typing import Dict, Any, List, Union
 
 from common.celery_app import celery_app
-from common.db.database import execute_query
-from common.db.models import (
-    get_full_ad_data, get_ad_images, get_full_ad_description
-)
+from common.db.session import db_session
+from common.db.models.ad import Ad
+from common.db.repositories.ad_repository import AdRepository
 from common.messaging.unified_platform_utils import safe_send_message
 from common.messaging.service import messaging_service
 
@@ -82,14 +81,18 @@ def send_property_notification(user_id: Union[int, str], ad_id: int, platform: s
 
     async def send():
         try:
-            # Get complete ad data
-            ad_data = get_full_ad_data(ad_id)
+            # Get complete ad data using repository
+            with db_session() as db:
+                ad_data = AdRepository.get_full_ad_data(db, ad_id)
+
             if not ad_data:
                 logger.error(f"Ad data not found for ad_id: {ad_id}")
                 return False
 
             # Get the primary image
-            images = get_ad_images(ad_id)
+            with db_session() as db:
+                images = AdRepository.get_ad_images(db, ad_id)
+
             primary_image = images[0] if images else None
 
             # Send via the unified messaging service
@@ -153,20 +156,25 @@ def send_subscription_reminder():
         # Check for subscriptions expiring in 3, 2, and 1 days
         for days in [3, 2, 1]:
             # Find users whose subscription expires in exactly `days` days
-            sql = """
-                  SELECT id, subscription_until
-                  FROM users
-                  WHERE subscription_until IS NOT NULL
-                    AND subscription_until > NOW()
-                    AND subscription_until < NOW() + interval '%s days 1 hour'
-                    AND subscription_until \
-                      > NOW() + interval '%s days'
-                  """
-            users = execute_query(sql, [days, days - 1], fetch=True)
+            with db_session() as db:
+                # Use repository to find users with expiring subscriptions
+                from sqlalchemy import func
+                from datetime import datetime, timedelta
+                from common.db.models.user import User
+
+                future_date = datetime.now() + timedelta(days=days, hours=1)
+                past_date = datetime.now() + timedelta(days=days - 1)
+
+                users = db.query(User.id, User.subscription_until).filter(
+                    User.subscription_until.isnot(None),
+                    User.subscription_until > datetime.now(),
+                    User.subscription_until < future_date,
+                    User.subscription_until > past_date
+                ).all()
 
             for user in users:
-                user_id = user["id"]
-                end_date = user["subscription_until"].strftime("%d.%m.%Y")
+                user_id = user.id
+                end_date = user.subscription_until.strftime("%d.%m.%Y")
 
                 # Determine the template based on days remaining
                 if days == 1:
@@ -200,17 +208,16 @@ def send_subscription_reminder():
                 reminders_sent += 1
 
         # Also notify on the day of expiration
-        sql_today = """
-                    SELECT id, subscription_until
-                    FROM users
-                    WHERE subscription_until IS NOT NULL
-                      AND DATE (subscription_until) = CURRENT_DATE
-                    """
-        today_users = execute_query(sql_today, fetch=True)
+        with db_session() as db:
+            from datetime import date
+            users_today = db.query(User.id, User.subscription_until).filter(
+                User.subscription_until.isnot(None),
+                func.date(User.subscription_until) == date.today()
+            ).all()
 
-        for user in today_users:
-            user_id = user["id"]
-            end_date = user["subscription_until"].strftime("%d.%m.%Y %H:%M")
+        for user in users_today:
+            user_id = user.id
+            end_date = user.subscription_until.strftime("%d.%m.%Y %H:%M")
 
             # Send notification
             send_notification.delay(
@@ -282,8 +289,12 @@ def get_description_and_notify(user_id: Union[int, str], resource_url: str, plat
 
     async def process():
         try:
-            # Get the full description
-            description = get_full_ad_description(resource_url)
+            # Get the full description using repository
+            with db_session() as db:
+                # First get the ad by resource URL
+                ad = AdRepository.get_by_resource_url(db, resource_url)
+                description = ad.description if ad else None
+
             if not description:
                 logger.warning(f"No description found for resource {resource_url}")
                 await safe_send_message(
@@ -328,11 +339,16 @@ def process_new_listings(ad_ids: List[int], max_notifications_per_user: int = 5)
         ad_ids: List of new ad IDs
         max_notifications_per_user: Maximum notifications to send to each user
     """
-    from common.db.models import batch_find_users_for_ads
-
     try:
         # Find matching users for all ads
-        matching_users = batch_find_users_for_ads(ad_ids)
+        matching_users = {}
+
+        with db_session() as db:
+            for ad_id in ad_ids:
+                ad = db.query(Ad).get(ad_id)
+                if ad:
+                    # Use the repository to find users for this ad
+                    matching_users[ad_id] = AdRepository.find_users_for_ad(db, ad)
 
         # Track notifications sent to each user to avoid spamming
         notifications_sent = {}
