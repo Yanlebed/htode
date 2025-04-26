@@ -1,6 +1,6 @@
 # common/flows/__init__.py
 
-from common.messaging.flow_builder import flow_library
+from common.messaging.unified_flow import flow_library
 
 # Import all flows to ensure they're registered
 from .subscription_flow import subscription_flow

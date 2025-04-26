@@ -13,7 +13,7 @@ from common.db.models import (
 )
 from common.config import GEO_ID_MAPPING, get_key_by_value
 from common.celery_app import celery_app
-from common.messaging.flow_builder import MessageFlow, FlowContext, flow_library
+from common.messaging.unified_flow import MessageFlow, FlowContext, flow_library
 
 logger = logging.getLogger(__name__)
 

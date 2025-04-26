@@ -5,8 +5,8 @@ from aiogram import types
 from aiogram.dispatcher import FSMContext
 
 from .bot import dp, bot
-from common.messaging.flow_builder import flow_library
-from common.messaging.flow_integration_helper import (
+from common.messaging.unified_flow import flow_library
+from common.messaging.unified_flow import (
     check_and_process_flow,
     process_flow_action,
     show_available_flows
