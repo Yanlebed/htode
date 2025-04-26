@@ -242,7 +242,7 @@ class FlowLibrary:
         """
         return self.flows.get(name)
 
-    def start_flow(self, name: str, user_id: Union[str, int], platform: str):
+    async def start_flow(self, name: str, user_id: Union[str, int], platform: str):
         """
         Start a flow for a user.
 
@@ -262,7 +262,7 @@ class FlowLibrary:
         await flow.start(user_id, platform)
         return True
 
-    def process_message_in_flow(self, name: str, user_id: Union[str, int], platform: str, message: str):
+    async def process_message_in_flow(self, name: str, user_id: Union[str, int], platform: str, message: str):
         """
         Process a message in a specific flow.
 
@@ -358,4 +358,18 @@ async def process_phone(user_id, platform, message, flow_data):
     # Send code instructions
     await safe_send_message(
         user_id=user_id,
-        text=f"Код
+        text=f"Код підтвердження відправлено на номер {phone_number}.\n\n"
+             f"⚠️ Для тестування, ось ваш код: {code}\n\n"
+             "У реальному додатку код буде надіслано через SMS.",
+        platform=platform
+    )
+
+    # Return data to be stored in flow
+    return {"phone_number": phone_number}
+
+
+phone_flow.add_state("waiting_for_phone", request_phone)
+phone_flow.add_state("waiting_for_code", process_phone)
+phone_flow.add_transition("waiting_for_phone", "waiting_for_code", lambda msg, data: len(msg) > 10)
+
+flow_library.register_flow(phone_flow)
