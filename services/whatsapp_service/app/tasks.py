@@ -1,48 +1,24 @@
 # services/whatsapp_service/app/tasks.py
-
 import logging
 from datetime import datetime
-
 from common.celery_app import celery_app
 from common.db.database import execute_query
-from common.messaging.tasks import (
-    send_ad_with_extra_buttons as unified_send_ad,
-    send_subscription_notification as unified_send_notification
-)
+from common.messaging.task_registry import register_platform_tasks
 from .bot import client, TWILIO_PHONE_NUMBER
 
 logger = logging.getLogger(__name__)
 
+# Register standard messaging tasks for WhatsApp
+registered_tasks = register_platform_tasks(
+    platform_name="whatsapp",
+    task_module_path="whatsapp_service.app.tasks"
+)
 
-# Redirect to unified implementation
-@celery_app.task(name='whatsapp_service.app.tasks.send_ad_with_extra_buttons')
-def send_ad_with_extra_buttons(user_id, text, s3_image_url, resource_url, ad_id, ad_external_id):
-    """
-    Redirects to the unified send_ad_with_extra_buttons task.
-    Specifies 'whatsapp' as the platform for proper handling.
-    Kept for backward compatibility.
-    """
-    return unified_send_ad.delay(
-        user_id=user_id,
-        text=text,
-        s3_image_url=s3_image_url,
-        resource_url=resource_url,
-        ad_id=ad_id,
-        ad_external_id=ad_external_id,
-        platform="whatsapp"
-    )
+# Access the registered tasks for direct use if needed
+send_ad_with_extra_buttons = registered_tasks['send_ad_with_extra_buttons']
+send_subscription_notification = registered_tasks['send_subscription_notification']
 
-
-# Redirect to unified implementation
-@celery_app.task(name='whatsapp_service.app.tasks.send_subscription_notification')
-def send_subscription_notification(user_id, notification_type, data):
-    """
-    Redirects to the unified send_subscription_notification task.
-    Kept for backward compatibility.
-    """
-    return unified_send_notification.delay(user_id, notification_type, data)
-
-
+# Keep WhatsApp-specific tasks that have no common equivalent
 @celery_app.task(name='whatsapp_service.app.tasks.check_template_status')
 def check_template_status():
     """
@@ -81,8 +57,8 @@ def check_template_status():
                         "Please review and update the template."
                     )
 
-                    # Use unified task to send the notification
-                    unified_send_notification.delay(
+                    # Use the registered task to send the notification
+                    send_subscription_notification.delay(
                         user_id=admin_id,
                         notification_type="template_rejected",
                         data={"text": notification_text}
