@@ -6,6 +6,25 @@ from typing import Tuple, Optional, Union, Dict, Any
 logger = logging.getLogger(__name__)
 
 
+def format_user_id_for_platform(user_id: str, platform: str) -> str:
+    """
+    Format a user ID according to platform requirements.
+    Centralized implementation to avoid duplication.
+
+    Args:
+        user_id: Raw user identifier
+        platform: Target platform (telegram, viber, whatsapp)
+
+    Returns:
+        Formatted user identifier
+    """
+    if platform == "whatsapp" and not user_id.startswith("whatsapp:"):
+        return f"whatsapp:{user_id}"
+
+    # Other platforms don't need special formatting
+    return user_id
+
+
 def detect_platform_from_id(user_id: str) -> Tuple[str, str]:
     """
     Detect messaging platform from user ID format.
@@ -25,24 +44,6 @@ def detect_platform_from_id(user_id: str) -> Tuple[str, str]:
     else:
         # Default to Telegram for numeric IDs and other formats
         return "telegram", user_id_str
-
-
-def format_user_id_for_platform(user_id: str, platform: str) -> str:
-    """
-    Format a user ID for a specific platform.
-
-    Args:
-        user_id: Raw user identifier
-        platform: Platform name (telegram, viber, whatsapp)
-
-    Returns:
-        Properly formatted user ID for the platform
-    """
-    if platform == "whatsapp" and not user_id.startswith("whatsapp:"):
-        return f"whatsapp:{user_id}"
-
-    # Other platforms don't need special formatting
-    return user_id
 
 
 def resolve_user_id(user_id: Union[int, str], platform: Optional[str] = None) -> Tuple[

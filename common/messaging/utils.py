@@ -77,25 +77,6 @@ class MessageFormatter:
 
 
 # --- Platform Detection and Resolution Functions ---
-
-def format_user_id_for_platform(user_id: str, platform: str) -> str:
-    """
-    Format a user ID according to platform requirements.
-
-    Args:
-        user_id: Raw user identifier
-        platform: Target platform (telegram, viber, whatsapp)
-
-    Returns:
-        Formatted user identifier
-    """
-    if platform == "whatsapp" and not user_id.startswith("whatsapp:"):
-        return f"whatsapp:{user_id}"
-
-    # Other platforms don't need special formatting
-    return user_id
-
-
 def resolve_user_id(user_id: Union[int, str], platform: Optional[str] = None) -> Tuple[
     Optional[int], Optional[str], Optional[str]]:
     """
