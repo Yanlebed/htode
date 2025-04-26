@@ -1,6 +1,6 @@
 # services/telegram_service/app/tasks.py
-import asyncio
 import logging
+import asyncio
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, MediaGroup, CallbackQuery, WebAppInfo
 from common.celery_app import celery_app
 from .bot import bot, dp
@@ -9,45 +9,23 @@ from .utils.message_utils import (
     safe_answer_callback_query,
     delete_message_safe
 )
-from common.messaging.tasks import (
-    send_ad_with_extra_buttons as unified_send_ad,
-    send_subscription_notification as unified_send_notification,
-    check_expiring_subscriptions as unified_check_subscriptions,
-    process_show_more_description as unified_process_show_more
-)
+from common.messaging.task_registry import register_platform_tasks
+from common.messaging.tasks import process_show_more_description as unified_process_show_more
 
 logger = logging.getLogger(__name__)
 
+# Register standard messaging tasks for Telegram
+registered_tasks = register_platform_tasks(
+    platform_name="telegram",
+    task_module_path="telegram_service.app.tasks"
+)
 
-# Redirect to unified implementation
-@celery_app.task(name='telegram_service.app.tasks.send_subscription_reminders')
-def send_subscription_reminders():
-    """
-    Redirects to the unified check_expiring_subscriptions task.
-    Kept for backward compatibility.
-    """
-    return unified_check_subscriptions.delay()
+# Access the registered tasks for direct use if needed
+send_ad_with_extra_buttons = registered_tasks['send_ad_with_extra_buttons']
+send_subscription_notification = registered_tasks['send_subscription_notification']
+check_expiring_subscriptions = registered_tasks['check_expiring_subscriptions']
 
-
-# Redirect to unified implementation
-@celery_app.task(name='telegram_service.app.tasks.send_ad_with_extra_buttons')
-def send_ad_with_extra_buttons(user_id, text, s3_image_url, resource_url, ad_id, ad_external_id):
-    """
-    Redirects to the unified send_ad_with_extra_buttons task.
-    Specifies 'telegram' as the platform for proper handling.
-    Kept for backward compatibility.
-    """
-    return unified_send_ad.delay(
-        user_id=user_id,
-        text=text,
-        s3_image_url=s3_image_url,
-        resource_url=resource_url,
-        ad_id=ad_id,
-        ad_external_id=ad_external_id,
-        platform="telegram"
-    )
-
-
+# This handler needs to remain in the Telegram service as it's tied to the callback query handler
 @dp.callback_query_handler(lambda c: c.data.startswith("show_more:"))
 async def handle_show_more(callback_query: CallbackQuery):
     """
@@ -79,23 +57,3 @@ async def handle_show_more(callback_query: CallbackQuery):
         message_id=callback_query.message.message_id,
         platform="telegram"
     )
-
-
-# Redirect to unified implementation
-@celery_app.task(name='telegram_service.app.tasks.check_expiring_subscriptions')
-def check_expiring_subscriptions():
-    """
-    Redirects to the unified check_expiring_subscriptions task.
-    Kept for backward compatibility.
-    """
-    return unified_check_subscriptions.delay()
-
-
-# Redirect to unified implementation
-@celery_app.task(name='telegram_service.app.tasks.send_subscription_notification')
-def send_subscription_notification(user_id, notification_type, data):
-    """
-    Redirects to the unified send_subscription_notification task.
-    Kept for backward compatibility.
-    """
-    return unified_send_notification.delay(user_id, notification_type, data)
