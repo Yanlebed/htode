@@ -32,6 +32,7 @@ class User(Base):
     filters = relationship("UserFilter", back_populates="user", cascade="all, delete-orphan")
     favorites = relationship("FavoriteAd", back_populates="user", cascade="all, delete-orphan")
     payment_orders = relationship("PaymentOrder", back_populates="user", cascade="all, delete-orphan")
+    verification_codes = relationship("VerificationCode", back_populates="user", cascade="all, delete-orphan")
 
     @property
     def is_subscription_active(self) -> bool:

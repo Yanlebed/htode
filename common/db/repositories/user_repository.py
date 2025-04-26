@@ -85,3 +85,12 @@ class UserRepository:
         user.last_active = datetime.now()
         db.commit()
         return True
+
+    @staticmethod
+    def create_user(db: Session, user_data: dict) -> User:
+        """Create a new user"""
+        user = User(**user_data)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        return user
