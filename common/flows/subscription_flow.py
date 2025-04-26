@@ -11,7 +11,7 @@ from common.db.models import (
     get_subscription_data_for_user
 )
 from common.config import GEO_ID_MAPPING, get_key_by_value
-from common.messaging.flow_builder import MessageFlow, FlowContext, flow_library
+from common.messaging.unified_flow import MessageFlow, FlowContext, flow_library
 
 logger = logging.getLogger(__name__)
 
