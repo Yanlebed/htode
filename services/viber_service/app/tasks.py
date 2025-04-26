@@ -1,10 +1,7 @@
 # services/viber_service/app/tasks.py
 import logging
-from datetime import datetime
 from common.celery_app import celery_app
-from common.db.database import execute_query
 from common.messaging.task_registry import register_platform_tasks
-from .bot import viber
 
 logger = logging.getLogger(__name__)
 
@@ -14,20 +11,22 @@ registered_tasks = register_platform_tasks(
     task_module_path="viber_service.app.tasks"
 )
 
-# Access the registered tasks for direct use if needed
+# Export the registered tasks for direct use
 send_ad_with_extra_buttons = registered_tasks['send_ad_with_extra_buttons']
 send_subscription_notification = registered_tasks['send_subscription_notification']
 
-# Keep Viber-specific tasks that have no common equivalent
+
+# Keep Viber-specific task that has no common equivalent
 @celery_app.task(name='viber_service.app.tasks.check_expired_conversations')
 def check_expired_conversations():
     """
     Check for expired Viber conversations and clean up.
-    This is Viber-specific and doesn't have an equivalent in other platforms,
-    so it remains a standalone task.
+    This is Viber-specific and doesn't have an equivalent in other platforms.
 
     Viber conversations expire after 24 hours, so we need to handle this.
     """
+    from common.db.database import execute_query
+
     logger.info("Checking for expired Viber conversations")
 
     try:
@@ -56,14 +55,14 @@ def check_expired_conversations():
                          """
             execute_query(update_sql, [user_id])
 
-            # Optionally send a reminder message via another channel if available
+            # Send a reminder message via another channel if available
             try:
                 # Check if user has other messaging channels
                 check_sql = """
                             SELECT telegram_id, whatsapp_id
                             FROM users
-                            WHERE id = %s \
-                              AND (telegram_id IS NOT NULL OR whatsapp_id IS NOT NULL) \
+                            WHERE id = %s
+                              AND (telegram_id IS NOT NULL OR whatsapp_id IS NOT NULL)
                             """
                 other_channels = execute_query(check_sql, [user_id], fetchone=True)
 
@@ -73,7 +72,7 @@ def check_expired_conversations():
                         "будь ласка, напишіть будь-яке повідомлення нашому боту."
                     )
 
-                    # Use the registered task to send the notification
+                    # Use the unified task to send the notification
                     send_subscription_notification.delay(
                         user_id=user_id,
                         notification_type="conversation_expired",
