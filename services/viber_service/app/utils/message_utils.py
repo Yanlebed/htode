@@ -1,18 +1,14 @@
 # services/viber_service/app/utils/message_utils.py
 
 import logging
-import asyncio
 from typing import Optional, Dict, Any
-from viberbot.api.messages import TextMessage, PictureMessage, KeyboardMessage
 from ..bot import viber
 from common.messaging.utils import (
     safe_send_message as unified_send_message,
     safe_send_media as unified_send_media
 )
-from common.utils.retry_utils import NETWORK_EXCEPTIONS
 
 logger = logging.getLogger(__name__)
-
 
 async def safe_send_message(
         user_id: str,
