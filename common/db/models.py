@@ -699,7 +699,7 @@ def add_favorite_ad(user_id, ad_id):
 
     sql_insert = """
                  INSERT INTO favorite_ads (user_id, ad_id)
-                 VALUES (%s, %s) ON CONFLICT (user_id, ad_id) DO NOTHING -- if you have unique constraint      \
+                 VALUES (%s, %s) ON CONFLICT (user_id, ad_id) DO NOTHING -- if you have unique constraint       \
                  """
     execute_query(sql_insert, [user_id, ad_id])
 
@@ -864,3 +864,114 @@ def warm_cache_for_user(user_id):
         batch_get_full_ad_data(ad_ids)
 
     logger.info(f"Cache warmed for user_id: {user_id}")
+
+
+def start_free_subscription_of_user(user_id: int) -> bool:
+    """
+    Start or extend a user's free subscription period for 7 days.
+
+    Args:
+        user_id: Database user ID
+
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        from datetime import datetime, timedelta
+        free_until = (datetime.now() + timedelta(days=7)).isoformat()
+
+        sql = """
+              UPDATE users
+              SET free_until = %s
+              WHERE id = %s
+              """
+        execute_query(sql, [free_until, user_id], commit=True)
+
+        # Invalidate cache
+        cache_key = f"user_subscription:{user_id}"
+        redis_client.delete(cache_key)
+
+        logger.info(f"Started free subscription for user {user_id}")
+        return True
+    except Exception as e:
+        logger.error(f"Error starting free subscription for user {user_id}: {e}")
+        return False
+
+
+def get_subscription_until_for_user(user_id: int, free: bool = False) -> Optional[str]:
+    """
+    Get the subscription expiration date for a user.
+
+    Args:
+        user_id: Database user ID
+        free: If True, returns free_until date, otherwise returns subscription_until date
+
+    Returns:
+        Subscription expiration date as string or None if not found
+    """
+    cache_key = f"user_subscription:{user_id}:{free}"
+    cached = redis_client.get(cache_key)
+
+    if cached:
+        return cached.decode('utf-8')
+
+    try:
+        field = "free_until" if free else "subscription_until"
+        sql = f"SELECT {field} FROM users WHERE id = %s"
+        result = execute_query(sql, [user_id], fetchone=True)
+
+        if result and result[field]:
+            date_value = result[field]
+            if isinstance(date_value, datetime):
+                formatted_date = date_value.strftime("%d.%m.%Y")
+            else:
+                formatted_date = str(date_value)
+
+            # Cache for 10 minutes
+            redis_client.set(cache_key, formatted_date, ex=600)
+            return formatted_date
+
+        return None
+    except Exception as e:
+        logger.error(f"Error getting subscription date for user {user_id}: {e}")
+        return None
+
+
+def get_ad_images(ad_id: Union[int, Dict[str, Any]]) -> List[str]:
+    """
+    Get all images associated with an ad.
+
+    Args:
+        ad_id: Either the database ID of the ad or the ad dictionary with an 'id' key
+
+    Returns:
+        List of image URLs
+    """
+    try:
+        # Handle either an ad dict or direct ad_id
+        if isinstance(ad_id, dict):
+            ad_id = ad_id.get('id')
+
+        if not ad_id:
+            return []
+
+        # Cache key for this query
+        cache_key = f"ad_images:{ad_id}"
+        cached = redis_client.get(cache_key)
+        if cached:
+            return json.loads(cached)
+
+        # Query database for images
+        sql = "SELECT image_url FROM ad_images WHERE ad_id = %s"
+        rows = execute_query(sql, [ad_id], fetch=True)
+
+        if rows:
+            urls = [row["image_url"] for row in rows]
+            # Cache for 1 hour (images rarely change)
+            redis_client.set(cache_key, json.dumps(urls), ex=3600)
+            return urls
+
+        return []
+    except Exception as e:
+        logger.error(f"Error getting ad images: {e}")
+        return []
