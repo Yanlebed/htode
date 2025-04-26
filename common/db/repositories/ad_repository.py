@@ -1,14 +1,18 @@
-# common/db/repositories/ad_repository.py
+# common/db/repositories/ad_repository.py (Updated)
 from typing import List, Optional, Dict, Any, Union
 import decimal
 import json
-from datetime import datetime
+import logging
+from datetime import datetime, timedelta
 
-from sqlalchemy import and_, or_, not_
+from sqlalchemy import and_, or_, not_, text
 from sqlalchemy.orm import Session, joinedload
 
 from common.db.models.ad import Ad, AdImage, AdPhone
 from common.utils.cache import redis_cache, redis_client, CacheTTL
+from common.config import GEO_ID_MAPPING, get_key_by_value
+
+logger = logging.getLogger(__name__)
 
 
 class AdRepository:
@@ -128,3 +132,155 @@ class AdRepository:
         """Get full ad description by resource URL"""
         ad = db.query(Ad).filter(Ad.resource_url == resource_url).first()
         return ad.description if ad else None
+
+    @staticmethod
+    @redis_cache("ads_period", ttl=300)  # 5 minute cache
+    def fetch_ads_for_period(db: Session, filters: Dict[str, Any], days: int, limit: int = 3) -> List[Ad]:
+        """
+        Query ads table, matching the user's filters,
+        for ads from the last `days` days. Return up to `limit` ads.
+
+        Args:
+            db: Database session
+            filters: Dictionary of filter criteria
+            days: Number of days to look back
+            limit: Maximum number of ads to return
+
+        Returns:
+            List of matching Ad objects
+        """
+        query = db.query(Ad)
+
+        # Apply filters
+        city = filters.get('city')
+        if city:
+            geo_id = get_key_by_value(city, GEO_ID_MAPPING)
+            if geo_id:
+                query = query.filter(Ad.city == geo_id)
+
+        if filters.get('property_type'):
+            query = query.filter(Ad.property_type == filters['property_type'])
+
+        if filters.get('rooms') is not None:
+            # Handle array membership
+            rooms = filters['rooms']
+            if rooms:
+                # Using IN to match any of the room values
+                query = query.filter(Ad.rooms_count.in_(rooms))
+
+        if filters.get('price_min') is not None:
+            query = query.filter(Ad.price >= filters['price_min'])
+
+        if filters.get('price_max') is not None:
+            query = query.filter(Ad.price <= filters['price_max'])
+
+        # Filter by date
+        days_ago = datetime.now() - timedelta(days=days)
+        query = query.filter(Ad.insert_time >= days_ago)
+
+        # Order by newest first
+        query = query.order_by(Ad.insert_time.desc())
+
+        # Limit results
+        query = query.limit(limit)
+
+        return query.all()
+
+    @staticmethod
+    def find_users_for_ad(db: Session, ad) -> List[int]:
+        """
+        Finds users whose subscription filters match this ad.
+
+        Args:
+            db: Database session
+            ad: Ad object or dictionary
+
+        Returns:
+            List of user IDs
+        """
+        from common.db.models.user import User
+        from common.db.models.subscription import UserFilter
+
+        try:
+            # Create a cache key based on the ad's primary attributes that affect matching
+            ad_id = ad.id if hasattr(ad, 'id') else ad.get('id')
+            cache_key = f"matching_users:{ad_id}"
+
+            # Try to get results from cache first
+            cached = redis_client.get(cache_key)
+            if cached:
+                return json.loads(cached)
+
+            # Get ad properties for matching
+            if hasattr(ad, 'property_type'):
+                # It's an ORM object
+                ad_property_type = ad.property_type
+                ad_city = ad.city
+                ad_rooms = ad.rooms_count
+                ad_price = ad.price
+            else:
+                # It's a dictionary
+                ad_property_type = ad.get('property_type')
+                ad_city = ad.get('city')
+                ad_rooms = ad.get('rooms_count')
+                ad_price = ad.get('price')
+
+            # Query users with matching filters
+            query = db.query(User.id).join(UserFilter, User.id == UserFilter.user_id)
+
+            # Filter for active users only
+            query = query.filter(or_(
+                User.free_until > datetime.now(),
+                User.subscription_until > datetime.now()
+            ))
+
+            # Filter for non-paused subscriptions
+            query = query.filter(UserFilter.is_paused == False)
+
+            # Apply ad property filters
+            filters = []
+
+            # Property type filter (if set)
+            filters.append(or_(
+                UserFilter.property_type == None,
+                UserFilter.property_type == ad_property_type
+            ))
+
+            # City filter (if set)
+            filters.append(or_(
+                UserFilter.city == None,
+                UserFilter.city == ad_city
+            ))
+
+            # Rooms filter (array membership)
+            filters.append(or_(
+                UserFilter.rooms_count == None,
+                UserFilter.rooms_count.any(ad_rooms)
+            ))
+
+            # Price range filter
+            filters.append(or_(
+                UserFilter.price_min == None,
+                ad_price >= UserFilter.price_min
+            ))
+
+            filters.append(or_(
+                UserFilter.price_max == None,
+                ad_price <= UserFilter.price_max
+            ))
+
+            # Apply all filters
+            query = query.filter(and_(*filters))
+
+            # Execute query
+            results = query.all()
+            user_ids = [result[0] for result in results]
+
+            # Cache the results for 1 hour
+            redis_client.set(cache_key, json.dumps(user_ids), ex=CacheTTL.STANDARD)
+
+            return user_ids
+
+        except Exception as e:
+            logger.error(f"Error finding users for ad {ad_id if 'ad_id' in locals() else 'unknown'}: {e}")
+            return []
