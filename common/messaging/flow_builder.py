@@ -1,12 +1,76 @@
 # common/messaging/flow_builder.py
 
 import logging
-from typing import Dict, Any, Optional, Union, Callable, List, Set, Type
+import json
+import inspect
+from typing import Dict, Any, Optional, Union, Callable, List, Set, Type, Awaitable
 
-from common.messaging.utils import safe_send_message, safe_send_menu
-from common.messaging.state_management import state_manager
+from .utils import safe_send_message, safe_send_menu
+from .state_management import state_manager
 
 logger = logging.getLogger(__name__)
+
+
+class FlowContext:
+    """
+    Context object passed to flow handlers providing access to flow data
+    and convenience methods for common operations.
+    """
+
+    def __init__(self,
+                 user_id: Union[str, int],
+                 platform: str,
+                 flow_data: Dict[str, Any],
+                 message: Optional[str] = None):
+        """
+        Initialize the flow context.
+
+        Args:
+            user_id: User identifier
+            platform: Platform identifier (telegram, viber, whatsapp)
+            flow_data: Flow-specific data dictionary
+            message: Current message text (if available)
+        """
+        self.user_id = user_id
+        self.platform = platform
+        self.data = flow_data or {}
+        self.message = message
+        self._updates = {}
+
+    async def send_message(self, text: str, **kwargs) -> Any:
+        """Send a message to the user using the unified messaging utility."""
+        return await safe_send_message(
+            user_id=self.user_id,
+            text=text,
+            platform=self.platform,
+            **kwargs
+        )
+
+    async def send_menu(self, text: str, options: List[Dict[str, str]], **kwargs) -> Any:
+        """Send a menu to the user using the unified messaging utility."""
+        return await safe_send_menu(
+            user_id=self.user_id,
+            text=text,
+            options=options,
+            platform=self.platform,
+            **kwargs
+        )
+
+    def update(self, **kwargs) -> None:
+        """
+        Update flow data with new values.
+        These will be saved when the handler completes.
+        """
+        self._updates.update(kwargs)
+        self.data.update(kwargs)
+
+    def get_updates(self) -> Dict[str, Any]:
+        """Get all updates made during this handler execution."""
+        return self._updates
+
+    def clear_updates(self) -> None:
+        """Clear all pending updates."""
+        self._updates = {}
 
 
 class MessageFlow:
@@ -15,21 +79,31 @@ class MessageFlow:
     Makes it easy to create consistent conversation flows across platforms.
     """
 
-    def __init__(self, name: str, initial_state: str = "start"):
+    def __init__(self, name: str, initial_state: str = "start", description: str = ""):
         """
         Initialize a message flow.
 
         Args:
             name: Name of the flow
             initial_state: Initial state name
+            description: Optional description of the flow
         """
         self.name = name
+        self.description = description
         self.initial_state = initial_state
         self.states = {}
         self.transitions = {}
         self.global_handlers = {}
+        self.error_handler = None
 
-    def add_state(self, state_name: str, handler: Optional[Callable] = None, **kwargs):
+    def get_description(self) -> str:
+        """Get the description of this flow."""
+        return self.description or f"Flow: {self.name}"
+
+    def add_state(self,
+                  state_name: str,
+                  handler: Optional[Callable] = None,
+                  **kwargs) -> 'MessageFlow':
         """
         Add a state to the flow.
 
@@ -37,6 +111,9 @@ class MessageFlow:
             state_name: Name of the state
             handler: Optional handler function for this state
             **kwargs: Additional state metadata
+
+        Returns:
+            Self for method chaining
         """
         self.states[state_name] = {
             "handler": handler,
@@ -44,7 +121,11 @@ class MessageFlow:
         }
         return self
 
-    def add_transition(self, from_state: str, to_state: str, condition: Optional[Callable] = None, **kwargs):
+    def add_transition(self,
+                       from_state: str,
+                       to_state: str,
+                       condition: Optional[Callable] = None,
+                       **kwargs) -> 'MessageFlow':
         """
         Add a transition between states.
 
@@ -53,6 +134,9 @@ class MessageFlow:
             to_state: Target state name
             condition: Optional function that returns True if transition should occur
             **kwargs: Additional transition metadata
+
+        Returns:
+            Self for method chaining
         """
         if from_state not in self.transitions:
             self.transitions[from_state] = []
@@ -64,38 +148,84 @@ class MessageFlow:
         })
         return self
 
-    def add_global_handler(self, handler_name: str, handler: Callable):
+    def add_global_handler(self,
+                           handler_name: str,
+                           handler: Callable) -> 'MessageFlow':
         """
         Add a global handler that is available in all states.
 
         Args:
             handler_name: Name of the handler
             handler: Handler function
+
+        Returns:
+            Self for method chaining
         """
         self.global_handlers[handler_name] = handler
         return self
 
-    async def start(self, user_id: Union[str, int], platform: str):
+    def set_error_handler(self, handler: Callable) -> 'MessageFlow':
+        """
+        Set a global error handler for this flow.
+
+        Args:
+            handler: Function that handles errors
+
+        Returns:
+            Self for method chaining
+        """
+        self.error_handler = handler
+        return self
+
+    async def start(self, user_id: Union[str, int], platform: str, initial_data: Dict[str, Any] = None) -> bool:
         """
         Start the flow for a user.
 
         Args:
             user_id: User's platform-specific ID
             platform: Platform name
+            initial_data: Optional initial flow data
+
+        Returns:
+            True if started successfully, False otherwise
         """
-        # Update user state
-        await state_manager.update_state(user_id, platform, {
-            "state": self.initial_state,
-            "active_flow": self.name,
-            "flow_data": {}
-        })
+        try:
+            # Prepare initial flow data
+            flow_data = initial_data or {}
 
-        # Execute initial state handler if available
-        initial_state_data = self.states.get(self.initial_state)
-        if initial_state_data and initial_state_data.get("handler"):
-            await initial_state_data["handler"](user_id, platform)
+            # Update user state
+            await state_manager.update_state(user_id, platform, {
+                "state": self.initial_state,
+                "active_flow": self.name,
+                "flow_data": flow_data
+            })
 
-    async def process_message(self, user_id: Union[str, int], platform: str, message: str):
+            # Execute initial state handler if available
+            initial_state_data = self.states.get(self.initial_state)
+            if initial_state_data and initial_state_data.get("handler"):
+                # Create flow context
+                context = FlowContext(user_id, platform, flow_data)
+
+                # Call handler
+                handler = initial_state_data["handler"]
+                await self._call_handler(handler, context)
+
+                # Save any updates to flow data
+                updates = context.get_updates()
+                if updates:
+                    await state_manager.update_state(user_id, platform, {
+                        "flow_data": flow_data
+                    })
+
+            return True
+        except Exception as e:
+            logger.error(f"Error starting flow {self.name} for user {user_id}: {e}")
+            if self.error_handler:
+                context = FlowContext(user_id, platform, flow_data)
+                await self._call_handler(self.error_handler, context, exception=e)
+            return False
+
+    async def process_message(self, user_id: Union[str, int], platform: str, message: str) -> bool:
         """
         Process a message within the flow.
 
@@ -107,40 +237,75 @@ class MessageFlow:
         Returns:
             True if the message was handled, False otherwise
         """
-        # Get current state
-        state_data = await state_manager.get_state(user_id, platform) or {}
-        current_state = state_data.get("state", self.initial_state)
-        flow_data = state_data.get("flow_data", {})
+        try:
+            # Get current state
+            state_data = await state_manager.get_state(user_id, platform) or {}
+            current_state = state_data.get("state", self.initial_state)
+            flow_data = state_data.get("flow_data", {})
 
-        # Check for global handlers first
-        for handler_name, handler in self.global_handlers.items():
-            if await handler(user_id, platform, message, current_state, flow_data):
-                return True
+            # Create flow context
+            context = FlowContext(user_id, platform, flow_data, message)
 
-        # Check state-specific handler
-        state_info = self.states.get(current_state)
-        if state_info and state_info.get("handler"):
-            handler = state_info["handler"]
-            result = await handler(user_id, platform, message, flow_data)
+            # Check for global handlers first
+            for handler_name, handler in self.global_handlers.items():
+                try:
+                    result = await self._call_handler(handler, context)
+                    if result:
+                        # Apply any updates to flow data
+                        updates = context.get_updates()
+                        if updates:
+                            flow_data.update(updates)
+                            await state_manager.update_state(user_id, platform, {
+                                "flow_data": flow_data
+                            })
+                        return True
+                except Exception as e:
+                    logger.error(f"Error in global handler {handler_name}: {e}")
+                    if self.error_handler:
+                        await self._call_handler(self.error_handler, context, exception=e)
 
-            # Update flow data
-            if isinstance(result, dict):
-                # Handler returned new flow data
-                flow_data.update(result)
-                await state_manager.update_state(user_id, platform, {
-                    "flow_data": flow_data
-                })
+            # Check state-specific handler
+            state_info = self.states.get(current_state)
+            if state_info and state_info.get("handler"):
+                handler = state_info["handler"]
+                try:
+                    # Call the state handler
+                    await self._call_handler(handler, context)
 
-            # Check for transitions
-            await self._check_transitions(user_id, platform, current_state, message, flow_data)
+                    # Apply any updates to flow data
+                    updates = context.get_updates()
+                    if updates:
+                        flow_data.update(updates)
+                        await state_manager.update_state(user_id, platform, {
+                            "flow_data": flow_data
+                        })
 
-            return True
+                    # Check for transitions
+                    await self._check_transitions(context, current_state, message, flow_data)
 
-        # No handler for this state
-        logger.warning(f"No handler for state {current_state} in flow {self.name}")
-        return False
+                    return True
+                except Exception as e:
+                    logger.error(f"Error in state handler for state {current_state}: {e}")
+                    if self.error_handler:
+                        await self._call_handler(self.error_handler, context, exception=e)
+                    return True
 
-    async def transition_to(self, user_id: Union[str, int], platform: str, target_state: str):
+            # No handler for this state
+            logger.warning(f"No handler for state {current_state} in flow {self.name}")
+            return False
+        except Exception as e:
+            logger.error(f"Error processing message in flow {self.name}: {e}")
+            if self.error_handler:
+                context = FlowContext(
+                    user_id,
+                    platform,
+                    state_data.get("flow_data", {}),
+                    message
+                )
+                await self._call_handler(self.error_handler, context, exception=e)
+            return False
+
+    async def transition_to(self, user_id: Union[str, int], platform: str, target_state: str) -> bool:
         """
         Manually transition to a specific state.
 
@@ -148,45 +313,85 @@ class MessageFlow:
             user_id: User's platform-specific ID
             platform: Platform name
             target_state: Target state name
-        """
-        # Update state
-        await state_manager.update_state(user_id, platform, {
-            "state": target_state
-        })
 
-        # Execute new state handler
-        state_info = self.states.get(target_state)
-        if state_info and state_info.get("handler"):
+        Returns:
+            True if transition succeeded, False otherwise
+        """
+        try:
+            # Get current state data
             state_data = await state_manager.get_state(user_id, platform) or {}
             flow_data = state_data.get("flow_data", {})
-            await state_info["handler"](user_id, platform, None, flow_data)
 
-    async def end(self, user_id: Union[str, int], platform: str):
+            # Update state
+            await state_manager.update_state(user_id, platform, {
+                "state": target_state
+            })
+
+            # Execute new state handler
+            state_info = self.states.get(target_state)
+            if state_info and state_info.get("handler"):
+                # Create flow context
+                context = FlowContext(user_id, platform, flow_data)
+
+                # Call handler
+                handler = state_info["handler"]
+                await self._call_handler(handler, context)
+
+                # Save any updates to flow data
+                updates = context.get_updates()
+                if updates:
+                    flow_data.update(updates)
+                    await state_manager.update_state(user_id, platform, {
+                        "flow_data": flow_data
+                    })
+
+            return True
+        except Exception as e:
+            logger.error(f"Error transitioning to state {target_state} in flow {self.name}: {e}")
+            if self.error_handler:
+                context = FlowContext(user_id, platform, flow_data)
+                await self._call_handler(self.error_handler, context, exception=e)
+            return False
+
+    async def end(self, user_id: Union[str, int], platform: str) -> bool:
         """
         End the flow for a user.
 
         Args:
             user_id: User's platform-specific ID
             platform: Platform name
-        """
-        # Clear flow state
-        await state_manager.update_state(user_id, platform, {
-            "state": "start",
-            "active_flow": None,
-            "flow_data": {}
-        })
 
-    async def _check_transitions(self, user_id: Union[str, int], platform: str,
-                                 current_state: str, message: str, flow_data: Dict[str, Any]):
+        Returns:
+            True if ended successfully, False otherwise
+        """
+        try:
+            # Clear flow state
+            await state_manager.update_state(user_id, platform, {
+                "state": "start",
+                "active_flow": None,
+                "flow_data": {}
+            })
+            return True
+        except Exception as e:
+            logger.error(f"Error ending flow {self.name} for user {user_id}: {e}")
+            return False
+
+    async def _check_transitions(self,
+                                 context: FlowContext,
+                                 current_state: str,
+                                 message: str,
+                                 flow_data: Dict[str, Any]) -> bool:
         """
         Check if any transitions should be triggered.
 
         Args:
-            user_id: User's platform-specific ID
-            platform: Platform name
+            context: Flow context
             current_state: Current state name
             message: User's message
             flow_data: Flow data dictionary
+
+        Returns:
+            True if a transition was triggered, False otherwise
         """
         transitions = self.transitions.get(current_state, [])
 
@@ -194,21 +399,116 @@ class MessageFlow:
             condition = transition.get("condition")
 
             # Check if condition is met
-            if condition is None or await condition(message, flow_data):
-                target_state = transition["to_state"]
+            try:
+                if condition is None or await self._call_condition(condition, context, message, flow_data):
+                    target_state = transition["to_state"]
 
-                # Update state
-                await state_manager.update_state(user_id, platform, {
-                    "state": target_state
-                })
+                    # Update state
+                    await state_manager.update_state(context.user_id, context.platform, {
+                        "state": target_state
+                    })
 
-                # Execute new state handler
-                target_state_info = self.states.get(target_state)
-                if target_state_info and target_state_info.get("handler"):
-                    await target_state_info["handler"](user_id, platform, message, flow_data)
+                    # Execute new state handler
+                    target_state_info = self.states.get(target_state)
+                    if target_state_info and target_state_info.get("handler"):
+                        handler = target_state_info["handler"]
+                        await self._call_handler(handler, context)
 
-                # Only apply the first matching transition
-                break
+                        # Save any updates to flow data
+                        updates = context.get_updates()
+                        if updates:
+                            flow_data.update(updates)
+                            await state_manager.update_state(context.user_id, context.platform, {
+                                "flow_data": flow_data
+                            })
+
+                    # Only apply the first matching transition
+                    return True
+            except Exception as e:
+                logger.error(f"Error checking transition condition: {e}")
+                if self.error_handler:
+                    await self._call_handler(self.error_handler, context, exception=e)
+
+        return False
+
+    async def _call_handler(self,
+                            handler: Callable,
+                            context: FlowContext,
+                            **kwargs) -> Any:
+        """
+        Call a handler function with appropriate arguments based on its signature.
+
+        Args:
+            handler: Handler function to call
+            context: Flow context
+            **kwargs: Additional arguments to pass
+
+        Returns:
+            Result from the handler
+        """
+        # Get handler signature
+        sig = inspect.signature(handler)
+        params = sig.parameters
+
+        # Prepare arguments based on signature
+        if len(params) == 1 and "context" in params:
+            # Handler accepts only context
+            return await handler(context)
+        elif len(params) >= 3 and "user_id" in params and "platform" in params and "message" in params:
+            # Legacy handler with user_id, platform, message, flow_data
+            if "flow_data" in params:
+                return await handler(context.user_id, context.platform, context.message, context.data)
+            else:
+                return await handler(context.user_id, context.platform, context.message)
+        else:
+            # Default to passing all individual components
+            return await handler(
+                context.user_id,
+                context.platform,
+                context.message,
+                context.data,
+                **kwargs
+            )
+
+    async def _call_condition(self,
+                              condition: Callable,
+                              context: FlowContext,
+                              message: str,
+                              flow_data: Dict[str, Any]) -> bool:
+        """
+        Call a condition function with appropriate arguments based on its signature.
+
+        Args:
+            condition: Condition function to call
+            context: Flow context
+            message: User's message
+            flow_data: Flow data dictionary
+
+        Returns:
+            Boolean result from the condition
+        """
+        # Get condition signature
+        sig = inspect.signature(condition)
+        params = sig.parameters
+
+        # Prepare arguments based on signature
+        if len(params) == 1 and "context" in params:
+            # Condition accepts only context
+            result = await condition(context) if inspect.iscoroutinefunction(condition) else condition(context)
+        elif len(params) == 2 and "message" in params and "data" in params:
+            # Legacy condition function (message, data)
+            result = await condition(message, flow_data) if inspect.iscoroutinefunction(condition) else condition(
+                message, flow_data)
+        elif len(params) == 1 and "message" in params:
+            # Simple condition function (message)
+            result = await condition(message) if inspect.iscoroutinefunction(condition) else condition(message)
+        else:
+            # Default to passing both message and data
+            result = (await condition(message, flow_data, context)
+                      if inspect.iscoroutinefunction(condition)
+                      else condition(message, flow_data, context))
+
+        return bool(result)
 
 
 class FlowLibrary:
@@ -220,14 +520,18 @@ class FlowLibrary:
         """Initialize the flow library."""
         self.flows = {}
 
-    def register_flow(self, flow: MessageFlow):
+    def register_flow(self, flow: MessageFlow) -> 'FlowLibrary':
         """
         Register a flow in the library.
 
         Args:
             flow: MessageFlow instance
+
+        Returns:
+            Self for method chaining
         """
         self.flows[flow.name] = flow
+        logger.info(f"Registered flow: {flow.name}")
         return self
 
     def get_flow(self, name: str) -> Optional[MessageFlow]:
@@ -242,7 +546,20 @@ class FlowLibrary:
         """
         return self.flows.get(name)
 
-    async def start_flow(self, name: str, user_id: Union[str, int], platform: str):
+    def get_all_flows(self) -> Dict[str, MessageFlow]:
+        """
+        Get all registered flows.
+
+        Returns:
+            Dictionary of flow names to flow instances
+        """
+        return dict(self.flows)
+
+    async def start_flow(self,
+                         name: str,
+                         user_id: Union[str, int],
+                         platform: str,
+                         initial_data: Dict[str, Any] = None) -> bool:
         """
         Start a flow for a user.
 
@@ -250,6 +567,7 @@ class FlowLibrary:
             name: Flow name
             user_id: User's platform-specific ID
             platform: Platform name
+            initial_data: Optional initial flow data
 
         Returns:
             True if flow was started, False otherwise
@@ -259,15 +577,16 @@ class FlowLibrary:
             logger.warning(f"Flow {name} not found")
             return False
 
-        await flow.start(user_id, platform)
-        return True
+        return await flow.start(user_id, platform, initial_data)
 
-    async def process_message_in_flow(self, name: str, user_id: Union[str, int], platform: str, message: str):
+    async def process_message(self,
+                              user_id: Union[str, int],
+                              platform: str,
+                              message: str) -> bool:
         """
-        Process a message in a specific flow.
+        Process a message using the active flow.
 
         Args:
-            name: Flow name
             user_id: User's platform-specific ID
             platform: Platform name
             message: User's message
@@ -275,30 +594,104 @@ class FlowLibrary:
         Returns:
             True if message was processed, False otherwise
         """
-        flow = self.get_flow(name)
-        if not flow:
-            logger.warning(f"Flow {name} not found")
+        # Get the current active flow for this user
+        state_data = await state_manager.get_state(user_id, platform) or {}
+        active_flow_name = state_data.get("active_flow")
+
+        if not active_flow_name:
+            # No active flow
             return False
 
+        # Get the flow
+        flow = self.get_flow(active_flow_name)
+        if not flow:
+            logger.warning(f"Active flow {active_flow_name} not found")
+            return False
+
+        # Process the message with the active flow
         return await flow.process_message(user_id, platform, message)
+
+    async def end_active_flow(self, user_id: Union[str, int], platform: str) -> bool:
+        """
+        End the active flow for a user.
+
+        Args:
+            user_id: User's platform-specific ID
+            platform: Platform name
+
+        Returns:
+            True if flow was ended, False otherwise
+        """
+        # Get the current active flow for this user
+        state_data = await state_manager.get_state(user_id, platform) or {}
+        active_flow_name = state_data.get("active_flow")
+
+        if not active_flow_name:
+            # No active flow
+            return False
+
+        # Get the flow
+        flow = self.get_flow(active_flow_name)
+        if not flow:
+            logger.warning(f"Active flow {active_flow_name} not found")
+            return False
+
+        # End the flow
+        return await flow.end(user_id, platform)
+
+    async def transition_active_flow(self,
+                                     user_id: Union[str, int],
+                                     platform: str,
+                                     target_state: str) -> bool:
+        """
+        Transition the active flow to a new state.
+
+        Args:
+            user_id: User's platform-specific ID
+            platform: Platform name
+            target_state: Target state name
+
+        Returns:
+            True if transition succeeded, False otherwise
+        """
+        # Get the current active flow for this user
+        state_data = await state_manager.get_state(user_id, platform) or {}
+        active_flow_name = state_data.get("active_flow")
+
+        if not active_flow_name:
+            # No active flow
+            return False
+
+        # Get the flow
+        flow = self.get_flow(active_flow_name)
+        if not flow:
+            logger.warning(f"Active flow {active_flow_name} not found")
+            return False
+
+        # Transition to the new state
+        return await flow.transition_to(user_id, platform, target_state)
 
 
 # Create a global instance
 flow_library = FlowLibrary()
 
-# Define some common flows
+# ===== Define some common flows =====
 
 # Support flow
-support_flow = MessageFlow("support", "waiting_for_category")
+support_flow = MessageFlow(
+    "support",
+    "waiting_for_category",
+    "User support and help flow"
+)
 
 
-async def show_support_categories(user_id, platform, message=None, flow_data=None):
+async def show_support_categories(context: FlowContext):
     """Show support categories."""
     from common.messaging.handlers.support_handler import handle_support_command
-    return await handle_support_command(user_id, platform)
+    return await handle_support_command(context.user_id, platform=context.platform)
 
 
-async def process_category_selection(user_id, platform, message, flow_data):
+async def process_category_selection(context: FlowContext):
     """Process the selected support category."""
     from common.messaging.handlers.support_handler import handle_support_category
 
@@ -315,40 +708,57 @@ async def process_category_selection(user_id, platform, message, flow_data):
         "Інше": "other"
     }
 
+    message = context.message or ""
     category = category_map.get(message, "other")
-    await handle_support_category(user_id, category, platform)
-    return {"category": category}
+    await handle_support_category(context.user_id, category, context.platform)
+
+    # Update flow data
+    context.update(category=category)
 
 
 support_flow.add_state("waiting_for_category", show_support_categories)
 support_flow.add_state("processing_category", process_category_selection)
-support_flow.add_transition("waiting_for_category", "processing_category",
-                            lambda msg, data: msg in ["1", "2", "3", "Оплата", "Технічні проблеми", "Інше"])
 
-# Register common flows
-flow_library.register_flow(support_flow)
+
+async def support_category_condition(message: str, data: Dict[str, Any]) -> bool:
+    """Condition function for support category selection."""
+    valid_inputs = [
+        "1", "2", "3",
+        "Оплата", "Технічні проблеми", "Інше",
+        "support_payment", "support_technical", "support_other"
+    ]
+    return message in valid_inputs
+
+
+support_flow.add_transition(
+    "waiting_for_category",
+    "processing_category",
+    support_category_condition
+)
 
 # Phone verification flow
-phone_flow = MessageFlow("phone_verification", "waiting_for_phone")
+phone_flow = MessageFlow(
+    "phone_verification",
+    "waiting_for_phone",
+    "Phone number verification flow"
+)
 
 
-async def request_phone(user_id, platform, message=None, flow_data=None):
+async def request_phone(context: FlowContext):
     """Request phone number."""
-    await safe_send_message(
-        user_id=user_id,
-        text="Для додавання номера телефону і єдиного входу з різних пристроїв, "
-             "будь ласка, введіть свій номер телефону в міжнародному форматі, "
-             "наприклад +380991234567",
-        platform=platform
+    await context.send_message(
+        "Для додавання номера телефону і єдиного входу з різних пристроїв, "
+        "будь ласка, введіть свій номер телефону в міжнародному форматі, "
+        "наприклад +380991234567"
     )
 
 
-async def process_phone(user_id, platform, message, flow_data):
+async def process_phone(context: FlowContext):
     """Process phone number."""
     from common.verification.phone_service import create_verification_code
 
     # Clean the phone number
-    phone_number = ''.join(c for c in message if c.isdigit() or c == '+')
+    phone_number = ''.join(c for c in context.message if c.isdigit() or c == '+')
     if not phone_number.startswith('+'):
         phone_number = '+' + phone_number
 
@@ -356,20 +766,159 @@ async def process_phone(user_id, platform, message, flow_data):
     code = create_verification_code(phone_number)
 
     # Send code instructions
-    await safe_send_message(
-        user_id=user_id,
-        text=f"Код підтвердження відправлено на номер {phone_number}.\n\n"
-             f"⚠️ Для тестування, ось ваш код: {code}\n\n"
-             "У реальному додатку код буде надіслано через SMS.",
-        platform=platform
+    await context.send_message(
+        f"Код підтвердження відправлено на номер {phone_number}.\n\n"
+        f"⚠️ Для тестування, ось ваш код: {code}\n\n"
+        "У реальному додатку код буде надіслано через SMS."
     )
 
-    # Return data to be stored in flow
-    return {"phone_number": phone_number}
+    # Store phone number in flow data
+    context.update(phone_number=phone_number)
 
 
 phone_flow.add_state("waiting_for_phone", request_phone)
 phone_flow.add_state("waiting_for_code", process_phone)
-phone_flow.add_transition("waiting_for_phone", "waiting_for_code", lambda msg, data: len(msg) > 10)
 
+
+async def phone_number_valid(message: str) -> bool:
+    """Check if message looks like a phone number."""
+    # Basic check for phone number format
+    digits = ''.join(c for c in message if c.isdigit())
+    return len(digits) >= 10
+
+
+phone_flow.add_transition(
+    "waiting_for_phone",
+    "waiting_for_code",
+    phone_number_valid
+)
+
+# Register common flows to the library
+flow_library.register_flow(support_flow)
 flow_library.register_flow(phone_flow)
+
+
+# Helper functions to create simple flows
+
+def create_simple_flow(name: str,
+                       states: Dict[str, Callable],
+                       transitions: List[Dict[str, Any]] = None,
+                       initial_state: str = "start") -> MessageFlow:
+    """
+    Create a simple flow with states and transitions.
+
+    Args:
+        name: Flow name
+        states: Dictionary of state names to handler functions
+        transitions: List of transition dictionaries
+                    (from_state, to_state, condition)
+        initial_state: Initial state name
+
+    Returns:
+        New MessageFlow instance
+    """
+    flow = MessageFlow(name, initial_state)
+
+    # Add states
+    for state_name, handler in states.items():
+        flow.add_state(state_name, handler)
+
+    # Add transitions
+    if transitions:
+        for transition in transitions:
+            flow.add_transition(
+                transition["from_state"],
+                transition["to_state"],
+                transition.get("condition")
+            )
+
+    return flow
+
+
+def create_linear_flow(name: str,
+                       steps: List[Dict[str, Any]],
+                       initial_state: str = "start") -> MessageFlow:
+    """
+    Create a linear flow with a sequence of steps.
+
+    Args:
+        name: Flow name
+        steps: List of step dictionaries with handlers and optional conditions
+        initial_state: Initial state name
+
+    Returns:
+        New MessageFlow instance
+    """
+    flow = MessageFlow(name, initial_state)
+
+    # Add steps as states
+    prev_state = initial_state
+    for i, step in enumerate(steps):
+        state_name = step.get("name", f"step_{i + 1}")
+        handler = step["handler"]
+
+        # Add state
+        flow.add_state(state_name, handler)
+
+        # Add transition from previous state
+        if i > 0 or prev_state != state_name:
+            flow.add_transition(
+                prev_state,
+                state_name,
+                step.get("condition")
+            )
+
+        prev_state = state_name
+
+    return flow
+
+
+def create_menu_flow(name: str,
+                     menu_text: str,
+                     options: Dict[str, Dict[str, Any]],
+                     initial_state: str = "menu") -> MessageFlow:
+    """
+    Create a menu-based flow with options.
+
+    Args:
+        name: Flow name
+        menu_text: Text to display for the menu
+        options: Dictionary of option text to handler and state info
+        initial_state: Initial state name
+
+    Returns:
+        New MessageFlow instance
+    """
+    flow = MessageFlow(name, initial_state)
+
+    # Create menu handler
+    async def show_menu(context: FlowContext):
+        menu_options = [
+            {"text": option_text, "value": f"option_{i}"}
+            for i, option_text in enumerate(options.keys())
+        ]
+        await context.send_menu(menu_text, menu_options)
+
+    # Add menu state
+    flow.add_state(initial_state, show_menu)
+
+    # Add option states and transitions
+    for i, (option_text, option_data) in enumerate(options.items()):
+        state_name = option_data.get("state_name", f"option_{i}")
+        handler = option_data["handler"]
+
+        # Add state
+        flow.add_state(state_name, handler)
+
+        # Create condition function
+        option_value = f"option_{i}"
+        condition = lambda msg, option=option_value, text=option_text: msg == option or msg == text
+
+        # Add transition
+        flow.add_transition(initial_state, state_name, condition)
+
+        # Add return transition if specified
+        if option_data.get("return_to_menu", True):
+            flow.add_transition(state_name, initial_state, None)
+
+    return flow
