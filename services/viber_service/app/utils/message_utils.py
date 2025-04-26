@@ -9,6 +9,7 @@ from common.messaging.utils import (
     safe_send_message as unified_send_message,
     safe_send_media as unified_send_media
 )
+from common.utils.retry_utils import NETWORK_EXCEPTIONS
 
 logger = logging.getLogger(__name__)
 

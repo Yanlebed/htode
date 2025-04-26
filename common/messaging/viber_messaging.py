@@ -8,7 +8,7 @@ from viberbot import Api
 from viberbot.api.messages import TextMessage, PictureMessage, KeyboardMessage
 
 from .interface import MessagingInterface
-from .utils import retry_with_exponential_backoff
+from common.utils.retry_utils import retry_with_exponential_backoff, NETWORK_EXCEPTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ class ViberMessaging(MessagingInterface):
         """Format user ID for Viber - no special formatting needed."""
         return user_id
 
-    @retry_with_exponential_backoff(max_retries=3, initial_delay=1)
+    @retry_with_exponential_backoff(max_retries=3, initial_delay=1, retryable_exceptions=NETWORK_EXCEPTIONS)
     async def send_text(
             self,
             user_id: str,
@@ -59,7 +59,7 @@ class ViberMessaging(MessagingInterface):
             logger.error(f"Error sending Viber message to {user_id}: {e}")
             raise  # Let the retry decorator handle this
 
-    @retry_with_exponential_backoff(max_retries=3, initial_delay=1)
+    @retry_with_exponential_backoff(max_retries=3, initial_delay=1, retryable_exceptions=NETWORK_EXCEPTIONS)
     async def send_media(
             self,
             user_id: str,

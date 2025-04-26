@@ -470,97 +470,80 @@ def process_show_more_description(user_id, resource_url, message_id=None, platfo
                 logger.warning(f"No description found for resource {resource_url}")
                 return False
 
-            # Determine if this is a database user ID or platform-specific ID
-            db_user_id = None
-            if isinstance(user_id, int) or (isinstance(user_id, str) and user_id.isdigit()):
-                # This is likely a database user ID
-                db_user_id = int(user_id)
-            elif platform:
-                # Try to get database user ID from platform-specific ID
-                db_user_id = get_db_user_id_by_telegram_id(user_id, messenger_type=platform)
+            # Use the platform_utils to resolve user ID and platform info
+            from common.messaging.platform_utils import resolve_user_id, get_messenger_instance
 
+            # Get database user ID, platform and platform-specific ID
+            db_user_id, platform_name, platform_id = resolve_user_id(user_id, platform)
+
+            # If we have a database user ID, try to use the unified messaging service
             if db_user_id:
-                # We have a database user ID, use the unified messaging service
-                success = await messaging_service.send_notification(
-                    user_id=db_user_id,
-                    text=full_description
-                )
-                return success
-
-            # If we don't have a database user ID, try platform-specific approach
-            if platform == "telegram" and message_id:
-                # For Telegram, we can try to edit the existing message
-                from services.telegram_service.app.bot import bot
                 try:
-                    # Try to get the original message caption
-                    message = await bot.get_message(
-                        chat_id=user_id,
-                        message_id=message_id
+                    success = await messaging_service.send_notification(
+                        user_id=db_user_id,
+                        text=full_description
                     )
-                    original_caption = message.caption or message.text or ""
-
-                    # Add the full description
-                    new_caption = original_caption + "\n\n" + full_description
-
-                    # Edit the message
-                    await bot.edit_message_caption(
-                        chat_id=user_id,
-                        message_id=message_id,
-                        caption=new_caption,
-                        parse_mode='Markdown',
-                        reply_markup=message.reply_markup
-                    )
-                    return True
+                    if success:
+                        return True
                 except Exception as e:
-                    logger.warning(f"Failed to edit Telegram message: {e}")
-                    # Fall back to sending a new message
-                    await bot.send_message(
-                        chat_id=user_id,
+                    logger.warning(f"Error using messaging service for DB user {db_user_id}: {e}")
+
+            # If no success with unified service, try platform-specific approach
+            if platform_name and platform_id:
+                # For Telegram and if we have a message_id, try to edit the message
+                if platform_name == "telegram" and message_id:
+                    try:
+                        from common.messaging.utils import safe_edit_message_telegram
+                        from services.telegram_service.app.bot import bot
+
+                        # Try to get the original message
+                        message = await bot.get_message(
+                            chat_id=platform_id,
+                            message_id=message_id
+                        )
+                        original_content = message.caption or message.text or ""
+
+                        # Add the full description to the original content
+                        new_content = original_content + "\n\n" + full_description
+
+                        # Try to edit the message
+                        await safe_edit_message_telegram(
+                            chat_id=platform_id,
+                            message_id=message_id,
+                            text=new_content,
+                            parse_mode='Markdown',
+                            reply_markup=message.reply_markup
+                        )
+                        return True
+                    except Exception as e:
+                        logger.warning(f"Failed to edit Telegram message: {e}, falling back to new message")
+
+                # If editing failed or not applicable, send as a new message
+                # Get the messenger instance
+                messenger = get_messenger_instance(platform_name)
+                if messenger:
+                    # Format the user ID
+                    from common.messaging.platform_utils import format_user_id_for_platform
+                    formatted_id = format_user_id_for_platform(platform_id, platform_name)
+
+                    # Send the message
+                    await messenger.send_text(
+                        user_id=formatted_id,
                         text=full_description
                     )
                     return True
-            else:
-                # For other platforms, just send as a new message
-                # Detect platform from user ID format if not specified
-                detected_platform = platform
-                if not detected_platform:
-                    if isinstance(user_id, str):
-                        if user_id.startswith("whatsapp:"):
-                            detected_platform = "whatsapp"
-                        elif len(user_id) > 20:  # Viber IDs are typically long UUIDs
-                            detected_platform = "viber"
-                        else:
-                            detected_platform = "telegram"
 
-                # Send using platform-specific method
-                if detected_platform == "viber":
-                    from services.viber_service.app.bot import viber
-                    viber.send_messages(
-                        user_id,
-                        [TextMessage(text=full_description)]
-                    )
-                    return True
-                elif detected_platform == "whatsapp":
-                    from services.whatsapp_service.app.bot import client, TWILIO_PHONE_NUMBER
-                    # Ensure proper WhatsApp formatting
-                    if not user_id.startswith("whatsapp:"):
-                        user_id = f"whatsapp:{user_id}"
+            # If we couldn't resolve the user ID or platform, use safe_send_message
+            # which will try its best to determine the right approach
+            from common.messaging.utils import safe_send_message
+            success = await safe_send_message(
+                user_id=user_id,
+                text=full_description,
+                platform=platform
+            )
 
-                    client.messages.create(
-                        from_=TWILIO_PHONE_NUMBER,
-                        body=full_description,
-                        to=user_id
-                    )
-                    return True
-                elif detected_platform == "telegram":
-                    from services.telegram_service.app.bot import bot
-                    await bot.send_message(
-                        chat_id=user_id,
-                        text=full_description
-                    )
-                    return True
+            return success
 
-            return False
         except Exception as e:
             logger.error(f"Error processing show more description: {e}")
             return False
@@ -569,6 +552,7 @@ def process_show_more_description(user_id, resource_url, message_id=None, platfo
     try:
         return asyncio.run(process())
     except RuntimeError as e:
+        # Handle case where there's already an event loop
         logger.warning(f"RuntimeError in process_show_more_description: {e}")
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)

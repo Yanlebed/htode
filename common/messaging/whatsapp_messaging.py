@@ -6,12 +6,16 @@ import os
 from typing import Optional, List, Dict, Any, Union
 
 from twilio.rest import Client
+from twilio.base.exceptions import TwilioRestException
 
 from .interface import MessagingInterface
-from .utils import retry_with_exponential_backoff
+from common.utils.retry_utils import retry_with_exponential_backoff, NETWORK_EXCEPTIONS
 
 logger = logging.getLogger(__name__)
 
+TWILIO_EXCEPTIONS = [
+    TwilioRestException,  # Base exception for Twilio API errors
+]
 
 class WhatsAppMessaging(MessagingInterface):
     """WhatsApp implementation of the messaging interface via Twilio."""
@@ -45,7 +49,11 @@ class WhatsAppMessaging(MessagingInterface):
             return f"whatsapp:{user_id}"
         return user_id
 
-    @retry_with_exponential_backoff(max_retries=3, initial_delay=1)
+    @retry_with_exponential_backoff(
+        max_retries=3,
+        initial_delay=1,
+        retryable_exceptions=TWILIO_EXCEPTIONS + NETWORK_EXCEPTIONS
+    )
     async def send_text(
             self,
             user_id: str,
@@ -73,7 +81,11 @@ class WhatsAppMessaging(MessagingInterface):
             logger.error(f"Error sending WhatsApp message to {user_id}: {e}")
             raise  # Let the retry decorator handle this
 
-    @retry_with_exponential_backoff(max_retries=3, initial_delay=1)
+    @retry_with_exponential_backoff(
+        max_retries=3,
+        initial_delay=1,
+        retryable_exceptions=TWILIO_EXCEPTIONS + NETWORK_EXCEPTIONS
+    )
     async def send_media(
             self,
             user_id: str,
