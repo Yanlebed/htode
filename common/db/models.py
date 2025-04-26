@@ -8,12 +8,19 @@ import logging
 from typing import List, Dict, Any, Optional, Union
 from datetime import datetime
 
+from common.db.models import AdPhone, Ad
 from .database import execute_query
 from common.config import GEO_ID_MAPPING, get_key_by_value
 from common.utils.phone_parser import extract_phone_numbers_from_resource
 from common.utils.cache import redis_cache, CacheTTL, batch_get_cached, batch_set_cached, redis_client
 from common.db.database import get_db_connection
 from psycopg2.extras import RealDictCursor
+
+from common.db.repositories.user_repository import UserRepository
+from common.db.session import db_session
+from common.db.repositories.subscription_repository import SubscriptionRepository
+from common.db.repositories.ad_repository import AdRepository
+from common.db.repositories.favorite_repository import FavoriteRepository
 
 logger = logging.getLogger(__name__)
 
@@ -27,39 +34,23 @@ def get_or_create_user(messenger_id, messenger_type="telegram"):
     """
     logger.info(f"Getting user with {messenger_type} id: {messenger_id}")
 
-    if messenger_type == "telegram":
-        sql_check = "SELECT id FROM users WHERE telegram_id = %s"
-    elif messenger_type == "viber":
-        sql_check = "SELECT id FROM users WHERE viber_id = %s"
-    else:  # whatsapp
-        sql_check = "SELECT id FROM users WHERE whatsapp_id = %s"
+    with db_session() as db:
+        # Get user by messenger ID
+        user = UserRepository.get_by_messenger_id(db, messenger_id, messenger_type)
 
-    row = execute_query(sql_check, [messenger_id], fetchone=True)
-    if row:
-        logger.info(f"Found user with {messenger_type} id: {messenger_id}")
-        return row['id']
+        if user:
+            logger.info(f"Found user with {messenger_type} id: {messenger_id}")
+            return user.id
 
-    logger.info(f"Creating user with {messenger_type} id: {messenger_id}")
-    free_until = (datetime.now() + datetime.timedelta(days=7)).isoformat()
+        logger.info(f"Creating user with {messenger_type} id: {messenger_id}")
 
-    if messenger_type == "telegram":
-        sql_insert = """
-                     INSERT INTO users (telegram_id, free_until)
-                     VALUES (%s, %s) RETURNING id \
-                     """
-    elif messenger_type == "viber":
-        sql_insert = """
-                     INSERT INTO users (viber_id, free_until)
-                     VALUES (%s, %s) RETURNING id \
-                     """
-    else:  # whatsapp
-        sql_insert = """
-                     INSERT INTO users (whatsapp_id, free_until)
-                     VALUES (%s, %s) RETURNING id \
-                     """
+        # Create a new user
+        from datetime import datetime, timedelta
+        free_until = datetime.now() + timedelta(days=7)
 
-    user = execute_query(sql_insert, [messenger_id, free_until], fetchone=True, commit=True)
-    return user['id']
+        # Create user with the appropriate messenger ID
+        user = UserRepository.create_messenger_user(db, messenger_id, messenger_type, free_until)
+        return user.id
 
 
 def update_user_filter(user_id, filters):
@@ -68,44 +59,51 @@ def update_user_filter(user_id, filters):
     """
     logger.info(f"Updating filters for user_id: {user_id}")
 
-    # First verify user exists
-    check_sql = "SELECT id FROM users WHERE id = %s"
-    user_exists = execute_query(check_sql, [user_id], fetchone=True)
-    if not user_exists:
-        logger.error(f"Cannot update filters - user_id {user_id} does not exist in database")
-        raise ValueError(f"User ID {user_id} does not exist")
+    try:
+        with db_session() as db:
+            # Check if user exists
+            user = UserRepository.get_by_id(db, user_id)
+            if not user:
+                logger.error(f"Cannot update filters - user_id {user_id} does not exist in database")
+                raise ValueError(f"User ID {user_id} does not exist")
 
-    property_type = filters.get('property_type')
-    city = filters.get('city')
-    geo_id = get_key_by_value(city, GEO_ID_MAPPING)
-    rooms_count = filters.get('rooms')  # List or None
-    price_min = filters.get('price_min')
-    price_max = filters.get('price_max')
+            # Extract filter data
+            property_type = filters.get('property_type')
+            city = filters.get('city')
+            geo_id = get_key_by_value(city, GEO_ID_MAPPING)
+            rooms_count = filters.get('rooms')  # List or None
+            price_min = filters.get('price_min')
+            price_max = filters.get('price_max')
 
-    sql_upsert = """
-                 INSERT INTO user_filters (user_id, property_type, city, rooms_count, price_min, price_max)
-                 VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (user_id)
-    DO
-                 UPDATE SET
-                     property_type = EXCLUDED.property_type,
-                     city = EXCLUDED.city,
-                     rooms_count = EXCLUDED.rooms_count,
-                     price_min = EXCLUDED.price_min,
-                     price_max = EXCLUDED.price_max \
-                 """
-    logger.info(
-        f"Executing query with params: [{user_id}, {property_type}, {geo_id}, {rooms_count}, {price_min}, {price_max}]")
-    execute_query(sql_upsert, [user_id, property_type, geo_id, rooms_count, price_min, price_max], commit=True)
+            # Create filter data dictionary
+            filter_data = {
+                'property_type': property_type,
+                'city': geo_id,
+                'rooms_count': rooms_count,
+                'price_min': price_min,
+                'price_max': price_max
+            }
 
-    # Invalidate relevant cache entries
-    cache_key = f"user_filters:{user_id}"
-    redis_client.delete(cache_key)
+            # Update or create user filter
+            SubscriptionRepository.update_user_filter(db, user_id, filter_data)
 
-    # Also invalidate the matching users cache for ads that might match this filter
-    matching_pattern = "matching_users:*"
-    matching_keys = redis_client.keys(matching_pattern)
-    if matching_keys:
-        redis_client.delete(*matching_keys)
+            logger.info(
+                f"Updated filters: [{user_id}, {property_type}, {geo_id}, {rooms_count}, {price_min}, {price_max}]")
+
+            # Invalidate relevant cache entries
+            from common.utils.cache import redis_client
+            cache_key = f"user_filters:{user_id}"
+            redis_client.delete(cache_key)
+
+            # Also invalidate the matching users cache for ads that might match this filter
+            matching_pattern = "matching_users:*"
+            matching_keys = redis_client.keys(matching_pattern)
+            if matching_keys:
+                redis_client.delete(*matching_keys)
+
+    except Exception as e:
+        logger.error(f"Error updating user filters: {e}")
+        raise
 
 
 @redis_cache("user_filters", ttl=CacheTTL.MEDIUM)
@@ -168,26 +166,19 @@ def get_db_user_id_by_telegram_id(messenger_id, messenger_type="telegram"):
     """
     logger.info(f"Getting database user ID for {messenger_type} ID: {messenger_id}")
 
-    # Choose the appropriate SQL query based on messenger type
-    if messenger_type == "telegram":
-        sql = "SELECT id FROM users WHERE telegram_id = %s"
-    elif messenger_type == "viber":
-        sql = "SELECT id FROM users WHERE viber_id = %s"
-    elif messenger_type == "whatsapp":
-        sql = "SELECT id FROM users WHERE whatsapp_id = %s"
-    else:
-        logger.error(f"Invalid messenger type: {messenger_type}")
+    try:
+        with db_session() as db:
+            user = UserRepository.get_by_messenger_id(db, messenger_id, messenger_type)
+
+            if user:
+                logger.info(f"Found database user ID {user.id} for {messenger_type} ID: {messenger_id}")
+                return user.id
+
+        logger.warning(f"No database user found for {messenger_type} ID: {messenger_id}")
         return None
-
-    # Execute the query
-    row = execute_query(sql, [messenger_id], fetchone=True)
-
-    if row:
-        logger.info(f"Found database user ID {row['id']} for {messenger_type} ID: {messenger_id}")
-        return row['id']
-
-    logger.warning(f"No database user found for {messenger_type} ID: {messenger_id}")
-    return None
+    except Exception as e:
+        logger.error(f"Error finding user by messenger ID: {e}")
+        return None
 
 
 def get_platform_ids_for_user(user_id: int) -> dict:
@@ -200,28 +191,28 @@ def get_platform_ids_for_user(user_id: int) -> dict:
     Returns:
         Dictionary with platform IDs (telegram_id, viber_id, whatsapp_id)
     """
-    sql = """
-          SELECT telegram_id, viber_id, whatsapp_id
-          FROM users
-          WHERE id = %s
-          """
-    user = execute_query(sql, [user_id], fetchone=True)
+    try:
+        with db_session() as db:
+            user = UserRepository.get_by_id(db, user_id)
 
-    if not user:
+            if not user:
+                return {}
+
+            # Create a cleaned dictionary with only non-None values
+            platform_ids = {}
+            if user.telegram_id is not None:
+                platform_ids["telegram_id"] = user.telegram_id
+
+            if user.viber_id is not None:
+                platform_ids["viber_id"] = user.viber_id
+
+            if user.whatsapp_id is not None:
+                platform_ids["whatsapp_id"] = user.whatsapp_id
+
+            return platform_ids
+    except Exception as e:
+        logger.error(f"Error getting platform IDs for user {user_id}: {e}")
         return {}
-
-    # Create a cleaned dictionary with only non-None values
-    platform_ids = {}
-    if user.get("telegram_id") is not None:
-        platform_ids["telegram_id"] = user["telegram_id"]
-
-    if user.get("viber_id") is not None:
-        platform_ids["viber_id"] = user["viber_id"]
-
-    if user.get("whatsapp_id") is not None:
-        platform_ids["whatsapp_id"] = user["whatsapp_id"]
-
-    return platform_ids
 
 
 def find_users_for_ad(ad):
@@ -230,8 +221,16 @@ def find_users_for_ad(ad):
     Now with Redis caching and batch processing to improve performance.
     """
     try:
+        # Extract the ad ID for caching
+        ad_id = ad.get('id') if isinstance(ad, dict) else ad.id if hasattr(ad, 'id') else None
+
+        if not ad_id:
+            logger.error("Cannot find users for ad without ID")
+            return []
+
         # Create a cache key based on the ad's primary attributes that affect matching
-        ad_id = ad.get('id')
+        from common.utils.cache import redis_client
+
         cache_key = f"matching_users:{ad_id}"
 
         # Try to get results from cache first
@@ -242,45 +241,38 @@ def find_users_for_ad(ad):
 
         logger.info(f'Looking for users for ad: {ad}')
 
-        # Improved SQL query with indexed columns first in WHERE conditions
-        # and optimization for both active and free users
-        sql = """
-              SELECT u.id AS user_id
-              FROM users u
-                       JOIN user_filters uf ON u.id = uf.user_id
-              WHERE (u.free_until > NOW() OR u.subscription_until > NOW())
-                AND uf.is_paused = FALSE
-                AND (uf.property_type = %s OR uf.property_type IS NULL)
-                AND (uf.city = %s OR uf.city IS NULL)
-                AND (
-                  uf.rooms_count IS NULL
-                      OR %s = ANY (uf.rooms_count)
-                  )
-                AND (uf.price_min IS NULL OR %s >= uf.price_min)
-                AND (uf.price_max IS NULL OR %s <= uf.price_max)
-              """
+        with db_session() as db:
+            # Convert dict to Ad object if needed
+            if isinstance(ad, dict):
+                existing_ad = db.query(Ad).get(ad_id)
+                if not existing_ad:
+                    # Create temporary Ad object for matching
+                    from common.db.models.ad import Ad
+                    ad_obj = Ad(
+                        id=ad_id,
+                        property_type=ad.get('property_type'),
+                        city=ad.get('city'),
+                        rooms_count=ad.get('rooms_count'),
+                        price=ad.get('price')
+                    )
+                else:
+                    ad_obj = existing_ad
+            else:
+                ad_obj = ad
 
-        # Extract ad properties for matching
-        ad_property_type = ad.get('property_type')
-        ad_city = ad.get('city')
-        ad_rooms = ad.get('rooms_count')
-        ad_price = ad.get('price')
-
-        # Execute the SQL query
-        rows = execute_query(sql, [ad_property_type, ad_city, ad_rooms, ad_price, ad_price], fetch=True)
-        logger.info(f'Found {len(rows)} users for ad: {ad}')
-
-        # Extract user IDs from results
-        user_ids = [row["user_id"] for row in rows]
+            # Use repository to find matching users
+            user_ids = AdRepository.find_users_for_ad(db, ad_obj)
 
         # Cache the results for 1 hour
-        # This is especially valuable since user filter preferences change infrequently
-        redis_client.set(cache_key, json.dumps(user_ids), ex=CacheTTL.STANDARD)
+        redis_client.set(cache_key, json.dumps(user_ids), ex=3600)
 
+        logger.info(f'Found {len(user_ids)} users for ad: {ad_id}')
         return user_ids
+
     except Exception as e:
-        logger.error(f"Error finding users for ad {ad.get('id')}: {e}")
-        return []  # Return empty list on error to avoid service disruption
+        logger.error(
+            f"Error finding users for ad {ad.get('id') if isinstance(ad, dict) else getattr(ad, 'id', 'unknown')}: {e}")
+        return []
 
 
 def batch_find_users_for_ads(ads):
@@ -390,20 +382,26 @@ def batch_find_users_for_ads(ads):
 
 def get_subscription_data_for_user(user_id):
     """Get subscription data for a user with caching"""
+    from common.utils.cache import redis_client
+
     cache_key = f"user_subscription:{user_id}"
     cached = redis_client.get(cache_key)
 
     if cached:
         return json.loads(cached)
 
-    sql = "SELECT * FROM user_filters WHERE user_id = %s"
-    row = execute_query(sql, [user_id], fetchone=True)
+    try:
+        with db_session() as db:
+            user_filter = SubscriptionRepository.get_user_filters(db, user_id)
 
-    if row:
-        # Cache for 5 minutes - this data changes infrequently but is accessed often
-        redis_client.set(cache_key, json.dumps(row), ex=CacheTTL.MEDIUM)
-        return row
-    else:
+            if user_filter:
+                # Cache for 5 minutes - this data changes infrequently but is accessed often
+                redis_client.set(cache_key, json.dumps(user_filter), ex=300)
+                return user_filter
+            else:
+                return None
+    except Exception as e:
+        logger.error(f"Error getting subscription data for user {user_id}: {e}")
         return None
 
 
@@ -679,80 +677,105 @@ def update_subscription(subscription_id, user_id, new_values):
         redis_client.delete(*matching_keys)
 
 
-def add_favorite_ad(user_id, ad_id):
-    """Add a favorite ad with cache invalidation"""
-    # check limit 50
-    sql_count = "SELECT COUNT(*) as cnt FROM favorite_ads WHERE user_id = %s"
-    row = execute_query(sql_count, [user_id], fetchone=True)
-    if row["cnt"] >= 50:
-        raise ValueError("You already have 50 favorite ads, cannot add more.")
+def add_favorite_ad(user_id: int, ad_id: int) -> Optional[int]:
+    """
+    Add a favorite ad with cache invalidation
 
-    sql_insert = """
-                 INSERT INTO favorite_ads (user_id, ad_id)
-                 VALUES (%s, %s) ON CONFLICT (user_id, ad_id) DO NOTHING -- if you have unique constraint       \
-                 """
-    execute_query(sql_insert, [user_id, ad_id])
+    Returns:
+        Favorite ID or None if failed
+    """
+    try:
+        with db_session() as db:
+            # Use repository to add favorite
+            favorite = FavoriteRepository.add_favorite(db, user_id, ad_id)
 
-    # Invalidate favorites cache
-    redis_client.delete(f"user_favorites:{user_id}")
+            # Invalidate favorites cache
+            from common.utils.cache import redis_client
+            redis_client.delete(f"user_favorites:{user_id}")
+
+            return favorite.id if favorite else None
+    except ValueError as e:
+        # This handles the case where user already has 50 favorites
+        logger.warning(f"Couldn't add favorite: {str(e)}")
+        raise
+    except Exception as e:
+        logger.error(f"Error adding favorite ad: {e}")
+        return None
 
 
 def list_favorites(user_id):
-    """List favorites with caching"""
+    """List user's favorite ads with caching"""
+    from common.utils.cache import redis_client
+
     cache_key = f"user_favorites:{user_id}"
     cached = redis_client.get(cache_key)
 
     if cached:
         return json.loads(cached)
 
-    # Use the optimized version with eager loading
-    result = list_favorites_with_eager_loading(user_id)
+    try:
+        with db_session() as db:
+            favorites = FavoriteRepository.list_favorites(db, user_id)
 
-    # Cache for 5 minutes - favorites change more frequently than filters
-    redis_client.set(cache_key, json.dumps(result), ex=CacheTTL.MEDIUM)
+            # Cache for 5 minutes - favorites change more frequently than filters
+            redis_client.set(cache_key, json.dumps(favorites), ex=300)
 
-    return result
+            return favorites
+    except Exception as e:
+        logger.error(f"Error listing favorites: {e}")
+        return []
 
 
-def remove_favorite_ad(user_id, ad_id):
+def remove_favorite_ad(user_id: int, ad_id: int) -> bool:
     """Remove a favorite ad with cache invalidation"""
-    sql = "DELETE FROM favorite_ads WHERE user_id = %s AND ad_id = %s"
-    execute_query(sql, [user_id, ad_id])
+    try:
+        with db_session() as db:
+            # Use repository to remove favorite
+            success = FavoriteRepository.remove_favorite(db, user_id, ad_id)
 
-    # Invalidate favorites cache
-    redis_client.delete(f"user_favorites:{user_id}")
+            # Invalidate favorites cache
+            from common.utils.cache import redis_client
+            redis_client.delete(f"user_favorites:{user_id}")
 
-    return True
+            return success
+    except Exception as e:
+        logger.error(f"Error removing favorite ad: {e}")
+        return False
 
 
 def get_extra_images(resource_url):
     """Get extra images for an ad with caching"""
+    from common.utils.cache import redis_client
+
     cache_key = f"extra_images:{resource_url}"
     cached = redis_client.get(cache_key)
 
     if cached:
         return json.loads(cached)
 
-    # First, look up the ad using resource_url
-    sql = "SELECT id FROM ads WHERE resource_url = %s"
-    ad = execute_query(sql, [resource_url], fetchone=True)
-    if not ad:
+    try:
+        with db_session() as db:
+            # First, look up the ad using resource_url
+            ad = AdRepository.get_by_resource_url(db, resource_url)
+            if not ad:
+                return []
+
+            # Get images for the ad
+            images = AdRepository.get_ad_images(db, ad.id)
+
+            # Cache for 1 hour - images rarely change
+            redis_client.set(cache_key, json.dumps(images), ex=3600)
+
+            return images
+    except Exception as e:
+        logger.error(f"Error getting extra images: {e}")
         return []
-
-    ad_id = ad["id"]
-    sql_images = "SELECT image_url FROM ad_images WHERE ad_id = %s"
-    rows = execute_query(sql_images, [ad_id], fetch=True)
-
-    images = [row["image_url"] for row in rows] if rows else []
-
-    # Cache for 1 hour - images rarely change
-    redis_client.set(cache_key, json.dumps(images), ex=CacheTTL.LONG)
-
-    return images
 
 
 def get_full_ad_description(resource_url):
     """Get full ad description with caching"""
+    from common.utils.cache import redis_client
+
     cache_key = f"ad_description:{resource_url}"
     cached = redis_client.get(cache_key)
 
@@ -760,73 +783,63 @@ def get_full_ad_description(resource_url):
         return cached.decode('utf-8')
 
     logger.info(f'Getting full ad description for resource_url: {resource_url}...')
-    sql = "SELECT description from ads WHERE resource_url = %s"
-    ad = execute_query(sql, [resource_url], fetchone=True)
 
-    description = ad["description"] if ad else None
+    try:
+        with db_session() as db:
+            ad = AdRepository.get_by_resource_url(db, resource_url)
+            description = ad.description if ad else None
 
-    if description:
-        # Cache for 1 hour - descriptions rarely change
-        redis_client.set(cache_key, description, ex=CacheTTL.LONG)
+        if description:
+            # Cache for 1 hour - descriptions rarely change
+            redis_client.set(cache_key, description, ex=3600)
 
-    return description
+        return description
+    except Exception as e:
+        logger.error(f"Error getting full ad description: {e}")
+        return None
 
 
 def store_ad_phones(resource_url, ad_id):
     """
     Extracts phone numbers and stores them with cache invalidation
     """
-    # First check if the ad exists in the database
-    check_sql = "SELECT id FROM ads WHERE id = %s"
-    ad_exists = execute_query(check_sql, [ad_id], fetchone=True)
-
-    if not ad_exists:
-        logger.warning(f"Cannot store phones for ad_id={ad_id} - ad doesn't exist in the database")
-        return 0
-
-    # Only proceed if the ad exists
     try:
-        phones_added = 0
-        result = extract_phone_numbers_from_resource(resource_url)
-        phones = result.phone_numbers
-        viber_link = result.viber_link
+        with db_session() as db:
+            # First check if the ad exists in the database
+            ad = db.query(Ad).get(ad_id)
 
-        # Begin transaction for all phone operations
-        conn = None
-        try:
-            # Use a context manager approach
-            with get_db_connection() as conn:
-                with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    # Delete existing phones for this ad to avoid duplicates
-                    cur.execute("DELETE FROM ad_phones WHERE ad_id = %s", [ad_id])
+            if not ad:
+                logger.warning(f"Cannot store phones for ad_id={ad_id} - ad doesn't exist in the database")
+                return 0
 
-                    # Insert new phones
-                    for phone in phones:
-                        cur.execute(
-                            "INSERT INTO ad_phones (ad_id, phone) VALUES (%s, %s)",
-                            [ad_id, phone]
-                        )
-                        phones_added += 1
+            # Extract phones from resource
+            result = extract_phone_numbers_from_resource(resource_url)
+            phones = result.phone_numbers
+            viber_link = result.viber_link
 
-                    # Insert viber link if available
-                    if viber_link:
-                        cur.execute(
-                            "INSERT INTO ad_phones (ad_id, viber_link) VALUES (%s, %s)",
-                            [ad_id, viber_link]
-                        )
+            # Delete existing phones for this ad to avoid duplicates
+            # This could be added to the AdRepository if not already there
+            db.query(AdPhone).filter(AdPhone.ad_id == ad_id).delete()
 
-                    conn.commit()
+            phones_added = 0
 
-                    # Invalidate relevant cache
-                    redis_client.delete(f"full_ad:{ad_id}")
+            # Insert new phones
+            for phone in phones:
+                AdRepository.add_phone(db, ad_id, phone)
+                phones_added += 1
 
-        except Exception as e:
-            if conn:
-                conn.rollback()
-            logger.error(f"Transaction error storing phones for ad {ad_id}: {e}")
-            raise
+            # Insert viber link if available
+            if viber_link:
+                AdRepository.add_phone(db, ad_id, None, viber_link)
 
-        return phones_added
+            # Commit changes
+            db.commit()
+
+            # Invalidate relevant cache
+            from common.utils.cache import redis_client
+            redis_client.delete(f"full_ad:{ad_id}")
+
+            return phones_added
     except Exception as e:
         logger.error(f"Error extracting or storing phones for ad {ad_id}: {e}")
         return 0
@@ -839,21 +852,27 @@ def warm_cache_for_user(user_id):
     """
     logger.info(f"Warming cache for user_id: {user_id}")
 
-    # Prefetch user filters
-    filters = get_user_filters(user_id)
+    try:
+        # Prefetch user filters
+        get_user_filters(user_id)
 
-    # Prefetch user's favorites
-    favorites = list_favorites(user_id)
+        # Prefetch user's favorites
+        favorites = list_favorites(user_id)
 
-    # Prefetch subscription data
-    subscription = get_subscription_data_for_user(user_id)
+        # Prefetch subscription data
+        get_subscription_data_for_user(user_id)
 
-    # If we have favorites, prefetch full data for those ads
-    if favorites:
-        ad_ids = [fav.get('ad_id') for fav in favorites if fav.get('ad_id')]
-        batch_get_full_ad_data(ad_ids)
+        # If we have favorites, prefetch full data for those ads
+        if favorites:
+            ad_ids = [fav.get('ad_id') for fav in favorites if fav.get('ad_id')]
 
-    logger.info(f"Cache warmed for user_id: {user_id}")
+            with db_session() as db:
+                for ad_id in ad_ids:
+                    AdRepository.get_full_ad_data(db, ad_id)
+
+        logger.info(f"Cache warmed for user_id: {user_id}")
+    except Exception as e:
+        logger.error(f"Error warming cache for user {user_id}: {e}")
 
 
 def start_free_subscription_of_user(user_id: int) -> bool:
@@ -867,22 +886,16 @@ def start_free_subscription_of_user(user_id: int) -> bool:
         True if successful, False otherwise
     """
     try:
-        from datetime import datetime, timedelta
-        free_until = (datetime.now() + timedelta(days=7)).isoformat()
-
-        sql = """
-              UPDATE users
-              SET free_until = %s
-              WHERE id = %s
-              """
-        execute_query(sql, [free_until, user_id], commit=True)
+        with db_session() as db:
+            result = UserRepository.start_free_subscription(db, user_id)
 
         # Invalidate cache
+        from common.utils.cache import redis_client
         cache_key = f"user_subscription:{user_id}"
         redis_client.delete(cache_key)
 
         logger.info(f"Started free subscription for user {user_id}")
-        return True
+        return result
     except Exception as e:
         logger.error(f"Error starting free subscription for user {user_id}: {e}")
         return False
@@ -899,6 +912,8 @@ def get_subscription_until_for_user(user_id: int, free: bool = False) -> Optiona
     Returns:
         Subscription expiration date as string or None if not found
     """
+    from common.utils.cache import redis_client
+
     cache_key = f"user_subscription:{user_id}:{free}"
     cached = redis_client.get(cache_key)
 
@@ -906,20 +921,27 @@ def get_subscription_until_for_user(user_id: int, free: bool = False) -> Optiona
         return cached.decode('utf-8')
 
     try:
-        field = "free_until" if free else "subscription_until"
-        sql = f"SELECT {field} FROM users WHERE id = %s"
-        result = execute_query(sql, [user_id], fetchone=True)
+        with db_session() as db:
+            user = UserRepository.get_by_id(db, user_id)
 
-        if result and result[field]:
-            date_value = result[field]
-            if isinstance(date_value, datetime):
-                formatted_date = date_value.strftime("%d.%m.%Y")
+            if not user:
+                return None
+
+            # Get the appropriate date field
+            if free:
+                date_value = user.free_until
             else:
-                formatted_date = str(date_value)
+                date_value = user.subscription_until
 
-            # Cache for 10 minutes
-            redis_client.set(cache_key, formatted_date, ex=600)
-            return formatted_date
+            if date_value:
+                if isinstance(date_value, datetime):
+                    formatted_date = date_value.strftime("%d.%m.%Y")
+                else:
+                    formatted_date = str(date_value)
+
+                # Cache for 10 minutes
+                redis_client.set(cache_key, formatted_date, ex=600)
+                return formatted_date
 
         return None
     except Exception as e:
@@ -978,25 +1000,22 @@ def disable_subscription_for_user(user_id: int) -> bool:
         True if successful, False otherwise
     """
     try:
-        from common.db.database import execute_query
+        with db_session() as db:
+            success = SubscriptionRepository.disable_subscription(db, user_id)
 
-        # Update all user filters to paused
-        sql = "UPDATE user_filters SET is_paused = TRUE WHERE user_id = %s"
-        execute_query(sql, [user_id], commit=True)
+            # Invalidate relevant cache entries
+            from common.utils.cache import redis_client
+            cache_key = f"user_filters:{user_id}"
+            redis_client.delete(cache_key)
 
-        logger.info(f"Disabled subscription for user {user_id}")
+            # Also invalidate matching users cache for ads
+            matching_pattern = "matching_users:*"
+            matching_keys = redis_client.keys(matching_pattern)
+            if matching_keys:
+                redis_client.delete(*matching_keys)
 
-        # Invalidate relevant cache entries
-        cache_key = f"user_filters:{user_id}"
-        redis_client.delete(cache_key)
-
-        # Also invalidate matching users cache for ads
-        matching_pattern = "matching_users:*"
-        matching_keys = redis_client.keys(matching_pattern)
-        if matching_keys:
-            redis_client.delete(*matching_keys)
-
-        return True
+            logger.info(f"Disabled subscription for user {user_id}")
+            return success
     except Exception as e:
         logger.error(f"Error disabling subscription for user {user_id}: {e}")
         return False
@@ -1013,25 +1032,22 @@ def enable_subscription_for_user(user_id: int) -> bool:
         True if successful, False otherwise
     """
     try:
-        from common.db.database import execute_query
+        with db_session() as db:
+            success = SubscriptionRepository.enable_subscription(db, user_id)
 
-        # Update all user filters to not paused
-        sql = "UPDATE user_filters SET is_paused = FALSE WHERE user_id = %s"
-        execute_query(sql, [user_id], commit=True)
+            # Invalidate relevant cache entries
+            from common.utils.cache import redis_client
+            cache_key = f"user_filters:{user_id}"
+            redis_client.delete(cache_key)
 
-        logger.info(f"Enabled subscription for user {user_id}")
+            # Also invalidate matching users cache for ads
+            matching_pattern = "matching_users:*"
+            matching_keys = redis_client.keys(matching_pattern)
+            if matching_keys:
+                redis_client.delete(*matching_keys)
 
-        # Invalidate relevant cache entries
-        cache_key = f"user_filters:{user_id}"
-        redis_client.delete(cache_key)
-
-        # Also invalidate matching users cache for ads
-        matching_pattern = "matching_users:*"
-        matching_keys = redis_client.keys(matching_pattern)
-        if matching_keys:
-            redis_client.delete(*matching_keys)
-
-        return True
+            logger.info(f"Enabled subscription for user {user_id}")
+            return success
     except Exception as e:
         logger.error(f"Error enabling subscription for user {user_id}: {e}")
         return False
@@ -1048,13 +1064,8 @@ def count_subscriptions(user_id: int) -> int:
         Number of subscriptions
     """
     try:
-        from common.db.database import execute_query
-
-        # Get count of user filters
-        sql = "SELECT COUNT(*) as count FROM user_filters WHERE user_id = %s"
-        result = execute_query(sql, [user_id], fetchone=True)
-
-        return result["count"] if result else 0
+        with db_session() as db:
+            return SubscriptionRepository.count_subscriptions(db, user_id)
     except Exception as e:
         logger.error(f"Error counting subscriptions for user {user_id}: {e}")
         return 0
@@ -1073,30 +1084,15 @@ def list_subscriptions_paginated(user_id: int, page: int = 0, per_page: int = 5)
         List of subscription dictionaries
     """
     try:
-        from common.db.database import execute_query
-
-        # Calculate offset
-        offset = page * per_page
-
-        # Get paginated subscriptions
-        sql = """
-              SELECT *
-              FROM user_filters
-              WHERE user_id = %s
-              ORDER BY id
-                  LIMIT %s \
-              OFFSET %s
-              """
-        rows = execute_query(sql, [user_id, per_page, offset], fetch=True)
-
-        return rows or []
+        with db_session() as db:
+            return SubscriptionRepository.list_subscriptions_paginated(db, user_id, page, per_page)
     except Exception as e:
         logger.error(f"Error listing subscriptions for user {user_id}: {e}")
         return []
 
 
 # Cache helper for subscription data
-@redis_cache("subscription_status", ttl=CacheTTL.MEDIUM)
+@redis_cache("subscription_status", ttl=CacheTTL.MEDIUM)  # 5 minutes cache
 def get_subscription_status(user_id: int) -> dict:
     """
     Get subscription status data for a user with caching
@@ -1107,28 +1103,28 @@ def get_subscription_status(user_id: int) -> dict:
     Returns:
         Dictionary with subscription status info
     """
-    sql = """
-          SELECT free_until, subscription_until
-          FROM users
-          WHERE id = %s
-          """
-    row = execute_query(sql, [user_id], fetchone=True)
+    try:
+        with db_session() as db:
+            user = UserRepository.get_by_id(db, user_id)
 
-    if not row:
-        return {"active": False}
+            if not user:
+                return {"active": False}
 
-    now = datetime.now()
-    free_until = row.get("free_until")
-    subscription_until = row.get("subscription_until")
+            now = datetime.now()
+            free_until = user.free_until
+            subscription_until = user.subscription_until
 
-    # Calculate if subscription is active
-    free_active = free_until and free_until > now
-    paid_active = subscription_until and subscription_until > now
+            # Calculate if subscription is active
+            free_active = free_until and free_until > now
+            paid_active = subscription_until and subscription_until > now
 
-    return {
-        "active": free_active or paid_active,
-        "free_active": free_active,
-        "paid_active": paid_active,
-        "free_until": free_until.isoformat() if free_until else None,
-        "subscription_until": subscription_until.isoformat() if subscription_until else None
-    }
+            return {
+                "active": free_active or paid_active,
+                "free_active": free_active,
+                "paid_active": paid_active,
+                "free_until": free_until.isoformat() if free_until else None,
+                "subscription_until": subscription_until.isoformat() if subscription_until else None
+            }
+    except Exception as e:
+        logger.error(f"Error getting subscription status for user {user_id}: {e}")
+        return {"active": False, "error": str(e)}

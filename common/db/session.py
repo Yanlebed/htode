@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 # Create the database URL from config
 DATABASE_URL = f"postgresql://{DB_CONFIG['user']}:{DB_CONFIG['password']}@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}"
 
-# Create engine and session factory
+# Create engine and session factory with connection pooling settings
 engine = create_engine(
     DATABASE_URL,
     pool_pre_ping=True,
@@ -45,5 +45,15 @@ def db_session() -> Generator[Session, None, None]:
         db.rollback()
         logger.error(f"Database error: {e}")
         raise
+    finally:
+        db.close()
+
+
+# Create a function to get db in a dependency-injection manner for FastAPI
+def get_db_dependency():
+    """Get a database session for dependency injection"""
+    db = SessionLocal()
+    try:
+        yield db
     finally:
         db.close()

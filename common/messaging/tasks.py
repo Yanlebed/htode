@@ -8,9 +8,11 @@ from typing import Dict, Any, Optional, List
 
 from common.celery_app import celery_app
 from common.db.database import execute_query
-from common.db.models import get_platform_ids_for_user, get_db_user_id_by_telegram_id, get_full_ad_description
+from common.db.models import get_platform_ids_for_user, get_db_user_id_by_telegram_id, get_full_ad_description, Ad
 from .service import messaging_service
 from .handlers.support_handler import handle_support_command, handle_support_category, SUPPORT_CATEGORIES
+from common.db.repositories.user_repository import UserRepository
+from common.db.session import db_session
 
 logger = logging.getLogger(__name__)
 
@@ -253,30 +255,38 @@ def send_ad_with_extra_buttons(user_id, text, s3_image_url, resource_url, ad_id,
             db_user_id = int(user_id)
         elif platform:
             # We have a platform-specific ID and we know the platform
-            db_user_id = get_db_user_id_by_telegram_id(user_id, messenger_type=platform)
+            with db_session() as db:
+                user = UserRepository.get_by_messenger_id(db, user_id, messenger_type=platform)
+                db_user_id = user.id if user else None
         else:
             # Try to detect platform from ID format
             if user_id.startswith("whatsapp:"):
-                db_user_id = get_db_user_id_by_telegram_id(user_id, messenger_type="whatsapp")
+                with db_session() as db:
+                    user = UserRepository.get_by_messenger_id(db, user_id, messenger_type="whatsapp")
+                    db_user_id = user.id if user else None
             elif len(user_id) > 20:  # Viber IDs are typically long UUIDs
-                db_user_id = get_db_user_id_by_telegram_id(user_id, messenger_type="viber")
+                with db_session() as db:
+                    user = UserRepository.get_by_messenger_id(db, user_id, messenger_type="viber")
+                    db_user_id = user.id if user else None
             else:
                 # Default to Telegram for shorter IDs
-                db_user_id = get_db_user_id_by_telegram_id(user_id, messenger_type="telegram")
+                with db_session() as db:
+                    user = UserRepository.get_by_messenger_id(db, user_id, messenger_type="telegram")
+                    db_user_id = user.id if user else None
 
         if not db_user_id:
             logger.warning(f"No database user found for user ID {user_id}")
             return
 
-        # Fetch images for the ad
-        sql_images = "SELECT image_url FROM ad_images WHERE ad_id = %s"
-        rows_imgs = execute_query(sql_images, [ad_id], fetch=True)
-        image_urls = [r["image_url"].strip() for r in rows_imgs] if rows_imgs else []
+        # Fetch images, phones for the ad using the repository
+        with db_session() as db:
+            ad = db.query(Ad).get(ad_id)
+            if not ad:
+                logger.error(f"Ad not found for ID: {ad_id}")
+                return
 
-        # Fetch phone numbers for the ad
-        sql_phones = "SELECT phone FROM ad_phones WHERE ad_id = %s"
-        rows_phones = execute_query(sql_phones, [ad_id], fetch=True)
-        phone_list = [row["phone"].replace("tel:", "").strip() for row in rows_phones] if rows_phones else []
+            image_urls = [img.image_url for img in ad.images]
+            phone_list = [phone.phone for phone in ad.phones if phone.phone]
 
         # Prepare the ad data
         ad_data = {

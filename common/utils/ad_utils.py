@@ -2,13 +2,13 @@
 
 import logging
 from typing import Dict, Any, Optional, List, Union
-from common.db.database import execute_query
+from common.db.session import db_session
+from common.db.repositories.ad_repository import AdRepository
 from common.utils.s3_utils import _upload_image_to_s3
-from psycopg2.extras import RealDictCursor
-from common.db.database import get_db_connection, return_connection
+from common.utils.phone_parser import extract_phone_numbers_from_resource
+from common.db.models.ad import Ad
 
 logger = logging.getLogger(__name__)
-from common.utils.phone_parser import extract_phone_numbers_from_resource
 
 
 def process_and_insert_ad(
@@ -19,7 +19,6 @@ def process_and_insert_ad(
     """
     Process ad data and insert into the database, including image upload and phone extraction.
     """
-
     # Extract ad unique ID
     ad_unique_id = str(ad_data.get("id", ""))
     if not ad_unique_id:
@@ -39,67 +38,47 @@ def process_and_insert_ad(
         # Continue anyway as we can still insert the ad
 
     # STEP 2: Insert the ad record and get its ID
-    conn = None
     try:
-        conn = get_db_connection()
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        with db_session() as db:
             # Check if ad already exists
-            check_sql = "SELECT id FROM ads WHERE external_id = %s"
-            cur.execute(check_sql, [ad_unique_id])
-            existing = cur.fetchone()
+            existing_ad = AdRepository.get_by_external_id(db, ad_unique_id)
 
-            if existing:
-                logger.info(f"Found existing ad with external_id={ad_unique_id}, database id={existing['id']}")
-                ad_id = existing['id']
+            if existing_ad:
+                logger.info(f"Found existing ad with external_id={ad_unique_id}, database id={existing_ad.id}")
+                ad_id = existing_ad.id
             else:
-                # Insert a new ad
-                insert_sql = """
-                INSERT INTO ads (
-                    external_id, property_type, city, address, price, square_feet, 
-                    rooms_count, floor, total_floors, insert_time, description, resource_url
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING id;
-                """
+                # Create new ad data dictionary
+                new_ad_data = {
+                    "external_id": ad_unique_id,
+                    "property_type": property_type,
+                    "city": geo_id,
+                    "address": ad_data.get("header"),
+                    "price": ad_data.get("price"),
+                    "square_feet": ad_data.get("area_total"),
+                    "rooms_count": ad_data.get("room_count"),
+                    "floor": ad_data.get("floor"),
+                    "total_floors": ad_data.get("floor_count"),
+                    "insert_time": ad_data.get("insert_time"),
+                    "description": ad_data.get("text"),
+                    "resource_url": resource_url
+                }
 
-                params = [
-                    ad_unique_id,
-                    property_type,
-                    geo_id,
-                    ad_data.get("header"),
-                    ad_data.get("price"),
-                    ad_data.get("area_total"),
-                    ad_data.get("room_count"),
-                    ad_data.get("floor"),
-                    ad_data.get("floor_count"),
-                    ad_data.get("insert_time"),
-                    ad_data.get("text"),
-                    resource_url
-                ]
-
-                logger.info(f"Inserting new ad with external_id={ad_unique_id}")
-                cur.execute(insert_sql, params)
-                row = cur.fetchone()
-
-                if not row:
-                    logger.error(f"Failed to insert ad with external_id={ad_unique_id}")
-                    conn.rollback()
-                    return None
-
-                ad_id = row["id"]
+                # Insert new ad
+                ad = AdRepository.create_ad(db, new_ad_data)
+                ad_id = ad.id
                 logger.info(f"Successfully inserted new ad with external_id={ad_unique_id}, got database id={ad_id}")
 
             # At this point, we have a valid ad_id
 
-            # STEP 3: Insert image references using the same transaction
+            # STEP 3: Insert image references
             if uploaded_image_urls:
                 logger.info(f"Inserting {len(uploaded_image_urls)} images for ad_id={ad_id}")
                 for url in uploaded_image_urls:
-                    img_sql = "INSERT INTO ad_images (ad_id, image_url) VALUES (%s, %s)"
-                    cur.execute(img_sql, (ad_id, url))
+                    AdRepository.add_image(db, ad_id, url)
+
                 logger.info(f"Successfully inserted {len(uploaded_image_urls)} images for ad_id={ad_id}")
 
-            # STEP 4: Try to extract and store phone numbers in the same transaction
+            # STEP 4: Try to extract and store phone numbers
             try:
                 # Extract phone numbers
                 logger.info(f"Extracting phones for ad_id={ad_id} from {resource_url}")
@@ -111,34 +90,23 @@ def process_and_insert_ad(
                 if phones:
                     logger.info(f"Found {len(phones)} phones for ad_id={ad_id}: {phones}")
                     for phone in phones:
-                        phone_sql = "INSERT INTO ad_phones (ad_id, phone) VALUES (%s, %s)"
-                        cur.execute(phone_sql, [ad_id, phone])
+                        AdRepository.add_phone(db, ad_id, phone)
                         logger.info(f"Inserted phone {phone} for ad_id={ad_id}")
 
                 # Insert viber link if available
                 if viber_link:
-                    viber_sql = "INSERT INTO ad_phones (ad_id, viber_link) VALUES (%s, %s)"
-                    cur.execute(viber_sql, [ad_id, viber_link])
+                    AdRepository.add_phone(db, ad_id, None, viber_link)
                     logger.info(f"Inserted viber link for ad_id={ad_id}")
             except Exception as e:
                 logger.error(f"Error extracting/storing phones for ad_id={ad_id}: {e}")
-                # Continue with the transaction - don't let phone errors stop us
+                # Continue - don't let phone errors stop us
 
-            # Commit everything at once
-            conn.commit()
+            db.commit()
             logger.info(f"Committed all changes for ad_id={ad_id} (external_id={ad_unique_id})")
             return ad_id
     except Exception as e:
         logger.exception(f"Error in process_and_insert_ad for external_id={ad_unique_id}: {e}")
-        if conn:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
         return None
-    finally:
-        if conn:
-            return_connection(conn)
 
 
 def process_ad_images(ad_data: Dict[str, Any], ad_unique_id: str) -> List[str]:
@@ -182,19 +150,19 @@ def insert_ad_images(ad_id: int, image_urls: List[str]) -> None:
         return
 
     try:
-        # First check if the ad exists in the database
-        check_sql = "SELECT id FROM ads WHERE id = %s"
-        ad_exists = execute_query(check_sql, [ad_id], fetchone=True)
+        with db_session() as db:
+            # Check if the ad exists
+            ad = db.query(Ad).get(ad_id)
 
-        if not ad_exists:
-            logger.warning(f"Cannot insert images - ad_id={ad_id} does not exist in the database")
-            return
+            if not ad:
+                logger.warning(f"Cannot insert images - ad_id={ad_id} does not exist in the database")
+                return
 
-        # Continue with image insertion only if the ad exists
-        sql = "INSERT INTO ad_images (ad_id, image_url) VALUES (%s, %s)"
-        for url in image_urls:
-            execute_query(sql, (ad_id, url))
-        logger.info(f"Inserted {len(image_urls)} images for ad ID {ad_id}")
+            # Insert images
+            for url in image_urls:
+                AdRepository.add_image(db, ad_id, url)
+
+            logger.info(f"Inserted {len(image_urls)} images for ad ID {ad_id}")
     except Exception as e:
         logger.exception(f"Error inserting ad images: {e}")
 
@@ -217,12 +185,9 @@ def get_ad_images(ad_id: Union[int, Dict[str, Any]]) -> List[str]:
         if not ad_id:
             return []
 
-        sql_check = "SELECT image_url FROM ad_images WHERE ad_id = %s"
-        rows = execute_query(sql_check, [ad_id], fetch=True)
-
-        if rows:
-            return [row["image_url"] for row in rows]
-        return []
+        with db_session() as db:
+            image_urls = AdRepository.get_ad_images(db, ad_id)
+            return image_urls
 
     except Exception as e:
         logger.exception(f"Error getting ad images: {e}")
