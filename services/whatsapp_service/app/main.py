@@ -4,7 +4,8 @@ import logging
 from fastapi import FastAPI, Form, Request, Response, BackgroundTasks
 from twilio.twiml.messaging_response import MessagingResponse
 from .bot import sanitize_phone_number, state_manager
-from .handlers import basic_handlers
+# Import the flow integration
+from .flow_integration import handle_message_with_flow
 
 # Initialize FastAPI app
 app = FastAPI(title="WhatsApp Service API")
@@ -36,9 +37,9 @@ async def incoming_message(
         # Generate response
         response = MessagingResponse()
 
-        # Process the message asynchronously in the background
+        # Process the message with flow integration
         background_tasks.add_task(
-            basic_handlers.handle_message,
+            handle_message_with_flow,
             user_id,
             Body,
             media_urls,

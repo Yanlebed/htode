@@ -10,6 +10,8 @@ from viberbot.api.viber_requests import (
 )
 from .bot import viber, WEBHOOK_URL, logger, state_manager
 from .handlers import basic_handlers
+# Import the flow integration
+from .flow_integration import handle_message_with_flow
 
 # Initialize FastAPI app
 app = FastAPI(title="Viber Service API")
@@ -33,8 +35,8 @@ async def incoming(request: Request, background_tasks: BackgroundTasks):
             message = viber_request.message
             user_id = viber_request.sender.id
 
-            # Process the message asynchronously in the background
-            background_tasks.add_task(basic_handlers.handle_message, user_id, message)
+            # Process the message asynchronously in the background with flow integration
+            background_tasks.add_task(handle_message_with_flow, user_id, message)
 
             return Response(status_code=200)
 
