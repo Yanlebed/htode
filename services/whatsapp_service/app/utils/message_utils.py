@@ -3,7 +3,7 @@
 import logging
 from typing import Optional
 
-from common.messaging.utils import (
+from common.messaging.unified_platform_utils import (
     safe_send_message as unified_send_message,
     safe_send_media as unified_send_media
 )

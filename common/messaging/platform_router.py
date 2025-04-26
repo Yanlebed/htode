@@ -6,7 +6,7 @@ import inspect
 from typing import Dict, Any, Optional, Union, Callable, List, Tuple, Type
 
 from common.messaging.interface import MessagingInterface
-from common.messaging.platform_utils import resolve_user_id
+from common.messaging.unified_platform_utils import resolve_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +146,7 @@ class PlatformRouter:
             platform = platform_name or platform or "telegram"  # Default to telegram
 
             # Get the user's current state
-            from common.messaging.state_management import state_manager
+            from common.unified_state_management import state_manager
             state_data = await state_manager.get_state(user_id, platform) or {}
             current_state = state_data.get("state", "start")
 

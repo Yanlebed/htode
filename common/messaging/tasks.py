@@ -473,7 +473,7 @@ def process_show_more_description(user_id, resource_url, message_id=None, platfo
                 return False
 
             # Use the platform_utils to resolve user ID and platform info
-            from common.messaging.platform_utils import resolve_user_id, get_messenger_instance
+            from common.messaging.unified_platform_utils import resolve_user_id, get_messenger_instance
 
             # Get database user ID, platform and platform-specific ID
             db_user_id, platform_name, platform_id = resolve_user_id(user_id, platform)
@@ -495,7 +495,7 @@ def process_show_more_description(user_id, resource_url, message_id=None, platfo
                 # For Telegram and if we have a message_id, try to edit the message
                 if platform_name == "telegram" and message_id:
                     try:
-                        from common.messaging.utils import safe_edit_message_telegram
+                        from common.messaging.unified_platform_utils import safe_edit_message_telegram
                         from services.telegram_service.app.bot import bot
 
                         # Try to get the original message
@@ -525,7 +525,7 @@ def process_show_more_description(user_id, resource_url, message_id=None, platfo
                 messenger = get_messenger_instance(platform_name)
                 if messenger:
                     # Format the user ID
-                    from common.messaging.platform_utils import format_user_id_for_platform
+                    from common.messaging.unified_platform_utils import format_user_id_for_platform
                     formatted_id = format_user_id_for_platform(platform_id, platform_name)
 
                     # Send the message
@@ -537,7 +537,7 @@ def process_show_more_description(user_id, resource_url, message_id=None, platfo
 
             # If we couldn't resolve the user ID or platform, use safe_send_message
             # which will try its best to determine the right approach
-            from common.messaging.utils import safe_send_message
+            from common.messaging.unified_platform_utils import safe_send_message
             success = await safe_send_message(
                 user_id=user_id,
                 text=full_description,

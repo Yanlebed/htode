@@ -10,8 +10,8 @@ from common.db.models import (
     remove_favorite_ad, list_favorites
 )
 from common.config import GEO_ID_MAPPING
-from common.messaging.utils import safe_send_message, safe_send_menu
-from common.messaging.platform_utils import resolve_user_id
+from common.messaging.unified_platform_utils import safe_send_message, safe_send_menu
+from common.messaging.unified_platform_utils import resolve_user_id
 
 logger = logging.getLogger(__name__)
 

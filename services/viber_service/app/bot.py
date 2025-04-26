@@ -4,7 +4,7 @@ import logging
 import os
 from viberbot import Api
 from viberbot.api.bot_configuration import BotConfiguration
-from common.utils.state_manager import RedisStateManager
+from common.unified_state_management import state_manager as RedisStateManager
 
 # Configure logging
 logging.basicConfig(

@@ -5,7 +5,7 @@ import asyncio
 from typing import Dict, Any, Optional, Union, List, Callable
 
 from common.messaging.flow_builder import flow_library, FlowContext
-from common.messaging.utils import safe_send_message, safe_send_menu
+from common.messaging.unified_platform_utils import safe_send_menu
 
 logger = logging.getLogger(__name__)
 
@@ -186,7 +186,7 @@ async def create_flow_context(user_id: Union[str, int],
     from common.messaging.flow_builder import FlowContext
 
     # Get current state data if available
-    from common.messaging.state_management import state_manager
+    from common.unified_state_management import state_manager
     state_data = await state_manager.get_state(user_id, platform) or {}
     flow_data = state_data.get("flow_data", {})
 

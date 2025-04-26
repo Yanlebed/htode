@@ -3,7 +3,7 @@
 import logging
 from aiogram.dispatcher import FSMContext
 
-from common.state_management import state_manager
+from common.unified_state_management import state_manager
 
 logger = logging.getLogger(__name__)
 

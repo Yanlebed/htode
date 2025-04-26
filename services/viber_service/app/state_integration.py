@@ -1,7 +1,7 @@
 # services/viber_service/app/state_integration.py
 
 import logging
-from common.state_management import state_manager
+from common.unified_state_management import state_manager
 
 logger = logging.getLogger(__name__)
 
