@@ -2,15 +2,13 @@
 
 import logging
 import asyncio
-import json
-from datetime import datetime, timedelta
-from typing import Dict, Any, Optional, List, Union
+
+from typing import Dict, Any, List, Union
 
 from common.celery_app import celery_app
 from common.db.database import execute_query
 from common.db.models import (
-    get_full_ad_data, get_ad_images, get_full_ad_description,
-    get_platform_ids_for_user, get_db_user_id_by_telegram_id
+    get_full_ad_data, get_ad_images, get_full_ad_description
 )
 from common.messaging.unified_platform_utils import safe_send_message
 from common.messaging.service import messaging_service

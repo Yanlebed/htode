@@ -1,7 +1,7 @@
 # common/messaging/keyboard_utils.py
 
 import logging
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
 

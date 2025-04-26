@@ -3,7 +3,6 @@
 import hashlib
 import requests
 import time
-import json
 import os
 import hmac
 import logging

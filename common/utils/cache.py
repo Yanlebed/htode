@@ -4,7 +4,6 @@ import redis
 import hashlib
 import logging
 from functools import wraps
-from typing import Dict, Any, Optional, Callable, List, Union
 from common.config import REDIS_URL
 
 logger = logging.getLogger(__name__)

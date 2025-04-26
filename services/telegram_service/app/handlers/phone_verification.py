@@ -4,7 +4,7 @@ import logging
 from aiogram import types
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
-from ..bot import dp, bot
+from ..bot import dp
 from ..utils.message_utils import safe_send_message, safe_answer_callback_query
 from common.verification.phone_service import (
     create_verification_code,

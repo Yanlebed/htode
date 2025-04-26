@@ -2,13 +2,10 @@
 
 import logging
 import re
-from datetime import datetime, timedelta
-from typing import Dict, Any, Optional, List
 
 from common.db.models import (
     update_user_filter,
-    start_free_subscription_of_user,
-    get_subscription_data_for_user
+    start_free_subscription_of_user
 )
 from common.config import GEO_ID_MAPPING, get_key_by_value
 from common.messaging.unified_flow import MessageFlow, FlowContext, flow_library

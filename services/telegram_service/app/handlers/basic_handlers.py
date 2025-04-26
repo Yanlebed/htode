@@ -1,4 +1,5 @@
 # services/telegram_service/app/handlers/basic_handlers.py
+
 import logging
 
 from aiogram import types
@@ -17,7 +18,7 @@ from ..keyboards import (
 from common.db.models import get_or_create_user
 from ..utils.message_utils import (
     safe_send_message, safe_answer_callback_query,
-    safe_edit_message, delete_message_safe
+    safe_edit_message
 )
 
 logger = logging.getLogger(__name__)

@@ -7,7 +7,7 @@ from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters import Text
 
 from common.utils.cache import redis_cache
-from ..bot import dp, bot
+from ..bot import dp
 from ..states.basis_states import FilterStates
 from common.db.models import update_user_filter, start_free_subscription_of_user, get_db_user_id_by_telegram_id, get_or_create_user
 from common.db.database import execute_query
@@ -15,8 +15,7 @@ from common.config import GEO_ID_MAPPING, get_key_by_value, build_ad_text
 from common.celery_app import celery_app
 from common.utils.ad_utils import get_ad_images
 from ..utils.message_utils import (
-    safe_send_message, safe_answer_callback_query,
-    safe_edit_message, safe_send_photo
+    safe_send_message, safe_answer_callback_query
 )
 from ..keyboards import (
     main_menu_keyboard,

@@ -1,17 +1,13 @@
 # common/flows/property_search_flow.py
 
 import logging
-import re
-from datetime import datetime
-from typing import Dict, Any, Optional, List, Union
 
 from common.db.models import (
     update_user_filter,
     get_or_create_user,
-    get_db_user_id_by_telegram_id,
-    get_subscription_data_for_user
+    get_db_user_id_by_telegram_id
 )
-from common.config import GEO_ID_MAPPING, get_key_by_value
+
 from common.celery_app import celery_app
 from common.messaging.unified_flow import MessageFlow, FlowContext, flow_library
 

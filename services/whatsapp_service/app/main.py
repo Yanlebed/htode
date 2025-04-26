@@ -1,7 +1,7 @@
 # services/whatsapp_service/app/main.py
 
 import logging
-from fastapi import FastAPI, Form, Request, Response, BackgroundTasks
+from fastapi import FastAPI, Form, Response, BackgroundTasks
 from twilio.twiml.messaging_response import MessagingResponse
 from .bot import sanitize_phone_number  # Only import what we need
 # Import the flow integration

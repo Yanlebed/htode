@@ -1,14 +1,12 @@
 # services/viber_service/app/main.py
 
-import logging
-import json
 from fastapi import FastAPI, Request, Response, BackgroundTasks
 from viberbot.api.viber_requests import (
     ViberMessageRequest, ViberSubscribedRequest,
     ViberUnsubscribedRequest, ViberConversationStartedRequest,
     ViberFailedRequest
 )
-from .bot import viber, WEBHOOK_URL, logger, state_manager
+from .bot import viber, WEBHOOK_URL, logger
 from .handlers import basic_handlers
 # Import the flow integration
 from .flow_integration import handle_message_with_flow

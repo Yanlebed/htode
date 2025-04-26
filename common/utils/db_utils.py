@@ -1,7 +1,7 @@
-# Create this new file: common/utils/db_utils.py
+# common/utils/db_utils.py
 
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional
 from common.db.database import execute_query
 
 logger = logging.getLogger(__name__)

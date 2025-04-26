@@ -4,8 +4,7 @@ import logging
 import time
 import json
 from datetime import datetime, timedelta
-import requests
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List, Tuple, Dict, Any
 
 from common.celery_app import celery_app
 from common.db.database import execute_query, get_db_connection

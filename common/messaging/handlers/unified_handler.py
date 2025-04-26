@@ -1,11 +1,10 @@
 # common/messaging/handlers/unified_handler.py
 
 import logging
-import asyncio
-from typing import Dict, Any, Optional, List, Union, Tuple
+from typing import Dict, Any, List, Union
 
 from common.db.models import (
-    get_db_user_id_by_telegram_id, get_subscription_data_for_user,
+    get_subscription_data_for_user,
     get_subscription_until_for_user, update_user_filter, add_favorite_ad,
     remove_favorite_ad, list_favorites
 )

@@ -1,10 +1,8 @@
 # services/viber_service/app/handlers/phone_verification.py
 
 import logging
-import asyncio
-from ..bot import viber, state_manager
+from ..bot import state_manager
 from ..utils.message_utils import safe_send_message
-from viberbot.api.messages import TextMessage, KeyboardMessage
 from common.verification.phone_service import (
     create_verification_code,
     verify_code,

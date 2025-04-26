@@ -1,7 +1,6 @@
 # services/whatsapp_service/app/handlers/phone_verification.py
 
 import logging
-import asyncio
 from ..bot import sanitize_phone_number, get_user_state, update_user_state, set_user_state
 from ..utils.message_utils import safe_send_message
 from common.verification.phone_service import (

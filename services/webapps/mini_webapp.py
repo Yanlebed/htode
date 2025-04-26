@@ -6,9 +6,9 @@ import json
 import hashlib
 import hmac
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional
 
-from fastapi import FastAPI, Request, Response, Form, HTTPException, Depends, Query, BackgroundTasks
+from fastapi import FastAPI, Query, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field

@@ -3,7 +3,7 @@
 import logging
 import asyncio
 import random
-from typing import Dict, Any, Optional, Tuple, Union, List, Type, Callable, TypeVar
+from typing import Dict, Any, Optional, Tuple, Union, List, TypeVar
 
 logger = logging.getLogger(__name__)
 

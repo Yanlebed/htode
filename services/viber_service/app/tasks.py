@@ -1,4 +1,5 @@
 # services/viber_service/app/tasks.py
+
 import logging
 from common.celery_app import celery_app
 from common.messaging.task_registry import register_platform_tasks

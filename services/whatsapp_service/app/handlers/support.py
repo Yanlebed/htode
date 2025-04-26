@@ -1,7 +1,6 @@
 # services/whatsapp_service/app/handlers/support.py
 
 import logging
-import asyncio
 from ..bot import state_manager
 from ..utils.message_utils import safe_send_message
 from common.messaging.handlers.support_handler import handle_support_command, handle_support_category, \

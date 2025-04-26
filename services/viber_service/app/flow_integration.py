@@ -1,9 +1,8 @@
 # services/viber_service/app/flow_integration.py
 
 import logging
-import asyncio
 from viberbot.api.messages import TextMessage
-from .bot import viber, state_manager
+from .bot import state_manager
 from common.messaging.unified_flow import flow_library
 from common.messaging.unified_flow import (
     check_and_process_flow,

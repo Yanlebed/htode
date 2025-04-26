@@ -1,7 +1,7 @@
 # services/viber_service/app/utils/message_utils.py
 
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict
 
 from common.messaging.unified_platform_utils import (
     safe_send_message as unified_send_message,

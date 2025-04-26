@@ -2,16 +2,13 @@
 
 import logging
 import asyncio
-from ..bot import sanitize_phone_number, state_manager
-from ..utils.message_utils import safe_send_message, safe_send_media
+from ..bot import state_manager
+from ..utils.message_utils import safe_send_message
 from common.db.models import (
     get_or_create_user,
     update_user_filter,
-    start_free_subscription_of_user,
-    get_subscription_data_for_user,
-    get_subscription_until_for_user
+    start_free_subscription_of_user
 )
-from common.config import GEO_ID_MAPPING, get_key_by_value
 from common.celery_app import celery_app
 
 # UPDATED: Add import for flow handling
