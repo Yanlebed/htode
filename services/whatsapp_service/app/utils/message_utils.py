@@ -1,23 +1,14 @@
 # services/whatsapp_service/app/utils/message_utils.py
 
 import logging
-import asyncio
 from typing import Optional, Union
 from ..bot import client, TWILIO_PHONE_NUMBER
 from common.messaging.utils import (
     safe_send_message as unified_send_message,
     safe_send_media as unified_send_media
 )
-from common.utils.retry_utils import NETWORK_EXCEPTIONS
-from twilio.base.exceptions import TwilioRestException
 
 logger = logging.getLogger(__name__)
-
-# Define WhatsApp (Twilio) specific retryable exceptions
-WHATSAPP_RETRYABLE_EXCEPTIONS = [
-    TwilioRestException,  # Base exception for Twilio API errors
-] + NETWORK_EXCEPTIONS
-
 
 async def safe_send_message(
         user_id: str,
