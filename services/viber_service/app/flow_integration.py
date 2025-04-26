@@ -5,36 +5,13 @@ import asyncio
 from viberbot.api.messages import TextMessage
 from .bot import viber, state_manager
 from common.messaging.flow_builder import flow_library
+from common.messaging.flow_integration_helper import (
+    check_and_process_flow,
+    process_flow_action,
+    show_available_flows
+)
 
 logger = logging.getLogger(__name__)
-
-
-async def check_and_process_flow(user_id: str, message_text: str) -> bool:
-    """
-    Check if there's an active flow for this user and process the message.
-
-    Args:
-        user_id: Viber user ID
-        message_text: Message text
-
-    Returns:
-        True if the message was handled by a flow, False otherwise
-    """
-    # Try to process the message with the flow system
-    if await flow_library.process_message(user_id, "viber", message_text):
-        # Message was handled by a flow
-        return True
-
-    # Check for flow start commands
-    for flow_name in flow_library.get_all_flows():
-        # You can customize the command format as needed
-        if message_text.lower() in [f"start_{flow_name}", f"flow_{flow_name}", flow_name]:
-            # Start the flow for this user
-            await flow_library.start_flow(flow_name, user_id, "viber")
-            return True
-
-    # Message wasn't handled by any flow
-    return False
 
 
 async def handle_message_with_flow(user_id, message):
@@ -55,8 +32,18 @@ async def handle_message_with_flow(user_id, message):
 
     text = message.text
 
+    # Get current state for extra context
+    state_data = await state_manager.get_state(user_id) or {}
+
     # Check if a flow should handle this message
-    if await check_and_process_flow(user_id, text):
+    handled = await check_and_process_flow(
+        user_id=user_id,
+        platform="viber",
+        message_text=text,
+        extra_context=state_data
+    )
+
+    if handled:
         # Message was handled by a flow, no further processing needed
         return
 
@@ -65,7 +52,7 @@ async def handle_message_with_flow(user_id, message):
     await handle_message(user_id, message)
 
 
-# Function to create flow-specific keyboard
+# Function to create a Viber keyboard for flows
 def create_flow_keyboard(flow_name: str, actions: list):
     """
     Create a Viber keyboard for flow operations.
@@ -99,42 +86,35 @@ def create_flow_keyboard(flow_name: str, actions: list):
     }
 
 
-# Function to process flow-specific actions from keyboard
-async def process_flow_action(user_id: str, action_text: str):
+# Function to handle flow commands
+async def handle_flow_command(user_id, command):
     """
-    Process a flow action from keyboard input.
+    Handle specific flow commands from Viber users
 
     Args:
         user_id: Viber user ID
-        action_text: Action text from button
+        command: Command text
 
     Returns:
-        True if an action was processed, False otherwise
+        True if handled, False otherwise
     """
-    # Check if this is a flow action
-    if not action_text.startswith("flow:"):
-        return False
+    command_lower = command.lower().strip()
 
-    # Parse the action
-    parts = action_text.split(":", 2)
-    if len(parts) != 3:
-        return False
+    # Handle special commands
+    if command_lower in ["flows", "список потоків", "меню"]:
+        await show_available_flows(user_id, "viber")
+        return True
 
-    _, flow_name, action = parts
+    if command_lower in ["search", "пошук", "нерухомість"]:
+        await flow_library.start_flow("property_search", user_id, "viber")
+        return True
 
-    # Process the action
-    if action == "start":
-        # Start a flow
-        return await flow_library.start_flow(flow_name, user_id, "viber")
+    if command_lower in ["subscription", "підписка"]:
+        await flow_library.start_flow("subscription", user_id, "viber")
+        return True
 
-    elif action.startswith("state_"):
-        # Transition to a state in the active flow
-        state_name = action[6:]  # Remove "state_" prefix
-        return await flow_library.transition_active_flow(user_id, "viber", state_name)
+    # Handle explicit flow actions
+    if command_lower.startswith("flow:"):
+        return await process_flow_action(user_id, "viber", command_lower)
 
-    elif action == "end":
-        # End the active flow
-        return await flow_library.end_active_flow(user_id, "viber")
-
-    # Unknown action
     return False
