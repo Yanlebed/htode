@@ -17,10 +17,27 @@ from common.messaging.utils import (
     safe_answer_callback_query_telegram,
     delete_message_safe_telegram
 )
+from common.utils.retry_utils import retry_with_exponential_backoff, NETWORK_EXCEPTIONS
 
 logger = logging.getLogger(__name__)
 
+# Define Telegram-specific retryable exceptions
+TELEGRAM_RETRYABLE_EXCEPTIONS = [
+    RetryAfter,  # Rate limiting
+    TelegramAPIError,  # General API errors
+] + NETWORK_EXCEPTIONS  # Add network exceptions
 
+# Define permanent errors that shouldn't be retried
+TELEGRAM_PERMANENT_EXCEPTIONS = [
+    BotBlocked,  # User blocked the bot
+    ChatNotFound,  # Chat no longer exists
+    UserDeactivated,  # User account was deleted
+    MessageNotModified,  # No changes in edit operation
+    MessageToDeleteNotFound,  # Message already deleted
+    InvalidQueryID,  # Callback query expired
+]
+
+# This function is kept but delegates to the unified function
 async def safe_send_message(
         chat_id: Union[int, str],
         text: str,
@@ -96,41 +113,48 @@ async def safe_send_photo(
 
         return await unified_send_media(chat_id, photo, caption, **kwargs)
     else:
-        # Fall back to original implementation for InputFile
-        try:
-            for attempt in range(retry_count):
-                try:
-                    return await bot.send_photo(
-                        chat_id=chat_id,
-                        photo=photo,
-                        caption=caption,
-                        parse_mode=parse_mode,
-                        reply_markup=reply_markup
-                    )
-                except RetryAfter as e:
-                    logger.warning(f"Rate limit exceeded. Retrying in {e.timeout} seconds.")
-                    await asyncio.sleep(e.timeout)
-                    continue
-                except (BotBlocked, ChatNotFound, UserDeactivated) as e:
-                    logger.warning(f"Permanent error when sending photo to {chat_id}: {e}")
-                    return None
-                except TelegramAPIError as e:
-                    if attempt < retry_count - 1:
-                        current_delay = retry_delay * (2 ** attempt)
-                        logger.warning(
-                            f"Failed to send photo (attempt {attempt + 1}/{retry_count}): {e}. "
-                            f"Retrying in {current_delay}s"
-                        )
-                        await asyncio.sleep(current_delay)
-                    else:
-                        logger.error(f"Failed to send photo after {retry_count} attempts: {e}")
-                        return None
-
-        except Exception as e:
-            logger.error(f"Error in safe_send_photo with InputFile: {e}")
-            return None
+        # Use retry decorator for InputFile
+        return await _send_photo_with_inputfile(
+            chat_id=chat_id,
+            photo=photo,
+            caption=caption,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+            retry_count=retry_count,
+            retry_delay=retry_delay
+        )
 
 
+@retry_with_exponential_backoff(
+    max_retries=3,
+    initial_delay=1,
+    retryable_exceptions=TELEGRAM_RETRYABLE_EXCEPTIONS
+)
+async def _send_photo_with_inputfile(
+        chat_id: Union[int, str],
+        photo: InputFile,
+        caption: Optional[str] = None,
+        parse_mode: Optional[str] = None,
+        reply_markup: Optional[InlineKeyboardMarkup] = None,
+        retry_count: int = 3,
+        retry_delay: int = 1
+) -> Optional[Message]:
+    """Helper function to send photo with InputFile with retries."""
+    try:
+        return await bot.send_photo(
+            chat_id=chat_id,
+            photo=photo,
+            caption=caption,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup
+        )
+    except TELEGRAM_PERMANENT_EXCEPTIONS as e:
+        logger.warning(f"Permanent error when sending photo to {chat_id}: {e}")
+        return None
+    # Other exceptions will be caught by the retry decorator
+
+
+# These functions use the centralized telegram helpers in common/messaging/utils.py
 async def safe_edit_message(
         chat_id: Union[int, str],
         message_id: int,

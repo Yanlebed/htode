@@ -11,7 +11,7 @@ from aiogram.utils.exceptions import (
 )
 
 from .interface import MessagingInterface
-from .utils import retry_with_exponential_backoff
+from common.utils.retry_utils import retry_with_exponential_backoff, NETWORK_EXCEPTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,11 @@ class TelegramMessaging(MessagingInterface):
         """Format user ID for Telegram - no special formatting needed."""
         return str(user_id)  # Ensure it's a string
 
-    @retry_with_exponential_backoff(max_retries=3, initial_delay=1)
+    @retry_with_exponential_backoff(
+        max_retries=3,
+        initial_delay=1,
+        retryable_exceptions=[RetryAfter, TelegramAPIError] + NETWORK_EXCEPTIONS
+    )
     async def send_text(
             self,
             user_id: str,
@@ -64,7 +68,11 @@ class TelegramMessaging(MessagingInterface):
             logger.error(f"Telegram API error sending message to {user_id}: {e}")
             raise  # Let the retry decorator handle this
 
-    @retry_with_exponential_backoff(max_retries=3, initial_delay=1)
+    @retry_with_exponential_backoff(
+        max_retries=3,
+        initial_delay=1,
+        retryable_exceptions=[RetryAfter, TelegramAPIError] + NETWORK_EXCEPTIONS
+    )
     async def send_media(
             self,
             user_id: str,

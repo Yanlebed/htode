@@ -14,69 +14,6 @@ logger = logging.getLogger(__name__)
 T = TypeVar('T')
 
 
-def retry_with_exponential_backoff(
-        max_retries: int = 3,
-        initial_delay: float = 1.0,
-        backoff_factor: float = 2.0,
-        retryable_exceptions: List[Type[Exception]] = None
-):
-    """
-    Decorator for retrying async functions with exponential backoff.
-
-    Args:
-        max_retries: Maximum number of retry attempts
-        initial_delay: Initial delay between retries in seconds
-        backoff_factor: Multiplier for delay after each retry
-        retryable_exceptions: List of exception types to retry on (defaults to all)
-
-    Returns:
-        Decorated function
-    """
-
-    def decorator(func: Callable[..., Any]):
-        @functools.wraps(func)
-        async def wrapper(*args, **kwargs):
-            if retryable_exceptions is None:
-                retry_on = (Exception,)
-            else:
-                retry_on = tuple(retryable_exceptions)
-
-            last_exception = None
-
-            for attempt in range(max_retries):
-                try:
-                    return await func(*args, **kwargs)
-                except retry_on as e:
-                    last_exception = e
-                    if attempt < max_retries - 1:
-                        # Calculate exponential delay with jitter
-                        delay = initial_delay * (backoff_factor ** attempt)
-                        jitter = random.uniform(0.8, 1.2)
-                        final_delay = delay * jitter
-
-                        logger.warning(
-                            f"Attempt {attempt + 1}/{max_retries} failed: {e}. "
-                            f"Retrying in {final_delay:.2f}s"
-                        )
-                        await asyncio.sleep(final_delay)
-                    else:
-                        logger.error(f"All {max_retries} retry attempts failed. Last error: {e}")
-                        raise
-                except Exception as e:
-                    # Don't retry on non-retryable exceptions
-                    logger.error(f"Non-retryable exception occurred: {e}")
-                    raise
-
-            # This will only be reached if max_retries is 0
-            if last_exception:
-                raise last_exception
-            return None
-
-        return wrapper
-
-    return decorator
-
-
 class MessageFormatter:
     """
     Utility class for formatting messages based on platform.
