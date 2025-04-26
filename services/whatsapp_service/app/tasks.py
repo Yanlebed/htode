@@ -1,8 +1,6 @@
 # services/whatsapp_service/app/tasks.py
 import logging
-from datetime import datetime
 from common.celery_app import celery_app
-from common.db.database import execute_query
 from common.messaging.task_registry import register_platform_tasks
 from .bot import client, TWILIO_PHONE_NUMBER
 
@@ -14,20 +12,22 @@ registered_tasks = register_platform_tasks(
     task_module_path="whatsapp_service.app.tasks"
 )
 
-# Access the registered tasks for direct use if needed
+# Export the registered tasks for direct use
 send_ad_with_extra_buttons = registered_tasks['send_ad_with_extra_buttons']
 send_subscription_notification = registered_tasks['send_subscription_notification']
+
 
 # Keep WhatsApp-specific tasks that have no common equivalent
 @celery_app.task(name='whatsapp_service.app.tasks.check_template_status')
 def check_template_status():
     """
     Check the status of WhatsApp message templates.
-    This is WhatsApp-specific and doesn't have an equivalent in other platforms,
-    so it remains a standalone task.
+    This is WhatsApp-specific and doesn't have an equivalent in other platforms.
 
     WhatsApp Business API requires templates for certain types of messages.
     """
+    from common.db.database import execute_query
+
     logger.info("Checking WhatsApp template status")
 
     try:
@@ -43,8 +43,8 @@ def check_template_status():
 
                 # Notify admins about rejected templates
                 admin_notification_sql = """
-                                         SELECT id \
-                                         FROM users \
+                                         SELECT id
+                                         FROM users
                                          WHERE is_admin = TRUE LIMIT 1
                                          """
                 admin = execute_query(admin_notification_sql, fetchone=True)
@@ -57,7 +57,7 @@ def check_template_status():
                         "Please review and update the template."
                     )
 
-                    # Use the registered task to send the notification
+                    # Use the unified task to send the notification
                     send_subscription_notification.delay(
                         user_id=admin_id,
                         notification_type="template_rejected",
@@ -75,11 +75,13 @@ def check_template_status():
 def process_media_messages():
     """
     Process and store media messages sent by users.
-    This is WhatsApp-specific and doesn't have an equivalent in other platforms,
-    so it remains a standalone task.
+    This is WhatsApp-specific and doesn't have an equivalent in other platforms.
 
     WhatsApp media messages have a 30-day retention period in Twilio.
     """
+    from common.db.database import execute_query
+    from common.utils.s3_utils import _upload_image_to_s3
+
     logger.info("Processing WhatsApp media messages")
 
     try:
@@ -100,9 +102,6 @@ def process_media_messages():
 
             # Download and store the media to a more permanent location
             try:
-                # Import your S3 upload utility
-                from common.utils.s3_utils import _upload_image_to_s3
-
                 # Generate a unique ID for the media
                 unique_id = f"whatsapp_media_{message_id}"
 
@@ -113,7 +112,7 @@ def process_media_messages():
                     # Update the record with the permanent URL
                     update_sql = """
                                  UPDATE whatsapp_media_messages
-                                 SET permanent_url = %s, \
+                                 SET permanent_url = %s,
                                      processed     = TRUE
                                  WHERE id = %s
                                  """

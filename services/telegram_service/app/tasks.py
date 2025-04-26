@@ -1,16 +1,8 @@
 # services/telegram_service/app/tasks.py
 import logging
-import asyncio
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, MediaGroup, CallbackQuery, WebAppInfo
 from common.celery_app import celery_app
-from .bot import bot, dp
-from common.db.models import get_full_ad_description
-from .utils.message_utils import (
-    safe_answer_callback_query,
-    delete_message_safe
-)
 from common.messaging.task_registry import register_platform_tasks
-from common.messaging.tasks import process_show_more_description as unified_process_show_more
+from aiogram.types import CallbackQuery
 
 logger = logging.getLogger(__name__)
 
@@ -20,10 +12,13 @@ registered_tasks = register_platform_tasks(
     task_module_path="telegram_service.app.tasks"
 )
 
-# Access the registered tasks for direct use if needed
+# Export the registered tasks for direct use
 send_ad_with_extra_buttons = registered_tasks['send_ad_with_extra_buttons']
 send_subscription_notification = registered_tasks['send_subscription_notification']
-check_expiring_subscriptions = registered_tasks['check_expiring_subscriptions']
+
+# Import the bot for the callback handler
+from .bot import dp, bot
+from common.messaging.tasks import process_show_more_description
 
 # This handler needs to remain in the Telegram service as it's tied to the callback query handler
 @dp.callback_query_handler(lambda c: c.data.startswith("show_more:"))
@@ -36,22 +31,15 @@ async def handle_show_more(callback_query: CallbackQuery):
     try:
         _, resource_url = callback_query.data.split("show_more:")
     except Exception:
-        await safe_answer_callback_query(
-            callback_query_id=callback_query.id,
-            text="Невірні дані.",
-            show_alert=True
-        )
+        await callback_query.answer("Невірні дані.", show_alert=True)
         return
 
     # Acknowledge the callback query immediately
-    await safe_answer_callback_query(
-        callback_query_id=callback_query.id,
-        text="Отримання повного опису..."
-    )
+    await callback_query.answer("Отримання повного опису...")
 
     # Call the unified task to handle the show more functionality
     # Pass both the user_id and message_id so it can edit the message if possible
-    unified_process_show_more.delay(
+    process_show_more_description.delay(
         user_id=callback_query.from_user.id,
         resource_url=resource_url,
         message_id=callback_query.message.message_id,

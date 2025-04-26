@@ -1,282 +1,39 @@
 # services/viber_service/app/keyboards.py
+import logging
+from common.messaging.keyboard_utils import KeyboardFactory
 
+logger = logging.getLogger(__name__)
+
+# Re-export keyboard creation functions with platform set to "viber"
 def create_main_menu_keyboard():
     """Create the main menu keyboard for Viber"""
-    return {
-        "Type": "keyboard",
-        "Buttons": [
-            {
-                "Columns": 3,
-                "Rows": 1,
-                "Text": "📝 Мої підписки",
-                "ActionType": "reply",
-                "ActionBody": "📝 Мої підписки"
-            },
-            {
-                "Columns": 3,
-                "Rows": 1,
-                "Text": "❤️ Обрані",
-                "ActionType": "reply",
-                "ActionBody": "❤️ Обрані"
-            },
-            {
-                "Columns": 3,
-                "Rows": 1,
-                "Text": "🤔 Як це працює?",
-                "ActionType": "reply",
-                "ActionBody": "🤔 Як це працює?"
-            },
-            {
-                "Columns": 3,
-                "Rows": 1,
-                "Text": "💳 Оплатити підписку",
-                "ActionType": "reply",
-                "ActionBody": "💳 Оплатити підписку"
-            },
-            {
-                "Columns": 6,
-                "Rows": 1,
-                "Text": "🧑‍💻 Техпідтримка",
-                "ActionType": "reply",
-                "ActionBody": "🧑‍💻 Техпідтримка"
-            }
-        ]
-    }
-
+    return KeyboardFactory.create_keyboard("viber", "main_menu")
 
 def create_property_type_keyboard():
     """Create keyboard for property type selection"""
-    return {
-        "Type": "keyboard",
-        "Buttons": [
-            {
-                "Columns": 3,
-                "Rows": 1,
-                "Text": "Квартира",
-                "ActionType": "reply",
-                "ActionBody": "property_type_apartment"
-            },
-            {
-                "Columns": 3,
-                "Rows": 1,
-                "Text": "Будинок",
-                "ActionType": "reply",
-                "ActionBody": "property_type_house"
-            }
-        ]
-    }
-
+    return KeyboardFactory.create_keyboard("viber", "property_type")
 
 def create_city_keyboard(cities):
-    """
-    Create keyboard for city selection
-
-    Args:
-        cities: List of available cities
-    """
-    buttons = []
-
-    # Create a button for each city, arranged in rows of 2
-    for city in cities:
-        buttons.append({
-            "Columns": 3,
-            "Rows": 1,
-            "Text": city,
-            "ActionType": "reply",
-            "ActionBody": f"city_{city.lower()}"
-        })
-
-    return {
-        "Type": "keyboard",
-        "ButtonsGroupColumns": 6,
-        "ButtonsGroupRows": 7,
-        "Buttons": buttons
-    }
-
+    """Create keyboard for city selection"""
+    return KeyboardFactory.create_keyboard("viber", "city", cities=cities)
 
 def create_rooms_keyboard(selected_rooms=None):
-    """
-    Create keyboard for room selection
-
-    Args:
-        selected_rooms: List of already selected room counts
-    """
-    if selected_rooms is None:
-        selected_rooms = []
-
-    buttons = []
-
-    # Add buttons for room counts 1-5
-    for room in range(1, 6):
-        # Mark selected rooms with a checkmark
-        text = f"✅ {room}" if room in selected_rooms else f"{room}"
-        buttons.append({
-            "Columns": 1,
-            "Rows": 1,
-            "Text": text,
-            "ActionType": "reply",
-            "ActionBody": f"rooms_{room}"
-        })
-
-    # Add Done and Any buttons
-    buttons.append({
-        "Columns": 3,
-        "Rows": 1,
-        "Text": "Далі",
-        "ActionType": "reply",
-        "ActionBody": "rooms_done"
-    })
-
-    buttons.append({
-        "Columns": 3,
-        "Rows": 1,
-        "Text": "Пропустити",
-        "ActionType": "reply",
-        "ActionBody": "rooms_any"
-    })
-
-    return {
-        "Type": "keyboard",
-        "ButtonsGroupColumns": 6,
-        "ButtonsGroupRows": 2,
-        "Buttons": buttons
-    }
-
-
-def get_price_ranges(city):
-    """
-    Returns a list of (min_price, max_price) tuples
-    for the given city.
-    If max_price is None, it means "more than min_price".
-    """
-    # Group cities by size for price ranges
-    big_cities = {'Київ'}
-    medium_cities = {'Харків', 'Дніпро', 'Одеса', 'Львів'}
-
-    if city in big_cities:
-        # up to 15000, 15000–20000, 20000–30000, more than 30000
-        return [(0, 15000), (15000, 20000), (20000, 30000), (30000, None)]
-    elif city in medium_cities:
-        # up to 7000, 7000–10000, 10000–15000, more than 15000
-        return [(0, 7000), (7000, 10000), (10000, 15000), (15000, None)]
-    else:
-        # Default to "smaller" city intervals
-        # up to 5000, 5000–7000, 7000–10000, more than 10000
-        return [(0, 5000), (5000, 7000), (7000, 10000), (10000, None)]
-
+    """Create keyboard for room selection"""
+    return KeyboardFactory.create_keyboard("viber", "rooms", selected_rooms=selected_rooms)
 
 def create_price_keyboard(city):
-    """
-    Create keyboard for price range selection
-
-    Args:
-        city: City name to determine appropriate price ranges
-    """
-    intervals = get_price_ranges(city)
-    buttons = []
-
-    # Create a button for each price range
-    for (low, high) in intervals:
-        if high is None:
-            label = f"Більше {low}"
-            action_body = f"price_{low}_any"
-        else:
-            # E.g. "0-5000 UAH", "5000-7000 UAH"
-            if low == 0:
-                label = f"До {high}"  # "up to X"
-            else:
-                label = f"{low}-{high}"
-            action_body = f"price_{low}_{high}"
-
-        buttons.append({
-            "Columns": 3,
-            "Rows": 1,
-            "Text": label,
-            "ActionType": "reply",
-            "ActionBody": action_body
-        })
-
-    return {
-        "Type": "keyboard",
-        "ButtonsGroupColumns": 6,
-        "ButtonsGroupRows": 2,
-        "Buttons": buttons
-    }
-
+    """Create keyboard for price range selection"""
+    return KeyboardFactory.create_keyboard("viber", "price", city=city)
 
 def create_confirmation_keyboard():
     """Create keyboard for subscription confirmation"""
-    return {
-        "Type": "keyboard",
-        "Buttons": [
-            {
-                "Columns": 6,
-                "Rows": 1,
-                "Text": "Розширений пошук",
-                "ActionType": "reply",
-                "ActionBody": "advanced_search"
-            },
-            {
-                "Columns": 3,
-                "Rows": 1,
-                "Text": "Редагувати",
-                "ActionType": "reply",
-                "ActionBody": "edit_parameters"
-            },
-            {
-                "Columns": 3,
-                "Rows": 1,
-                "Text": "Підписатися",
-                "ActionType": "reply",
-                "ActionBody": "subscribe"
-            }
-        ]
-    }
-
+    return KeyboardFactory.create_keyboard("viber", "confirmation")
 
 def create_edit_parameters_keyboard():
     """Create keyboard for parameter editing"""
-    return {
-        "Type": "keyboard",
-        "Buttons": [
-            {
-                "Columns": 3,
-                "Rows": 1,
-                "Text": "Тип нерухомості",
-                "ActionType": "reply",
-                "ActionBody": "edit_property_type"
-            },
-            {
-                "Columns": 3,
-                "Rows": 1,
-                "Text": "Місто",
-                "ActionType": "reply",
-                "ActionBody": "edit_city"
-            },
-            {
-                "Columns": 3,
-                "Rows": 1,
-                "Text": "Кількість кімнат",
-                "ActionType": "reply",
-                "ActionBody": "edit_rooms"
-            },
-            {
-                "Columns": 3,
-                "Rows": 1,
-                "Text": "Діапазон цін",
-                "ActionType": "reply",
-                "ActionBody": "edit_price"
-            },
-            {
-                "Columns": 6,
-                "Rows": 1,
-                "Text": "Відмінити",
-                "ActionType": "reply",
-                "ActionBody": "cancel_edit"
-            }
-        ]
-    }
+    return KeyboardFactory.create_keyboard("viber", "edit_parameters")
 
+# Additional, more specialized keyboards not included in the common factory
 
 def create_favorites_navigation_keyboard(current_index, total_favorites):
     """
@@ -348,7 +105,6 @@ def create_favorites_navigation_keyboard(current_index, total_favorites):
         "Buttons": buttons
     }
 
-
 def create_payment_keyboard():
     """Create keyboard for payment options"""
     return {
@@ -391,7 +147,6 @@ def create_payment_keyboard():
             }
         ]
     }
-
 
 def create_support_category_keyboard():
     """Create keyboard for support categories"""
