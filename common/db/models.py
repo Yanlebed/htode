@@ -965,3 +965,170 @@ def get_ad_images(ad_id: Union[int, Dict[str, Any]]) -> List[str]:
     except Exception as e:
         logger.error(f"Error getting ad images: {e}")
         return []
+
+
+def disable_subscription_for_user(user_id: int) -> bool:
+    """
+    Disable subscription for a user by setting is_paused to True in user_filters table
+
+    Args:
+        user_id: User's database ID
+
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        from common.db.database import execute_query
+
+        # Update all user filters to paused
+        sql = "UPDATE user_filters SET is_paused = TRUE WHERE user_id = %s"
+        execute_query(sql, [user_id], commit=True)
+
+        logger.info(f"Disabled subscription for user {user_id}")
+
+        # Invalidate relevant cache entries
+        cache_key = f"user_filters:{user_id}"
+        redis_client.delete(cache_key)
+
+        # Also invalidate matching users cache for ads
+        matching_pattern = "matching_users:*"
+        matching_keys = redis_client.keys(matching_pattern)
+        if matching_keys:
+            redis_client.delete(*matching_keys)
+
+        return True
+    except Exception as e:
+        logger.error(f"Error disabling subscription for user {user_id}: {e}")
+        return False
+
+
+def enable_subscription_for_user(user_id: int) -> bool:
+    """
+    Enable subscription for a user by setting is_paused to False in user_filters table
+
+    Args:
+        user_id: User's database ID
+
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        from common.db.database import execute_query
+
+        # Update all user filters to not paused
+        sql = "UPDATE user_filters SET is_paused = FALSE WHERE user_id = %s"
+        execute_query(sql, [user_id], commit=True)
+
+        logger.info(f"Enabled subscription for user {user_id}")
+
+        # Invalidate relevant cache entries
+        cache_key = f"user_filters:{user_id}"
+        redis_client.delete(cache_key)
+
+        # Also invalidate matching users cache for ads
+        matching_pattern = "matching_users:*"
+        matching_keys = redis_client.keys(matching_pattern)
+        if matching_keys:
+            redis_client.delete(*matching_keys)
+
+        return True
+    except Exception as e:
+        logger.error(f"Error enabling subscription for user {user_id}: {e}")
+        return False
+
+
+def count_subscriptions(user_id: int) -> int:
+    """
+    Count the number of subscriptions (filters) for a user
+
+    Args:
+        user_id: User's database ID
+
+    Returns:
+        Number of subscriptions
+    """
+    try:
+        from common.db.database import execute_query
+
+        # Get count of user filters
+        sql = "SELECT COUNT(*) as count FROM user_filters WHERE user_id = %s"
+        result = execute_query(sql, [user_id], fetchone=True)
+
+        return result["count"] if result else 0
+    except Exception as e:
+        logger.error(f"Error counting subscriptions for user {user_id}: {e}")
+        return 0
+
+
+def list_subscriptions_paginated(user_id: int, page: int = 0, per_page: int = 5) -> list:
+    """
+    Get a paginated list of subscriptions for a user
+
+    Args:
+        user_id: User's database ID
+        page: Page number (0-based)
+        per_page: Number of items per page
+
+    Returns:
+        List of subscription dictionaries
+    """
+    try:
+        from common.db.database import execute_query
+
+        # Calculate offset
+        offset = page * per_page
+
+        # Get paginated subscriptions
+        sql = """
+              SELECT *
+              FROM user_filters
+              WHERE user_id = %s
+              ORDER BY id
+                  LIMIT %s \
+              OFFSET %s
+              """
+        rows = execute_query(sql, [user_id, per_page, offset], fetch=True)
+
+        return rows or []
+    except Exception as e:
+        logger.error(f"Error listing subscriptions for user {user_id}: {e}")
+        return []
+
+
+# Cache helper for subscription data
+@redis_cache("subscription_status", ttl=CacheTTL.MEDIUM)
+def get_subscription_status(user_id: int) -> dict:
+    """
+    Get subscription status data for a user with caching
+
+    Args:
+        user_id: User's database ID
+
+    Returns:
+        Dictionary with subscription status info
+    """
+    sql = """
+          SELECT free_until, subscription_until
+          FROM users
+          WHERE id = %s
+          """
+    row = execute_query(sql, [user_id], fetchone=True)
+
+    if not row:
+        return {"active": False}
+
+    now = datetime.now()
+    free_until = row.get("free_until")
+    subscription_until = row.get("subscription_until")
+
+    # Calculate if subscription is active
+    free_active = free_until and free_until > now
+    paid_active = subscription_until and subscription_until > now
+
+    return {
+        "active": free_active or paid_active,
+        "free_active": free_active,
+        "paid_active": paid_active,
+        "free_until": free_until.isoformat() if free_until else None,
+        "subscription_until": subscription_until.isoformat() if subscription_until else None
+    }
