@@ -4,6 +4,8 @@ import logging
 from aiogram import executor
 from .bot import dp
 from .handlers import menu_handlers, basic_handlers, advanced_handlers, subscription, support, favorites
+# Import the flow integration
+from .flow_integration import check_and_process_flow, flow_message_handler
 # Import the error handler
 from . import error_handler
 
@@ -19,7 +21,9 @@ def setup_handlers():
     """
     # The imports above already register the handlers with the dispatcher
     # We're just making sure the error_handler module is initialized
+    # and that flow integration is imported so its handlers are registered
     logger.info("All handlers and error handler registered")
+    logger.info("Flow integration initialized")
 
 def main():
     """

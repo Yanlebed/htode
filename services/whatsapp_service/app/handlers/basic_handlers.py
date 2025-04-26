@@ -14,6 +14,9 @@ from common.db.models import (
 from common.config import GEO_ID_MAPPING, get_key_by_value
 from common.celery_app import celery_app
 
+# UPDATED: Add import for flow handling
+from ..flow_integration import check_and_process_flow, process_numeric_flow_action, process_flow_action
+
 logger = logging.getLogger(__name__)
 
 # Define states
@@ -41,8 +44,24 @@ async def handle_message(user_id, text, media_urls=None, response=None):
         media_urls: List of media URLs from the message (if any)
         response: Twilio MessagingResponse object for immediate response
     """
-    # Get user state from Redis
+    # ADDED: First check if a flow should handle this message
+    if await check_and_process_flow(user_id, text, response):
+        # Message was handled by a flow, no further processing needed
+        return
+
+    # ADDED: Check for flow actions (for handling menu selection by number)
     user_data = await state_manager.get_state(user_id) or {"state": STATE_START}
+    if text.isdigit() and await process_numeric_flow_action(user_id, text, user_data):
+        # Numeric selection for a flow menu was processed
+        return
+
+    # ADDED: Check for explicit flow commands
+    if text.startswith("flow:") and await process_flow_action(user_id, text):
+        # Flow command was processed
+        return
+
+    # Continue with regular message handling
+    # Get user state from Redis
     current_state = user_data.get("state", STATE_START)
 
     # Handle phone verification states

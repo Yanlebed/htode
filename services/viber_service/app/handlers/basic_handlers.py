@@ -26,6 +26,8 @@ STATE_WAITING_PRICE = "waiting_price"
 STATE_CONFIRMATION = "confirmation"
 STATE_EDITING_PARAMETERS = "editing_parameters"
 
+from ..flow_integration import check_and_process_flow
+
 # City list (same as in your Telegram bot)
 AVAILABLE_CITIES = ['Івано-Франківськ', 'Вінниця', 'Дніпро', 'Житомир', 'Запоріжжя', 'Київ', 'Кропивницький', 'Луцьк',
                     'Львів', 'Миколаїв', 'Одеса', 'Полтава', 'Рівне', 'Суми', 'Тернопіль', 'Ужгород', 'Харків',
@@ -41,6 +43,12 @@ async def handle_message(user_id, message):
 
     text = message.text
 
+    # ADDED: First check if a flow should handle this message
+    if await check_and_process_flow(user_id, text):
+        # Message was handled by a flow, no further processing needed
+        return
+
+    # Rest of the original function continues below
     # Get user state from Redis
     user_data = await state_manager.get_state(user_id) or {"state": STATE_START}
     current_state = user_data.get("state", STATE_START)
