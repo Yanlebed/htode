@@ -3,7 +3,7 @@
 import logging
 import os
 from twilio.rest import Client
-from common.utils.state_manager import RedisStateManager
+from common.state_management import state_manager  # Use unified state manager directly
 
 # Configure logging
 logging.basicConfig(
@@ -25,8 +25,8 @@ if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER]):
 # Initialize Twilio client
 client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
-# Initialize Redis state manager
-state_manager = RedisStateManager(prefix='whatsapp_state')
+# Define platform constant
+PLATFORM_NAME = "whatsapp"
 
 def sanitize_phone_number(phone_number):
     """
@@ -50,3 +50,29 @@ def sanitize_phone_number(phone_number):
         clean_number = '+' + clean_number
 
     return clean_number
+
+# State management wrapper functions to provide cleaner API
+async def get_user_state(user_id: str) -> dict:
+    """Get user state with sanitized phone number"""
+    clean_user_id = sanitize_phone_number(user_id)
+    return await state_manager.get_state(PLATFORM_NAME, clean_user_id) or {}
+
+async def set_user_state(user_id: str, state_data: dict) -> bool:
+    """Set user state with sanitized phone number"""
+    clean_user_id = sanitize_phone_number(user_id)
+    return await state_manager.set_state(PLATFORM_NAME, clean_user_id, state_data)
+
+async def update_user_state(user_id: str, updates: dict) -> bool:
+    """Update user state with sanitized phone number"""
+    clean_user_id = sanitize_phone_number(user_id)
+    return await state_manager.update_state(PLATFORM_NAME, clean_user_id, updates)
+
+async def clear_user_state(user_id: str) -> bool:
+    """Clear user state with sanitized phone number"""
+    clean_user_id = sanitize_phone_number(user_id)
+    return await state_manager.clear_state(PLATFORM_NAME, clean_user_id)
+
+async def get_current_state_name(user_id: str) -> str:
+    """Get current state name with sanitized phone number"""
+    clean_user_id = sanitize_phone_number(user_id)
+    return await state_manager.get_current_state_name(PLATFORM_NAME, clean_user_id)

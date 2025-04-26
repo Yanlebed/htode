@@ -3,7 +3,7 @@
 import logging
 import asyncio
 from twilio.twiml.messaging_response import MessagingResponse
-from .bot import sanitize_phone_number, state_manager
+from .bot import sanitize_phone_number, get_user_state, update_user_state
 from common.messaging.flow_builder import flow_library
 from common.messaging.flow_integration_helper import (
     check_and_process_flow,
@@ -28,7 +28,7 @@ async def handle_message_with_flow(user_id: str, text: str, media_urls=None, res
     clean_user_id = sanitize_phone_number(user_id)
 
     # Get current state for extra context
-    state_data = await state_manager.get_state(clean_user_id) or {}
+    state_data = await get_user_state(clean_user_id) or {}
 
     # Function to add immediate response if needed
     async def add_immediate_response():

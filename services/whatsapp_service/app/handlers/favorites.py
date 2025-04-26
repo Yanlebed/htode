@@ -1,45 +1,47 @@
 # services/whatsapp_service/app/handlers/favorites.py
 
 import logging
-from ..bot import send_message, user_states
+from ..utils.message_utils import safe_send_message, safe_send_media
 from common.db.models import list_favorites, get_db_user_id_by_telegram_id, remove_favorite_ad, get_full_ad_description
 
 logger = logging.getLogger(__name__)
 
 
-def show_favorites(user_id):
+async def show_favorites(user_id):
     """Show user's favorite listings"""
     # Get user's database ID
     db_user_id = get_db_user_id_by_telegram_id(user_id)
 
     if not db_user_id:
-        send_message(user_id, "Помилка: Не вдалося знайти ваш профіль.")
+        await safe_send_message(user_id, "Помилка: Не вдалося знайти ваш профіль.")
         return
 
     # Get favorites
     favorites = list_favorites(db_user_id)
 
     if not favorites:
-        send_message(user_id, "У вас немає обраних оголошень.")
+        await safe_send_message(user_id, "У вас немає обраних оголошень.")
         return
 
     # Store favorites in user state
-    user_data = user_states.get(user_id, {})
-    user_data["favorites"] = favorites
-    user_data["current_favorite_index"] = 0
-    user_states[user_id] = user_data
+    from ..bot import update_user_state
+    await update_user_state(user_id, {
+        "favorites": favorites,
+        "current_favorite_index": 0
+    })
 
     # Show the first favorite
-    show_favorite_at_index(user_id, 0)
+    await show_favorite_at_index(user_id, 0)
 
 
-def show_favorite_at_index(user_id, index):
+async def show_favorite_at_index(user_id, index):
     """Display a favorite ad at the specified index"""
-    user_data = user_states.get(user_id, {})
+    from ..bot import get_user_state
+    user_data = await get_user_state(user_id)
     favorites = user_data.get("favorites", [])
 
     if not favorites or index < 0 or index >= len(favorites):
-        send_message(user_id, "Оголошення не знайдено.")
+        await safe_send_message(user_id, "Оголошення не знайдено.")
         return
 
     # Get current favorite
@@ -71,20 +73,21 @@ def show_favorite_at_index(user_id, index):
 
     if images:
         # Send the first image with the ad description
-        send_message(user_id, message, images[0])
+        await safe_send_media(user_id, images[0], message)
     else:
         # Send just the text if no images
-        send_message(user_id, message)
+        await safe_send_message(user_id, message)
 
 
-def handle_favorite_command(user_id, command):
+async def handle_favorite_command(user_id, command):
     """Handle commands for favorites navigation"""
-    user_data = user_states.get(user_id, {})
+    from ..bot import get_user_state, update_user_state
+    user_data = await get_user_state(user_id)
     current_index = user_data.get("current_favorite_index", 0)
     favorites = user_data.get("favorites", [])
 
     if not favorites:
-        send_message(user_id, "У вас немає обраних оголошень.")
+        await safe_send_message(user_id, "У вас немає обраних оголошень.")
         return
 
     command_lower = command.lower().strip()
@@ -95,9 +98,8 @@ def handle_favorite_command(user_id, command):
         if next_index >= len(favorites):
             next_index = 0  # Wrap around to beginning
 
-        user_data["current_favorite_index"] = next_index
-        user_states[user_id] = user_data
-        show_favorite_at_index(user_id, next_index)
+        await update_user_state(user_id, {"current_favorite_index": next_index})
+        await show_favorite_at_index(user_id, next_index)
 
     elif command_lower in ["previous", "попереднє", "назад", "пред"]:
         # Move to previous favorite
@@ -105,9 +107,8 @@ def handle_favorite_command(user_id, command):
         if prev_index < 0:
             prev_index = len(favorites) - 1  # Wrap around to end
 
-        user_data["current_favorite_index"] = prev_index
-        user_states[user_id] = user_data
-        show_favorite_at_index(user_id, prev_index)
+        await update_user_state(user_id, {"current_favorite_index": prev_index})
+        await show_favorite_at_index(user_id, prev_index)
 
     elif command_lower in ["delete", "видалити", "remove"]:
         # Remove the current favorite
@@ -116,25 +117,29 @@ def handle_favorite_command(user_id, command):
         ad_id = favorite.get('ad_id')
 
         if remove_favorite_ad(db_user_id, ad_id):
-            send_message(user_id, "Оголошення видалено з обраних.")
+            await safe_send_message(user_id, "Оголошення видалено з обраних.")
 
             # Update the favorites list
             favorites.pop(current_index)
-            user_data["favorites"] = favorites
 
             # Adjust current index if needed
             if not favorites:
-                user_data["current_favorite_index"] = 0
-                user_states[user_id] = user_data
-                send_message(user_id, "У вас більше немає обраних оголошень.")
+                await update_user_state(user_id, {
+                    "favorites": [],
+                    "current_favorite_index": 0
+                })
+                await safe_send_message(user_id, "У вас більше немає обраних оголошень.")
                 return
             elif current_index >= len(favorites):
-                user_data["current_favorite_index"] = len(favorites) - 1
+                current_index = len(favorites) - 1
 
-            user_states[user_id] = user_data
-            show_favorite_at_index(user_id, user_data["current_favorite_index"])
+            await update_user_state(user_id, {
+                "favorites": favorites,
+                "current_favorite_index": current_index
+            })
+            await show_favorite_at_index(user_id, current_index)
         else:
-            send_message(user_id, "Не вдалося видалити оголошення.")
+            await safe_send_message(user_id, "Не вдалося видалити оголошення.")
 
     elif command_lower in ["description", "повний опис", "опис", "детальніше"]:
         # Show full description
@@ -144,20 +149,20 @@ def handle_favorite_command(user_id, command):
         if resource_url:
             full_description = get_full_ad_description(resource_url)
             if full_description:
-                send_message(user_id, f"*Повний опис:*\n\n{full_description}")
+                await safe_send_message(user_id, f"*Повний опис:*\n\n{full_description}")
             else:
-                send_message(user_id, "Детальний опис недоступний.")
+                await safe_send_message(user_id, "Детальний опис недоступний.")
         else:
-            send_message(user_id, "Неможливо отримати опис для цього оголошення.")
+            await safe_send_message(user_id, "Неможливо отримати опис для цього оголошення.")
 
     elif command_lower in ["menu", "меню", "назад до меню", "головне меню"]:
         # Return to main menu
         from .basic_handlers import handle_menu_command
-        handle_menu_command(user_id)
+        await handle_menu_command(user_id)
 
     else:
         # Unknown command
-        send_message(
+        await safe_send_message(
             user_id,
             "Невідома команда. Доступні дії:\n"
             "- 'Наступне'\n"
