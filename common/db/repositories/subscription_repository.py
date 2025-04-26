@@ -184,3 +184,46 @@ class SubscriptionRepository:
             redis_client.delete(*matching_keys)
 
         return True
+
+    @staticmethod
+    def transfer_subscriptions(db: Session, from_user_id: int, to_user_id: int) -> bool:
+        """Transfer subscriptions from one user to another"""
+        # Get all subscriptions for the source user
+        subscriptions = db.query(UserFilter).filter(UserFilter.user_id == from_user_id).all()
+
+        if not subscriptions:
+            return True  # Nothing to transfer
+
+        # Check if target user already has any of these subscriptions
+        for sub in subscriptions:
+            # Check for duplicate with same parameters
+            duplicate = db.query(UserFilter).filter(
+                UserFilter.user_id == to_user_id,
+                UserFilter.property_type == sub.property_type,
+                UserFilter.city == sub.city,
+                UserFilter.price_min == sub.price_min,
+                UserFilter.price_max == sub.price_max
+            ).first()
+
+            if not duplicate:
+                # Create a new subscription for the target user
+                new_sub = UserFilter(
+                    user_id=to_user_id,
+                    property_type=sub.property_type,
+                    city=sub.city,
+                    rooms_count=sub.rooms_count,
+                    price_min=sub.price_min,
+                    price_max=sub.price_max,
+                    is_paused=sub.is_paused,
+                    floor_max=sub.floor_max,
+                    is_not_first_floor=sub.is_not_first_floor,
+                    is_not_last_floor=sub.is_not_last_floor,
+                    is_last_floor_only=sub.is_last_floor_only,
+                    pets_allowed=sub.pets_allowed,
+                    without_broker=sub.without_broker
+                )
+                db.add(new_sub)
+
+        # Commit changes
+        db.commit()
+        return True

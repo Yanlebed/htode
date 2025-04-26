@@ -13,8 +13,6 @@ from .database import execute_query
 from common.config import GEO_ID_MAPPING, get_key_by_value
 from common.utils.phone_parser import extract_phone_numbers_from_resource
 from common.utils.cache import redis_cache, CacheTTL, batch_get_cached, batch_set_cached, redis_client
-from common.db.database import get_db_connection
-from psycopg2.extras import RealDictCursor
 
 from common.db.repositories.user_repository import UserRepository
 from common.db.session import db_session
@@ -91,7 +89,6 @@ def update_user_filter(user_id, filters):
                 f"Updated filters: [{user_id}, {property_type}, {geo_id}, {rooms_count}, {price_min}, {price_max}]")
 
             # Invalidate relevant cache entries
-            from common.utils.cache import redis_client
             cache_key = f"user_filters:{user_id}"
             redis_client.delete(cache_key)
 
@@ -109,9 +106,8 @@ def update_user_filter(user_id, filters):
 @redis_cache("user_filters", ttl=CacheTTL.MEDIUM)
 def get_user_filters(user_id):
     """Get user filters with caching"""
-    sql = "SELECT * FROM user_filters WHERE user_id = %s"
-    rows = execute_query(sql, [user_id], fetch=True)
-    return rows[0] if rows else None
+    with db_session() as db:
+        return SubscriptionRepository.get_user_filters(db, user_id)
 
 
 def batch_get_user_filters(user_ids):
@@ -156,13 +152,6 @@ def batch_get_user_filters(user_ids):
 def get_db_user_id_by_telegram_id(messenger_id, messenger_type="telegram"):
     """
     Get database user ID from messenger-specific ID (telegram_id, viber_id, or whatsapp_id).
-
-    Args:
-        messenger_id: Platform-specific user ID (telegram_id, viber_id, or whatsapp_id)
-        messenger_type: Type of messenger ("telegram", "viber", or "whatsapp")
-
-    Returns:
-        Database user ID or None if not found
     """
     logger.info(f"Getting database user ID for {messenger_type} ID: {messenger_id}")
 
@@ -229,7 +218,6 @@ def find_users_for_ad(ad):
             return []
 
         # Create a cache key based on the ad's primary attributes that affect matching
-        from common.utils.cache import redis_client
 
         cache_key = f"matching_users:{ad_id}"
 
@@ -382,7 +370,6 @@ def batch_find_users_for_ads(ads):
 
 def get_subscription_data_for_user(user_id):
     """Get subscription data for a user with caching"""
-    from common.utils.cache import redis_client
 
     cache_key = f"user_subscription:{user_id}"
     cached = redis_client.get(cache_key)
@@ -690,7 +677,6 @@ def add_favorite_ad(user_id: int, ad_id: int) -> Optional[int]:
             favorite = FavoriteRepository.add_favorite(db, user_id, ad_id)
 
             # Invalidate favorites cache
-            from common.utils.cache import redis_client
             redis_client.delete(f"user_favorites:{user_id}")
 
             return favorite.id if favorite else None
@@ -705,7 +691,6 @@ def add_favorite_ad(user_id: int, ad_id: int) -> Optional[int]:
 
 def list_favorites(user_id):
     """List user's favorite ads with caching"""
-    from common.utils.cache import redis_client
 
     cache_key = f"user_favorites:{user_id}"
     cached = redis_client.get(cache_key)
@@ -734,7 +719,6 @@ def remove_favorite_ad(user_id: int, ad_id: int) -> bool:
             success = FavoriteRepository.remove_favorite(db, user_id, ad_id)
 
             # Invalidate favorites cache
-            from common.utils.cache import redis_client
             redis_client.delete(f"user_favorites:{user_id}")
 
             return success
@@ -745,7 +729,6 @@ def remove_favorite_ad(user_id: int, ad_id: int) -> bool:
 
 def get_extra_images(resource_url):
     """Get extra images for an ad with caching"""
-    from common.utils.cache import redis_client
 
     cache_key = f"extra_images:{resource_url}"
     cached = redis_client.get(cache_key)
@@ -774,7 +757,6 @@ def get_extra_images(resource_url):
 
 def get_full_ad_description(resource_url):
     """Get full ad description with caching"""
-    from common.utils.cache import redis_client
 
     cache_key = f"ad_description:{resource_url}"
     cached = redis_client.get(cache_key)
@@ -836,7 +818,6 @@ def store_ad_phones(resource_url, ad_id):
             db.commit()
 
             # Invalidate relevant cache
-            from common.utils.cache import redis_client
             redis_client.delete(f"full_ad:{ad_id}")
 
             return phones_added
@@ -890,7 +871,6 @@ def start_free_subscription_of_user(user_id: int) -> bool:
             result = UserRepository.start_free_subscription(db, user_id)
 
         # Invalidate cache
-        from common.utils.cache import redis_client
         cache_key = f"user_subscription:{user_id}"
         redis_client.delete(cache_key)
 
@@ -912,8 +892,6 @@ def get_subscription_until_for_user(user_id: int, free: bool = False) -> Optiona
     Returns:
         Subscription expiration date as string or None if not found
     """
-    from common.utils.cache import redis_client
-
     cache_key = f"user_subscription:{user_id}:{free}"
     cached = redis_client.get(cache_key)
 
@@ -1004,7 +982,6 @@ def disable_subscription_for_user(user_id: int) -> bool:
             success = SubscriptionRepository.disable_subscription(db, user_id)
 
             # Invalidate relevant cache entries
-            from common.utils.cache import redis_client
             cache_key = f"user_filters:{user_id}"
             redis_client.delete(cache_key)
 
@@ -1036,7 +1013,6 @@ def enable_subscription_for_user(user_id: int) -> bool:
             success = SubscriptionRepository.enable_subscription(db, user_id)
 
             # Invalidate relevant cache entries
-            from common.utils.cache import redis_client
             cache_key = f"user_filters:{user_id}"
             redis_client.delete(cache_key)
 
