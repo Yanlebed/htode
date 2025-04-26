@@ -12,7 +12,7 @@ from common.db.models import (
     get_full_ad_data, get_ad_images, get_full_ad_description,
     get_platform_ids_for_user, get_db_user_id_by_telegram_id
 )
-from common.messaging.utils import safe_send_message, safe_send_media, safe_send_menu
+from common.messaging.unified_platform_utils import safe_send_message
 from common.messaging.service import messaging_service
 
 logger = logging.getLogger(__name__)

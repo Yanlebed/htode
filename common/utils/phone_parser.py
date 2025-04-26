@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright, Page, Browser
 
-from common.utils.request_utils import make_request
+from common.utils.unified_request_utils import make_request
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)

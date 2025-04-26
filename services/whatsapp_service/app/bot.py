@@ -3,7 +3,7 @@
 import logging
 import os
 from twilio.rest import Client
-from common.state_management import state_manager  # Use unified state manager directly
+from common.unified_state_management import state_manager
 
 # Configure logging
 logging.basicConfig(

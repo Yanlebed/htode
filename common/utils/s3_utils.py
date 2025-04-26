@@ -8,7 +8,7 @@ import json
 
 from botocore.exceptions import ClientError
 from common.config import AWS_CONFIG, REDIS_URL
-from common.utils.request_utils import make_request
+from common.utils.unified_request_utils import make_request
 from common.db.database import execute_query
 
 logger = logging.getLogger(__name__)

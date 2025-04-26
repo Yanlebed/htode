@@ -3,7 +3,7 @@
 import pytest
 import json
 from unittest.mock import patch, MagicMock
-from common.utils.state_manager import RedisStateManager
+from common.unified_state_management import state_manager as RedisStateManager
 
 
 @pytest.mark.asyncio

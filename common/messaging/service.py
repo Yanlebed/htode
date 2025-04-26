@@ -52,7 +52,7 @@ class MessagingService:
         Returns:
             Tuple of (platform_name, platform_specific_id) or (None, None)
         """
-        from common.messaging.platform_utils import resolve_user_id
+        from common.messaging.unified_platform_utils import resolve_user_id
 
         # Use the centralized resolve_user_id function
         _, platform_name, platform_id = resolve_user_id(user_id)
@@ -80,7 +80,7 @@ class MessagingService:
         Returns:
             True if sent successfully, False otherwise
         """
-        from common.messaging.platform_utils import resolve_user_id, format_user_id_for_platform
+        from common.messaging.unified_platform_utils import resolve_user_id, format_user_id_for_platform
 
         # Get platform info using resolve_user_id
         _, platform_name, platform_id = resolve_user_id(user_id)
@@ -132,7 +132,7 @@ class MessagingService:
         Returns:
             True if sent successfully, False otherwise
         """
-        from common.messaging.platform_utils import resolve_user_id, format_user_id_for_platform
+        from common.messaging.unified_platform_utils import resolve_user_id, format_user_id_for_platform
 
         # Get platform info using resolve_user_id
         _, platform_name, platform_id = resolve_user_id(user_id)

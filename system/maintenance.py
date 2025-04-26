@@ -10,7 +10,7 @@ from typing import List, Tuple, Optional, Dict, Any
 from common.celery_app import celery_app
 from common.db.database import execute_query, get_db_connection
 from common.utils.s3_utils import delete_s3_image
-from common.utils.request_utils import make_request
+from common.utils.unified_request_utils import make_request
 from common.utils.cache import redis_client, CacheTTL
 from common.config import GEO_ID_MAPPING
 

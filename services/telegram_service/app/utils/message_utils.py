@@ -4,7 +4,7 @@ import logging
 from typing import Optional, Union, Dict, Any
 from aiogram.types import Message, InputFile
 
-from common.messaging.utils import (
+from common.messaging.unified_platform_utils import (
     safe_send_message as unified_send_message,
     safe_send_media as unified_send_media,
     safe_edit_message_telegram,
