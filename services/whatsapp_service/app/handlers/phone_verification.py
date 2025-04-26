@@ -2,7 +2,7 @@
 
 import logging
 import asyncio
-from ..bot import state_manager, sanitize_phone_number
+from ..bot import sanitize_phone_number, get_user_state, update_user_state, set_user_state
 from ..utils.message_utils import safe_send_message
 from common.verification.phone_service import (
     create_verification_code,
@@ -46,7 +46,7 @@ async def start_phone_verification(user_id, response=None):
         await safe_send_message(user_id, message)
 
     # Save state
-    await state_manager.update_state(user_id, {
+    await set_user_state(user_id, {
         "state": STATE_WAITING_FOR_PHONE
     })
 
@@ -61,7 +61,7 @@ async def handle_phone_input(user_id, text, response=None):
         response: Optional Twilio response for immediate reply
     """
     # Get current state
-    user_data = await state_manager.get_state(user_id) or {}
+    user_data = await get_user_state(user_id) or {}
 
     # Determine phone number to use
     if text.lower() in ['так', 'yes', 'да', '1']:
@@ -72,7 +72,7 @@ async def handle_phone_input(user_id, text, response=None):
         phone_number = sanitize_phone_number(text)
 
     # Store in state
-    await state_manager.update_state(user_id, {
+    await update_user_state(user_id, {
         "phone_number": phone_number,
         "state": STATE_WAITING_FOR_CODE
     })
@@ -104,7 +104,7 @@ async def handle_verification_code(user_id, code, response=None):
         response: Optional Twilio response for immediate reply
     """
     # Get stored state
-    user_data = await state_manager.get_state(user_id) or {}
+    user_data = await get_user_state(user_id) or {}
     phone_number = user_data.get('phone_number')
 
     if not phone_number:
@@ -137,7 +137,7 @@ async def handle_verification_code(user_id, code, response=None):
     if existing_user and existing_user.get('whatsapp_id') != user_id:
         # User exists with this phone but has a different WhatsApp ID
         # Ask for confirmation to merge accounts
-        await state_manager.update_state(user_id, {
+        await update_user_state(user_id, {
             "existing_user_id": existing_user['id'],
             "current_user_id": current_user_id,
             "state": STATE_WAITING_FOR_CONFIRMATION
@@ -168,7 +168,7 @@ async def handle_merge_confirmation(user_id, confirmation, response=None):
         response: Optional Twilio response for immediate reply
     """
     # Get stored state
-    user_data = await state_manager.get_state(user_id) or {}
+    user_data = await get_user_state(user_id) or {}
     existing_user_id = user_data.get('existing_user_id')
     current_user_id = user_data.get('current_user_id')
     phone_number = user_data.get('phone_number')
@@ -192,7 +192,7 @@ async def handle_merge_confirmation(user_id, confirmation, response=None):
         message = "Операцію скасовано. Ваш номер телефону не було прив'язано."
 
     # Reset state
-    await state_manager.update_state(user_id, {
+    await set_user_state(user_id, {
         "state": "start"  # Return to main state
     })
 
@@ -218,7 +218,7 @@ async def handle_account_linking(user_id, phone_number, current_user_id, respons
     user_id_db = link_messenger_account(phone_number, "whatsapp", user_id_clean)
 
     # Reset state
-    await state_manager.update_state(user_id, {
+    await set_user_state(user_id, {
         "state": "start"  # Return to main state
     })
 

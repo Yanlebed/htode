@@ -3,7 +3,7 @@
 import logging
 from fastapi import FastAPI, Form, Request, Response, BackgroundTasks
 from twilio.twiml.messaging_response import MessagingResponse
-from .bot import sanitize_phone_number, state_manager
+from .bot import sanitize_phone_number  # Only import what we need
 # Import the flow integration
 from .flow_integration import handle_message_with_flow
 
