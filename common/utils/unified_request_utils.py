@@ -6,7 +6,7 @@ import time
 import random
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from typing import Optional, Dict, Any, Union, List, Tuple
+from typing import Optional, Dict, Any, Union
 
 logger = logging.getLogger(__name__)
 

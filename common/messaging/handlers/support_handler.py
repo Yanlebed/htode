@@ -1,9 +1,8 @@
 # common/messaging/handlers/support_handler.py
 
 import logging
-from typing import Dict, Any, Optional, Union
+from typing import Union
 
-from common.db.models import get_db_user_id_by_telegram_id
 from common.messaging.unified_platform_utils import safe_send_message, safe_send_menu
 
 logger = logging.getLogger(__name__)

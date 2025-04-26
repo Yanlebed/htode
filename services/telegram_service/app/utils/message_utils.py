@@ -1,7 +1,7 @@
 # services/telegram_service/app/utils/message_utils.py
 
 import logging
-from typing import Optional, Union, Dict, Any
+from typing import Optional, Union
 from aiogram.types import Message, InputFile
 
 from common.messaging.unified_platform_utils import (

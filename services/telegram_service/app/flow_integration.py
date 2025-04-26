@@ -4,7 +4,7 @@ import logging
 from aiogram import types
 from aiogram.dispatcher import FSMContext
 
-from .bot import dp, bot
+from .bot import dp
 from common.messaging.unified_flow import flow_library
 from common.messaging.unified_flow import (
     check_and_process_flow,

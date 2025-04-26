@@ -1,4 +1,5 @@
 # common/utils/ad_utils.py
+
 import logging
 from typing import Dict, Any, Optional, List, Union
 from common.db.database import execute_query

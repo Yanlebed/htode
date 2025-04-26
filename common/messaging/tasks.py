@@ -2,15 +2,13 @@
 
 import logging
 import asyncio
-import json
 import uuid
-from datetime import datetime, timedelta
-from typing import Dict, Any, Optional, List, Union
+from datetime import datetime
+from typing import Dict, Any, Optional, List
 
 from common.celery_app import celery_app
 from common.db.database import execute_query
 from common.db.models import get_platform_ids_for_user, get_db_user_id_by_telegram_id, get_full_ad_description
-from common.utils.ad_utils import get_ad_images
 from .service import messaging_service
 from .handlers.support_handler import handle_support_command, handle_support_category, SUPPORT_CATEGORIES
 

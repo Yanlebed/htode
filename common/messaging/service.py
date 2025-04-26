@@ -1,10 +1,9 @@
 # common/messaging/service.py
 
 import logging
-from typing import Dict, Any, Optional, List, Union
+from typing import Dict, Any, Optional, List
 
-from .interface import MessagingInterface
-from .utils import get_messenger_for_user
+from .unified_interface import MessagingInterface
 
 logger = logging.getLogger(__name__)
 

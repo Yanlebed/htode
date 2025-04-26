@@ -10,7 +10,7 @@ from aiogram.utils.exceptions import (
     UserDeactivated, RetryAfter, TelegramAPIError
 )
 
-from .interface import MessagingInterface
+from .unified_interface import MessagingInterface
 from common.utils.retry_utils import retry_with_exponential_backoff, NETWORK_EXCEPTIONS
 
 logger = logging.getLogger(__name__)

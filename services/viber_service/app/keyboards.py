@@ -1,4 +1,5 @@
 # services/viber_service/app/keyboards.py
+
 import logging
 from common.messaging.keyboard_utils import KeyboardFactory
 

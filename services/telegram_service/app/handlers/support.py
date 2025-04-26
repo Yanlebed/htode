@@ -3,9 +3,8 @@
 import logging
 from aiogram import types
 from aiogram.dispatcher import FSMContext
-from ..bot import dp, bot
+from ..bot import dp
 from ..states.support_states import SupportStates
-from ..keyboards import support_category_keyboard, support_redirect_keyboard, main_menu_keyboard
 from common.messaging.handlers.support_handler import handle_support_command, handle_support_category
 
 logger = logging.getLogger(__name__)

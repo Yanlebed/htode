@@ -2,16 +2,14 @@
 """
 Improved database models with batch queries and eager loading
 """
-import time
 import json
 import decimal
 import logging
-from typing import List, Dict, Any, Optional, Tuple, Union, Set
+from typing import List, Dict, Any, Optional, Union
 from datetime import datetime
 
 from .database import execute_query
-from .query_builder import QueryBuilder
-from common.config import GEO_ID_MAPPING, get_key_by_value, REDIS_URL
+from common.config import GEO_ID_MAPPING, get_key_by_value
 from common.utils.phone_parser import extract_phone_numbers_from_resource
 from common.utils.cache import redis_cache, CacheTTL, batch_get_cached, batch_set_cached, redis_client
 from common.db.database import get_db_connection
@@ -121,18 +119,11 @@ def get_user_filters(user_id):
 def batch_get_user_filters(user_ids):
     """
     Get filters for multiple users in a single query to prevent N+1 problems
-
-    Args:
-        user_ids: List of user IDs to fetch filters for
-
-    Returns:
-        Dict mapping user_id to their filters
     """
     if not user_ids:
         return {}
 
     # Try to get from cache first
-    cache_keys = [f"user_filters:{user_id}" for user_id in user_ids]
     cached_results = batch_get_cached(user_ids, prefix="user_filters")
 
     # Identify which user_ids were not in cache
@@ -147,10 +138,9 @@ def batch_get_user_filters(user_ids):
     for i in range(0, len(missing_user_ids), BATCH_SIZE):
         batch = missing_user_ids[i:i + BATCH_SIZE]
 
-        # Build and execute query for this batch
-        query = QueryBuilder("user_filters")
-        query.where_in("user_id", batch)
-        rows = query.execute(fetch=True)
+        placeholders = ','.join(['%s'] * len(batch))
+        sql = f"SELECT * FROM user_filters WHERE user_id IN ({placeholders})"
+        rows = execute_query(sql, batch, fetch=True)
 
         # Process results
         batch_results = {}

@@ -1,7 +1,6 @@
 # common/messaging/task_registry.py
 
 from common.celery_app import celery_app
-from typing import Dict, Any, Callable, List, Optional
 
 # Dictionary to store registered task mappings
 task_mappings = {}

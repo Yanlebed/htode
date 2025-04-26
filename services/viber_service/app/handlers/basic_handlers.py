@@ -2,17 +2,14 @@
 
 import logging
 
-from ..bot import viber, state_manager
-from ..utils.message_utils import safe_send_message, safe_send_picture
-from viberbot.api.messages import TextMessage, PictureMessage, KeyboardMessage
+from ..bot import state_manager
+from ..utils.message_utils import safe_send_message
+from viberbot.api.messages import TextMessage
 from common.db.models import (
     get_or_create_user,
     update_user_filter,
-    start_free_subscription_of_user,
-    get_subscription_data_for_user,
-    get_subscription_until_for_user
+    start_free_subscription_of_user
 )
-from common.config import GEO_ID_MAPPING, get_key_by_value
 from common.celery_app import celery_app
 
 logger = logging.getLogger(__name__)

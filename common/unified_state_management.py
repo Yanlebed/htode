@@ -4,7 +4,7 @@ import logging
 import json
 import asyncio
 import redis
-from typing import Dict, Any, Optional, Union, Callable, Awaitable, List, Type
+from typing import Dict, Any, Optional, Union, Callable, Awaitable
 
 from common.config import REDIS_URL
 from common.utils.retry_utils import retry_with_exponential_backoff, NETWORK_EXCEPTIONS

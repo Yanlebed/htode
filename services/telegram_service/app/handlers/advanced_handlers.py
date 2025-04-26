@@ -4,7 +4,7 @@ import logging
 
 from aiogram import types
 from aiogram.dispatcher import FSMContext
-from aiogram.types import ParseMode, MediaGroup, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from aiogram.types import ParseMode, MediaGroup, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.exceptions import MessageNotModified
 from ..bot import dp, bot
 from ..states.basis_states import FilterStates

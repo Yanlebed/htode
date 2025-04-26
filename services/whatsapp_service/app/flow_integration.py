@@ -1,9 +1,7 @@
 # services/whatsapp_service/app/flow_integration.py
 
 import logging
-import asyncio
-from twilio.twiml.messaging_response import MessagingResponse
-from .bot import sanitize_phone_number, get_user_state, update_user_state
+from .bot import sanitize_phone_number, get_user_state
 from common.messaging.unified_flow import flow_library
 from common.messaging.unified_flow import (
     check_and_process_flow,

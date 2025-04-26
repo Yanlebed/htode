@@ -1,6 +1,5 @@
 # services/telegram_service/app/tasks.py
 import logging
-from common.celery_app import celery_app
 from common.messaging.task_registry import register_platform_tasks
 from aiogram.types import CallbackQuery
 
@@ -17,7 +16,7 @@ send_ad_with_extra_buttons = registered_tasks['send_ad_with_extra_buttons']
 send_subscription_notification = registered_tasks['send_subscription_notification']
 
 # Import the bot for the callback handler
-from .bot import dp, bot
+from .bot import dp
 from common.messaging.tasks import process_show_more_description
 
 # This handler needs to remain in the Telegram service as it's tied to the callback query handler

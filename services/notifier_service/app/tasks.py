@@ -1,9 +1,7 @@
 # services/notifier_service/app/tasks.py
 
 from common.celery_app import celery_app
-from common.db.models import find_users_for_ad, store_ad_phones
-from common.db.database import execute_query
-from common.utils.s3_utils import _upload_image_to_s3
+from common.db.models import find_users_for_ad
 from common.utils.unified_request_utils import fetch_ads_flatfy
 from common.config import GEO_ID_MAPPING, get_key_by_value
 from common.utils.ad_utils import process_and_insert_ad, get_ad_images as utils_get_ad_images

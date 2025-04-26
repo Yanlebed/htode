@@ -7,7 +7,7 @@ from typing import Optional, List, Dict, Any, Union
 from viberbot import Api
 from viberbot.api.messages import TextMessage, PictureMessage, KeyboardMessage
 
-from .interface import MessagingInterface
+from .unified_interface import MessagingInterface
 from common.utils.retry_utils import retry_with_exponential_backoff, NETWORK_EXCEPTIONS
 
 logger = logging.getLogger(__name__)

@@ -8,7 +8,7 @@ from typing import Optional, List, Dict, Any, Union
 from twilio.rest import Client
 from twilio.base.exceptions import TwilioRestException
 
-from .interface import MessagingInterface
+from .unified_interface import MessagingInterface
 from common.utils.retry_utils import retry_with_exponential_backoff, NETWORK_EXCEPTIONS
 
 logger = logging.getLogger(__name__)
