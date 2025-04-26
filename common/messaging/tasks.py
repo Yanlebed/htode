@@ -3,6 +3,7 @@
 import logging
 import asyncio
 import json
+import uuid
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List, Union
 
@@ -11,6 +12,7 @@ from common.db.database import execute_query
 from common.db.models import get_platform_ids_for_user, get_db_user_id_by_telegram_id, get_full_ad_description
 from common.utils.ad_utils import get_ad_images
 from .service import messaging_service
+from .handlers.support_handler import handle_support_command, handle_support_category, SUPPORT_CATEGORIES
 
 logger = logging.getLogger(__name__)
 
@@ -560,3 +562,151 @@ def process_show_more_description(user_id, resource_url, message_id=None, platfo
             return loop.run_until_complete(process())
         finally:
             loop.close()
+
+
+# --- Support-Related Tasks ---
+
+@celery_app.task(name='common.messaging.tasks.start_support_conversation')
+def start_support_conversation(user_id, platform=None):
+    """
+    Start a support conversation with a user.
+    Works with any platform (telegram, viber, whatsapp).
+
+    Args:
+        user_id: User's platform-specific ID or database ID
+        platform: Optional platform identifier
+    """
+
+    async def execute():
+        try:
+            # Call the unified handler
+            success = await handle_support_command(user_id, platform)
+            return {"success": success}
+        except Exception as e:
+            logger.error(f"Error starting support conversation: {e}")
+            return {"success": False, "error": str(e)}
+
+    # Run the async function
+    try:
+        return asyncio.run(execute())
+    except RuntimeError as e:
+        # Handle case where there's already an event loop
+        logger.warning(f"RuntimeError in start_support_conversation: {e}")
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(execute())
+        finally:
+            loop.close()
+
+
+@celery_app.task(name='common.messaging.tasks.process_support_category')
+def process_support_category(user_id, category, platform=None):
+    """
+    Process a selected support category.
+    Works with any platform (telegram, viber, whatsapp).
+
+    Args:
+        user_id: User's platform-specific ID or database ID
+        category: Selected support category
+        platform: Optional platform identifier
+    """
+
+    async def execute():
+        try:
+            # Call the unified handler
+            success = await handle_support_category(user_id, category, platform)
+            return {"success": success}
+        except Exception as e:
+            logger.error(f"Error processing support category: {e}")
+            return {"success": False, "error": str(e)}
+
+    # Run the async function
+    try:
+        return asyncio.run(execute())
+    except RuntimeError as e:
+        # Handle case where there's already an event loop
+        logger.warning(f"RuntimeError in process_support_category: {e}")
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(execute())
+        finally:
+            loop.close()
+
+
+@celery_app.task(name='common.messaging.tasks.forward_to_support')
+def forward_to_support(user_id, message, category, platform=None):
+    """
+    Forward a user message to the support system.
+
+    Args:
+        user_id: User's platform-specific ID or database ID
+        message: User's message to forward
+        category: Support category for context
+        platform: Optional platform identifier
+    """
+
+    async def execute():
+        try:
+            # Get user information for context
+            db_user_id = None
+            if isinstance(user_id, int) or (isinstance(user_id, str) and user_id.isdigit()):
+                db_user_id = int(user_id)
+            elif platform:
+                db_user_id = get_db_user_id_by_telegram_id(user_id, messenger_type=platform)
+
+            if not db_user_id:
+                logger.warning(f"Could not resolve database user ID for {user_id}")
+
+            # Get platform information
+            platform_ids = get_platform_ids_for_user(db_user_id) if db_user_id else {}
+
+            # Prepare data for the support system
+            support_data = {
+                "user_id": db_user_id,
+                "message": message,
+                "category": category,
+                "platform": platform,
+                "platform_ids": platform_ids,
+                "timestamp": datetime.now().isoformat()
+            }
+
+            # Store in database or send to support system
+            # This is just a placeholder - implement your actual support system integration
+            logger.info(f"Support request received: {support_data}")
+
+            # Return success
+            return {"success": True, "support_ticket_id": str(uuid.uuid4())}
+        except Exception as e:
+            logger.error(f"Error forwarding to support: {e}")
+            return {"success": False, "error": str(e)}
+
+    # Run the async function
+    try:
+        return asyncio.run(execute())
+    except RuntimeError as e:
+        # Handle case where there's already an event loop
+        logger.warning(f"RuntimeError in forward_to_support: {e}")
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(execute())
+        finally:
+            loop.close()
+
+
+# Helper function to get the template for a support category
+def get_support_template(category, lang='uk'):
+    """
+    Get the template message for a support category.
+
+    Args:
+        category: Support category (payment, technical, other)
+        lang: Language code ('uk' for Ukrainian, 'en' for English)
+
+    Returns:
+        Template message string
+    """
+    category_data = SUPPORT_CATEGORIES.get(category, SUPPORT_CATEGORIES['other'])
+    return category_data['template']
