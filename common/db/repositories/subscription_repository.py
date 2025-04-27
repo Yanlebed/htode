@@ -227,3 +227,20 @@ class SubscriptionRepository:
         # Commit changes
         db.commit()
         return True
+
+
+    @staticmethod
+    def add_subscription(db: Session, user_id: int, filter_data: Dict[str, Any]) -> UserFilter:
+        """Add a new subscription"""
+        user_filter = UserFilter(
+            user_id=user_id,
+            property_type=filter_data.get('property_type'),
+            city=filter_data.get('city'),
+            rooms_count=filter_data.get('rooms_count'),
+            price_min=filter_data.get('price_min'),
+            price_max=filter_data.get('price_max')
+        )
+        db.add(user_filter)
+        db.commit()
+        db.refresh(user_filter)
+        return user_filter

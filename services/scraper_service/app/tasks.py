@@ -9,7 +9,12 @@ import uuid
 from redis import Redis
 from contextlib import contextmanager
 
+from sqlalchemy import select, or_
+
 from common.db.database import execute_query
+from common.db.models import UserFilter, User
+from common.db.repositories.ad_repository import AdRepository
+from common.db.session import db_session
 from common.utils.unified_request_utils import fetch_ads_flatfy
 from common.config import GEO_ID_MAPPING_FOR_INITIAL_RUN, AWS_CONFIG, REDIS_URL
 from common.celery_app import celery_app
@@ -112,25 +117,27 @@ s3_client = boto3.client(
 
 @celery_app.task(name="scraper_service.app.tasks.fetch_new_ads")
 def fetch_new_ads() -> None:
-    """
-    Celery task to fetch new ads for distinct subscribed cities.
-    """
-    sql = """
-    SELECT DISTINCT uf.city
-    FROM user_filters uf
-    JOIN users u ON uf.user_id = u.id
-    WHERE uf.city IS NOT NULL
-      AND (u.subscription_until > now() OR u.free_until > now())
-    """
-    rows = execute_query(sql, fetch=True)
-    if not rows:
-        logger.info("No subscribed cities found.")
-        return
+    # Replace with:
+    with db_session() as db:
+        # Get distinct cities from active users' filters
+        stmt = (
+            select(UserFilter.city)
+            .join(User, UserFilter.user_id == User.id)
+            .where(
+                UserFilter.city.isnot(None),
+                or_(User.subscription_until > datetime.now(), User.free_until > datetime.now())
+            )
+            .distinct()
+        )
+        distinct_cities = [row[0] for row in db.execute(stmt).all()]
 
-    distinct_cities = [r["city"] for r in rows if r["city"]]
-    for city in distinct_cities:
-        logger.info(f"Fetching new ads for city: {city}")
-        _scrape_ads_for_city(city)
+        if not distinct_cities:
+            logger.info("No subscribed cities found.")
+            return
+
+        for city in distinct_cities:
+            logger.info(f"Fetching new ads for city: {city}")
+            _scrape_ads_for_city(city)
 
 
 def _scrape_ads_for_city(geo_id: int) -> None:
@@ -196,34 +203,32 @@ def _scrape_ads_from_page(geo_id: int, section_id: int, page: int) -> list:
 
 
 def _insert_ad_if_new(ad_data: dict, geo_id: int, property_type: str, cutoff_time: datetime) -> int:
-    """
-    Inserts an ad into the DB if it is new (based on its unique external ID and timestamp).
-    Returns the newly inserted ad's internal ID or None.
-    """
-    ad_unique_id = str(ad_data.get("id", ""))
-    if not ad_unique_id:
-        return None
-
-    last_update_time_str = ad_data.get("download_time")
-    if last_update_time_str:
-        try:
-            last_update_time = datetime.fromisoformat(last_update_time_str)
-        except ValueError as e:
-            logger.warning(f"Invalid date format in ad data: {last_update_time_str}, error: {e}")
-            return None
-        if last_update_time < cutoff_time:
+    # Replace with:
+    with db_session() as db:
+        # Get external ID
+        ad_unique_id = str(ad_data.get("id", ""))
+        if not ad_unique_id:
             return None
 
-    # Check if this ad already exists
-    check_sql = "SELECT id FROM ads WHERE external_id = %s"
-    existing = execute_query(check_sql, [ad_unique_id], fetchone=True)
-    if existing:
-        return None
+        # Check recency
+        last_update_time_str = ad_data.get("download_time")
+        if last_update_time_str:
+            try:
+                last_update_time = datetime.fromisoformat(last_update_time_str)
+            except ValueError as e:
+                logger.warning(f"Invalid date format in ad data: {last_update_time_str}, error: {e}")
+                return None
+            if last_update_time < cutoff_time:
+                return None
 
-    # Use the unified ad insertion function
-    # This now handles images and phone numbers in a single transaction
-    logger.info(f"Inserting new ad into DB: {ad_data.get('id')}")
-    return process_and_insert_ad(ad_data, property_type, geo_id)
+        # Check if ad already exists
+        existing_ad = AdRepository.get_by_external_id(db, ad_unique_id)
+        if existing_ad:
+            return None
+
+        # Insert new ad
+        logger.info(f"Inserting new ad into DB: {ad_data.get('id')}")
+        return process_and_insert_ad(ad_data, property_type, geo_id)
 
 
 @celery_app.task(name="scraper_service.app.tasks.handle_new_records")
