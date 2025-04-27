@@ -20,7 +20,7 @@ from common.db.repositories.user_repository import UserRepository
 from common.db.repositories.subscription_repository import SubscriptionRepository
 from common.db.repositories.ad_repository import AdRepository
 from common.db.repositories.favorite_repository import FavoriteRepository
-from common.utils.cache import redis_cache, CacheTTL, batch_get_cached, batch_set_cached, redis_client
+from common.utils.cache import CacheTTL
 from common.config import GEO_ID_MAPPING, get_key_by_value
 from common.utils.phone_parser import extract_phone_numbers_from_resource
 from common.utils.cache_invalidation import (
@@ -35,8 +35,10 @@ from common.utils.cache_managers import (
     UserCacheManager,
     SubscriptionCacheManager,
     AdCacheManager,
-    FavoriteCacheManager
+    FavoriteCacheManager,
+    BaseCacheManager
 )
+from common.utils.cache_invalidation import get_entity_cache_key
 
 logger = logging.getLogger(__name__)
 
@@ -117,20 +119,9 @@ def update_user_filter(user_id, filters):
 
 def invalidate_user_filter_caches(user_id: int):
     """Centralized function to invalidate all related caches when a user filter changes"""
-    # Invalidate user filter cache
-    redis_client.delete(f"user_filters:{user_id}")
-
-    # Invalidate subscription list cache
-    redis_client.delete(f"user_subscriptions_list:{user_id}")
-
-    # Invalidate matching users cache for ads
-    matching_pattern = "matching_users:*"
-    matching_keys = redis_client.keys(matching_pattern)
-    if matching_keys:
-        redis_client.delete(*matching_keys)
-
-    # Invalidate subscription status cache
-    redis_client.delete(f"subscription_status:{user_id}")
+    # Use the cache manager to handle invalidation
+    UserCacheManager.invalidate_all(user_id)
+    SubscriptionCacheManager.invalidate_all(user_id)
 
 
 def get_user_filters(user_id):
@@ -153,44 +144,48 @@ def get_user_filters(user_id):
 
 def batch_get_user_filters(user_ids):
     """
-    Get filters for multiple users in a single query to prevent N+1 problems
+    Get filters for multiple users in a single query to prevent N+1 problems.
+    Uses the cache manager approach.
     """
     if not user_ids:
         return {}
 
-    # Try to get from cache first
-    cached_results = batch_get_cached(user_ids, prefix="user_filters")
+    # Result dictionary
+    results = {}
 
-    # Identify which user_ids were not in cache
-    missing_user_ids = [uid for uid in user_ids if uid not in cached_results]
+    # Step 1: Try to get as many filters from cache as possible
+    for user_id in user_ids:
+        cached_filters = UserCacheManager.get_filters(user_id)
+        if cached_filters:
+            results[user_id] = cached_filters
 
+    # Step 2: Find which user_ids were not in cache
+    missing_user_ids = [uid for uid in user_ids if uid not in results]
+
+    # If all users were found in cache, return immediately
     if not missing_user_ids:
-        return cached_results
+        return results
 
-    # Fetch missing data from database in batches to avoid huge IN clauses
-    results = dict(cached_results)  # Start with cached results
-
+    # Step 3: Fetch missing data from database in batches
     with db_session() as db:
         for i in range(0, len(missing_user_ids), BATCH_SIZE):
             batch = missing_user_ids[i:i + BATCH_SIZE]
 
             # Use repository to get filters for this batch
-            batch_results = {}
             for user_id in batch:
                 user_filter = SubscriptionRepository.get_user_filters(db, user_id)
                 if user_filter:
                     results[user_id] = user_filter
-                    batch_results[user_id] = user_filter
-
-            # Cache the batch results
-            batch_set_cached(batch_results, ttl=CacheTTL.MEDIUM, prefix="user_filters")
+                    # Cache each result
+                    UserCacheManager.set_filters(user_id, user_filter)
 
     return results
 
 
 def get_db_user_id_by_telegram_id(messenger_id, messenger_type="telegram"):
     """
-    Get database user ID from messenger-specific ID (telegram_id, viber_id, or whatsapp_id).
+    Get database user ID from messenger-specific ID.
+    This doesn't need caching as it's a simple lookup and changing often.
     """
     logger.info(f"Getting database user ID for {messenger_type} ID: {messenger_id}")
 
@@ -212,12 +207,7 @@ def get_db_user_id_by_telegram_id(messenger_id, messenger_type="telegram"):
 def get_platform_ids_for_user(user_id: int) -> dict:
     """
     Get all messaging platform IDs for a user.
-
-    Args:
-        user_id: Database user ID
-
-    Returns:
-        Dictionary with platform IDs (telegram_id, viber_id, whatsapp_id)
+    This doesn't need caching as it's called infrequently and the data is small.
     """
     try:
         with db_session() as db:
@@ -246,7 +236,7 @@ def get_platform_ids_for_user(user_id: int) -> dict:
 def find_users_for_ad(ad):
     """
     Finds users whose subscription filters match this ad.
-    Now with Redis caching and batch processing to improve performance.
+    Uses the cache manager approach.
     """
     try:
         # Extract the ad ID for caching
@@ -256,14 +246,12 @@ def find_users_for_ad(ad):
             logger.error("Cannot find users for ad without ID")
             return []
 
-        # Create a cache key based on the ad's primary attributes that affect matching
-        cache_key = f"matching_users:{ad_id}"
-
-        # Try to get results from cache first
-        cached = redis_client.get(cache_key)
-        if cached:
+        # Try to get from cache using BaseCacheManager
+        cache_key = get_entity_cache_key("matching_users", ad_id)
+        cached_users = BaseCacheManager.get(cache_key)
+        if cached_users:
             logger.info(f'Cache hit for ad {ad_id} matching users')
-            return json.loads(cached)
+            return cached_users
 
         logger.info(f'Looking for users for ad: {ad}')
 
@@ -288,8 +276,8 @@ def find_users_for_ad(ad):
             # Use repository to find matching users
             user_ids = AdRepository.find_users_for_ad(db, ad_obj)
 
-        # Cache the results for 1 hour
-        redis_client.set(cache_key, json.dumps(user_ids), ex=3600)
+        # Cache the results
+        BaseCacheManager.set(cache_key, user_ids, CacheTTL.STANDARD)
 
         logger.info(f'Found {len(user_ids)} users for ad: {ad_id}')
         return user_ids
@@ -303,13 +291,7 @@ def find_users_for_ad(ad):
 def batch_find_users_for_ads(ads):
     """
     Find matching users for multiple ads in an efficient way
-    using IN clauses and eager loading where possible.
-
-    Args:
-        ads: List of ad dictionaries
-
-    Returns:
-        Dict mapping ad_id to list of matching user_ids
+    using the cache manager approach.
     """
     if not ads:
         return {}
@@ -317,24 +299,21 @@ def batch_find_users_for_ads(ads):
     results = {}
     ad_ids = [ad.get('id') for ad in ads if ad.get('id')]
 
-    # Try to get from cache first
-    cache_keys = [f"matching_users:{ad_id}" for ad_id in ad_ids]
-    cached_results = {}
+    # Step 1: Try to get matches from cache
+    for ad_id in ad_ids:
+        cache_key = get_entity_cache_key("matching_users", ad_id)
+        cached_users = BaseCacheManager.get(cache_key)
+        if cached_users:
+            results[ad_id] = cached_users
 
-    for i, key in enumerate(cache_keys):
-        cached = redis_client.get(key)
-        if cached:
-            ad_id = ad_ids[i]
-            cached_results[ad_id] = json.loads(cached)
-
-    # Identify which ads were not in cache
-    cached_ad_ids = set(cached_results.keys())
-    ads_to_process = [ad for ad in ads if ad.get('id') not in cached_ad_ids]
+    # Step 2: Find which ads were not in cache
+    processed_ad_ids = set(results.keys())
+    ads_to_process = [ad for ad in ads if ad.get('id') not in processed_ad_ids]
 
     if not ads_to_process:
-        return cached_results
+        return results
 
-    # Process the remaining ads
+    # Step 3: Process the remaining ads
     with db_session() as db:
         # Get all active users
         active_users = db.query(User.id).filter(
@@ -348,7 +327,7 @@ def batch_find_users_for_ads(ads):
 
         if not active_user_ids:
             # No active users, no matches possible
-            return cached_results
+            return results
 
         # Get all user filters in one query
         user_filters = batch_get_user_filters(active_user_ids)
@@ -382,39 +361,10 @@ def batch_find_users_for_ads(ads):
 
             # Store results and cache them
             results[ad_id] = matching_users
-            redis_client.set(f"matching_users:{ad_id}", json.dumps(matching_users), ex=CacheTTL.STANDARD)
+            cache_key = get_entity_cache_key("matching_users", ad_id)
+            BaseCacheManager.set(cache_key, matching_users, CacheTTL.STANDARD)
 
-    # Combine cached and newly processed results
-    results.update(cached_results)
     return results
-
-
-# Update these functions in common/db/operations.py with cache managers
-
-from common.utils.cache_managers import (
-    UserCacheManager,
-    SubscriptionCacheManager,
-    AdCacheManager,
-    FavoriteCacheManager
-)
-
-
-def get_user_filters(user_id):
-    """Get user filters with caching"""
-    # Try to get from cache first using the cache manager
-    filters = UserCacheManager.get_filters(user_id)
-    if filters:
-        return filters
-
-    # Cache miss, query the database
-    with db_session() as db:
-        filters = SubscriptionRepository.get_user_filters(db, user_id)
-
-        # Cache the result if found
-        if filters:
-            UserCacheManager.set_filters(user_id, filters)
-
-        return filters
 
 
 def get_subscription_data_for_user(user_id: int) -> dict:
@@ -464,31 +414,35 @@ def get_full_ad_data(ad_id: int):
 
 def batch_get_full_ad_data(ad_ids):
     """
-    Get complete data for multiple ads in a single query with efficient caching
+    Get complete data for multiple ads in a single query using AdCacheManager
+
+    Args:
+        ad_ids: List of ad IDs
+
+    Returns:
+        Dict mapping ad_id to ad data
     """
     if not ad_ids:
         return {}
 
-    # Result dictionary
     results = {}
 
-    # Step 1: Try to get as many ads from cache as possible
+    # Try to get from cache first
     for ad_id in ad_ids:
         cached_data = AdCacheManager.get_full_ad_data(ad_id)
         if cached_data:
             results[ad_id] = cached_data
 
-    # Step 2: Find which ads weren't in the cache
+    # Identify which ads were not in cache
     missing_ad_ids = [ad_id for ad_id in ad_ids if ad_id not in results]
 
-    # If everything was in cache, return immediately
     if not missing_ad_ids:
         return results
 
-    # Step 3: Process batches of missing ads
+    # Process batches of missing ads
     with db_session() as db:
-        for batch_start in range(0, len(missing_ad_ids), BATCH_SIZE):
-            batch = missing_ad_ids[batch_start:batch_start + BATCH_SIZE]
+        for i in range(0, len(missing_ad_ids), BATCH_SIZE):
+            batch = missing_ad_ids[i:i + BATCH_SIZE]
 
             for ad_id in batch:
                 ad_data = AdRepository.get_full_ad_data(db, ad_id)
@@ -514,7 +468,7 @@ def list_favorites_with_eager_loading(user_id: int):
 
 
 def add_subscription(user_id, property_type, city_id, rooms_count, price_min, price_max):
-    # Replace with:
+    """Add a subscription with proper cache invalidation"""
     with db_session() as db:
         # Check subscription count
         count = SubscriptionRepository.count_subscriptions(db, user_id)
@@ -533,26 +487,25 @@ def add_subscription(user_id, property_type, city_id, rooms_count, price_min, pr
         # Add subscription
         subscription = SubscriptionRepository.add_subscription(db, user_id, filter_data)
 
-        # Invalidate cache
-        invalidate_user_filter_caches(user_id)
+        # Invalidate cache using the cache manager
+        SubscriptionCacheManager.invalidate_all(user_id)
 
         return subscription.id
 
 
 def list_subscriptions(user_id: int):
-    """List user subscriptions with caching"""
-    cache_key = f"user_subscriptions_list:{user_id}"
-    cached = redis_client.get(cache_key)
-
-    if cached:
-        return json.loads(cached)
+    """List user subscriptions with caching using cache managers"""
+    # Use the cache manager to get cached subscriptions
+    cached_subscriptions = SubscriptionCacheManager.get_user_subscriptions(user_id)
+    if cached_subscriptions:
+        return cached_subscriptions
 
     try:
         with db_session() as db:
             subscriptions = SubscriptionRepository.list_subscriptions(db, user_id)
 
-            # Cache for 5 minutes
-            redis_client.set(cache_key, json.dumps(subscriptions), ex=CacheTTL.MEDIUM)
+            # Cache the result using the cache manager
+            SubscriptionCacheManager.set_user_subscriptions(user_id, subscriptions)
 
             return subscriptions
     except Exception as e:
@@ -579,7 +532,7 @@ def remove_subscription(subscription_id: int, user_id: int) -> bool:
 
 def update_subscription(subscription_id: int, user_id: int, new_values: dict):
     """
-    Update a subscription with cache invalidation
+    Update a subscription with cache invalidation using cache managers
     """
     try:
         with db_session() as db:
@@ -598,8 +551,8 @@ def update_subscription(subscription_id: int, user_id: int, new_values: dict):
 
             db.commit()
 
-            # Invalidate relevant cache entries
-            invalidate_user_filter_caches(user_id)
+            # Invalidate cache using the cache manager
+            SubscriptionCacheManager.invalidate_all(user_id, subscription_id)
 
             return True
     except Exception as e:
@@ -669,13 +622,14 @@ def remove_favorite_ad(user_id: int, ad_id: int) -> bool:
 
 
 def get_extra_images(resource_url):
-    """Get extra images for an ad with caching"""
+    """Get extra images for an ad with caching using cache managers"""
+    # Create a cache key
+    cache_key = get_entity_cache_key("extra_images", resource_url)
 
-    cache_key = f"extra_images:{resource_url}"
-    cached = redis_client.get(cache_key)
-
-    if cached:
-        return json.loads(cached)
+    # Try to get from cache
+    cached_images = BaseCacheManager.get(cache_key)
+    if cached_images:
+        return cached_images
 
     try:
         with db_session() as db:
@@ -687,8 +641,8 @@ def get_extra_images(resource_url):
             # Get images for the ad
             images = AdRepository.get_ad_images(db, ad.id)
 
-            # Cache for 1 hour - images rarely change
-            redis_client.set(cache_key, json.dumps(images), ex=3600)
+            # Cache the result
+            BaseCacheManager.set(cache_key, images, CacheTTL.LONG)
 
             return images
     except Exception as e:
@@ -799,7 +753,7 @@ def start_free_subscription_of_user(user_id: int) -> bool:
 
 def get_subscription_until_for_user(user_id: int, free: bool = False) -> Optional[str]:
     """
-    Get the subscription expiration date for a user.
+    Get the subscription expiration date for a user using cache managers.
 
     Args:
         user_id: Database user ID
@@ -808,11 +762,13 @@ def get_subscription_until_for_user(user_id: int, free: bool = False) -> Optiona
     Returns:
         Subscription expiration date as string or None if not found
     """
-    cache_key = f"user_subscription:{user_id}:{free}"
-    cached = redis_client.get(cache_key)
+    # Create a cache key
+    cache_key = get_entity_cache_key("user_subscription", user_id, "free" if free else "paid")
 
-    if cached:
-        return cached.decode('utf-8')
+    # Try to get from cache
+    cached_date = BaseCacheManager.get(cache_key)
+    if cached_date:
+        return cached_date
 
     try:
         with db_session() as db:
@@ -833,8 +789,8 @@ def get_subscription_until_for_user(user_id: int, free: bool = False) -> Optiona
                 else:
                     formatted_date = str(date_value)
 
-                # Cache for 10 minutes
-                redis_client.set(cache_key, formatted_date, ex=600)
+                # Cache the result
+                BaseCacheManager.set(cache_key, formatted_date, CacheTTL.MEDIUM)
                 return formatted_date
 
         return None

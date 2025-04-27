@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from common.db.models import FavoriteAd
 from common.db.models.ad import Ad, AdImage, AdPhone
-from common.utils.cache import redis_cache, redis_client, CacheTTL
+from common.utils.cache import redis_cache, CacheTTL
 from common.config import GEO_ID_MAPPING, get_key_by_value
 from common.utils.cache_invalidation import invalidate_ad_caches
 from common.utils.cache_managers import AdCacheManager, BaseCacheManager

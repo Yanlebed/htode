@@ -5,7 +5,6 @@ from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
 
 from common.db.models.user import User
-from common.utils.cache import redis_cache, redis_client, CacheTTL
 from common.utils.cache_managers import UserCacheManager
 
 class UserRepository:

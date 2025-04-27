@@ -182,10 +182,18 @@ def batch_get_cached(keys, prefix=""):
     """
     Get multiple values from cache in a single operation
     Returns a dict of {key: value} for found keys
+
+    Args:
+        keys: List of keys to retrieve
+        prefix: Optional prefix for all keys
+
+    Returns:
+        Dictionary mapping original keys to their values
     """
     if not keys:
         return {}
 
+    # Create standardized keys
     prefixed_keys = [f"{prefix}:{k}" if prefix else k for k in keys]
 
     # Use Redis pipeline for batched operations
@@ -199,7 +207,12 @@ def batch_get_cached(keys, prefix=""):
         if value:
             # Remove prefix from key if it exists
             original_key = keys[i]
-            result[original_key] = json.loads(value)
+            try:
+                result[original_key] = json.loads(value)
+            except json.JSONDecodeError:
+                logger.warning(f"Invalid JSON in cache for key: {prefixed_keys[i]}")
+                # Return the raw value if it can't be parsed as JSON
+                result[original_key] = value.decode('utf-8') if isinstance(value, bytes) else value
 
     return result
 
@@ -207,7 +220,11 @@ def batch_get_cached(keys, prefix=""):
 def batch_set_cached(key_values, ttl=CacheTTL.STANDARD, prefix=""):
     """
     Set multiple values in cache in a single operation
-    key_values: Dict of {key: value} pairs to cache
+
+    Args:
+        key_values: Dict of {key: value} pairs to cache
+        ttl: Cache TTL in seconds
+        prefix: Optional prefix for all keys
     """
     if not key_values:
         return
@@ -216,5 +233,11 @@ def batch_set_cached(key_values, ttl=CacheTTL.STANDARD, prefix=""):
     with redis_client.pipeline() as pipe:
         for key, value in key_values.items():
             full_key = f"{prefix}:{key}" if prefix else key
-            pipe.set(full_key, json.dumps(value), ex=ttl)
+            try:
+                serialized = json.dumps(value)
+                pipe.set(full_key, serialized, ex=ttl)
+            except (TypeError, ValueError) as e:
+                logger.warning(f"Failed to serialize value for key {full_key}: {e}")
+                # Try to store as string if serialization fails
+                pipe.set(full_key, str(value), ex=ttl)
         pipe.execute()
