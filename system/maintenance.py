@@ -3,7 +3,7 @@
 import logging
 import time
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Tuple, Dict, Any
 
 from common.celery_app import celery_app
@@ -14,8 +14,8 @@ from common.utils.s3_utils import delete_s3_image
 from common.utils.unified_request_utils import make_request
 from common.utils.cache import redis_client, CacheTTL
 from common.config import GEO_ID_MAPPING
-from common.verification.services.ad_service import AdService
-from common.verification.services.user_service import UserService
+from common.services.ad_service import AdService
+from common.services.user_service import UserService
 
 logger = logging.getLogger(__name__)
 
