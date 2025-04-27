@@ -1,4 +1,5 @@
 # common/db/repositories/favorite_repository.py
+
 from typing import List, Dict, Any, Optional
 import decimal
 
@@ -7,66 +8,20 @@ from sqlalchemy.sql import func
 
 from common.db.models.favorite import FavoriteAd
 from common.db.models.ad import Ad
-from common.utils.cache import redis_cache, redis_client, CacheTTL
-
+from common.utils.cache_managers import FavoriteCacheManager
 
 class FavoriteRepository:
     """Repository for favorite ad operations"""
 
     @staticmethod
-    def add_favorite(db: Session, user_id: int, ad_id: int) -> Optional[FavoriteAd]:
-        """Add a favorite ad"""
-        # Check limit of 50 favorites
-        favorites_count = db.query(func.count(FavoriteAd.id)).filter(
-            FavoriteAd.user_id == user_id
-        ).scalar()
-
-        if favorites_count >= 50:
-            raise ValueError("You already have 50 favorite ads, cannot add more.")
-
-        # Check if already exists
-        existing = db.query(FavoriteAd).filter(
-            FavoriteAd.user_id == user_id,
-            FavoriteAd.ad_id == ad_id
-        ).first()
-
-        if existing:
-            return existing
-
-        # Create new favorite
-        favorite = FavoriteAd(user_id=user_id, ad_id=ad_id)
-        db.add(favorite)
-        db.commit()
-        db.refresh(favorite)
-
-        # Invalidate cache
-        redis_client.delete(f"user_favorites:{user_id}")
-
-        return favorite
-
-    @staticmethod
-    def remove_favorite(db: Session, user_id: int, ad_id: int) -> bool:
-        """Remove a favorite ad"""
-        favorite = db.query(FavoriteAd).filter(
-            FavoriteAd.user_id == user_id,
-            FavoriteAd.ad_id == ad_id
-        ).first()
-
-        if not favorite:
-            return False
-
-        db.delete(favorite)
-        db.commit()
-
-        # Invalidate cache
-        redis_client.delete(f"user_favorites:{user_id}")
-
-        return True
-
-    @staticmethod
-    @redis_cache("user_favorites", ttl=CacheTTL.MEDIUM)
     def list_favorites(db: Session, user_id: int) -> List[Dict[str, Any]]:
-        """List user's favorite ads with eager loading"""
+        """List user's favorite ads with eager loading and caching"""
+        # Try to get from cache first using the cache manager
+        cached_favorites = FavoriteCacheManager.get_user_favorites(user_id)
+        if cached_favorites:
+            return cached_favorites
+
+        # Cache miss, query database
         favorites = db.query(FavoriteAd) \
             .filter(FavoriteAd.user_id == user_id) \
             .options(
@@ -98,4 +53,57 @@ class FavoriteRepository:
             }
             result.append(ad_dict)
 
+        # Cache the result
+        FavoriteCacheManager.set_user_favorites(user_id, result)
+
         return result
+
+    @staticmethod
+    def add_favorite(db: Session, user_id: int, ad_id: int) -> Optional[FavoriteAd]:
+        """Add a favorite ad"""
+        # Check limit of 50 favorites
+        favorites_count = db.query(func.count(FavoriteAd.id)).filter(
+            FavoriteAd.user_id == user_id
+        ).scalar()
+
+        if favorites_count >= 50:
+            raise ValueError("You already have 50 favorite ads, cannot add more.")
+
+        # Check if already exists
+        existing = db.query(FavoriteAd).filter(
+            FavoriteAd.user_id == user_id,
+            FavoriteAd.ad_id == ad_id
+        ).first()
+
+        if existing:
+            return existing
+
+        # Create new favorite
+        favorite = FavoriteAd(user_id=user_id, ad_id=ad_id)
+        db.add(favorite)
+        db.commit()
+        db.refresh(favorite)
+
+        # Invalidate cache using the cache manager
+        FavoriteCacheManager.invalidate_all(user_id)
+
+        return favorite
+
+    @staticmethod
+    def remove_favorite(db: Session, user_id: int, ad_id: int) -> bool:
+        """Remove a favorite ad"""
+        favorite = db.query(FavoriteAd).filter(
+            FavoriteAd.user_id == user_id,
+            FavoriteAd.ad_id == ad_id
+        ).first()
+
+        if not favorite:
+            return False
+
+        db.delete(favorite)
+        db.commit()
+
+        # Invalidate cache using the cache manager
+        FavoriteCacheManager.invalidate_all(user_id)
+
+        return True

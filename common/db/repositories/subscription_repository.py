@@ -1,28 +1,34 @@
 # common/db/repositories/subscription_repository.py
-from typing import List, Optional, Dict, Any, Tuple, Union
-import json
 
-from sqlalchemy import and_, or_, not_
+from typing import List, Optional, Dict, Any
+
 from sqlalchemy.orm import Session
 
 from common.db.models.subscription import UserFilter
 from common.db.models.user import User
-from common.utils.cache import redis_cache, redis_client, CacheTTL, batch_get_cached, batch_set_cached
+from common.utils.cache import CacheTTL
 from common.config import GEO_ID_MAPPING, get_key_by_value
-
+from common.utils.cache_managers import SubscriptionCacheManager, UserCacheManager, BaseCacheManager
+from common.utils.cache_invalidation import get_entity_cache_key
 
 class SubscriptionRepository:
     """Repository for subscription operations"""
 
     @staticmethod
-    @redis_cache("user_filters", ttl=CacheTTL.MEDIUM)
     def get_user_filters(db: Session, user_id: int) -> Optional[Dict[str, Any]]:
         """Get user filters with caching"""
+        # Try to get from cache first using the cache manager
+        cached_filters = UserCacheManager.get_filters(user_id)
+        if cached_filters:
+            return cached_filters
+
+        # Cache miss, query database
         filters = db.query(UserFilter).filter(UserFilter.user_id == user_id).first()
         if not filters:
             return None
 
-        return {
+        # Convert to dict
+        filters_dict = {
             "id": filters.id,
             "user_id": filters.user_id,
             "property_type": filters.property_type,
@@ -38,6 +44,11 @@ class SubscriptionRepository:
             "pets_allowed": filters.pets_allowed,
             "without_broker": filters.without_broker
         }
+
+        # Cache the result
+        UserCacheManager.set_filters(user_id, filters_dict)
+
+        return filters_dict
 
     @staticmethod
     def update_user_filter(db: Session, user_id: int, filters_data: Dict[str, Any]) -> UserFilter:
@@ -81,12 +92,9 @@ class SubscriptionRepository:
         db.commit()
         db.refresh(user_filter)
 
-        # Invalidate caches
-        redis_client.delete(f"user_filters:{user_id}")
-        matching_pattern = "matching_users:*"
-        matching_keys = redis_client.keys(matching_pattern)
-        if matching_keys:
-            redis_client.delete(*matching_keys)
+        # Invalidate cache using the cache manager
+        SubscriptionCacheManager.invalidate_all(user_id)
+        UserCacheManager.invalidate_all(user_id)
 
         return user_filter
 
@@ -102,12 +110,8 @@ class SubscriptionRepository:
 
         db.commit()
 
-        # Invalidate cache
-        redis_client.delete(f"user_filters:{user_id}")
-        matching_pattern = "matching_users:*"
-        matching_keys = redis_client.keys(matching_pattern)
-        if matching_keys:
-            redis_client.delete(*matching_keys)
+        # Invalidate cache using the cache manager
+        SubscriptionCacheManager.invalidate_all(user_id)
 
         return True
 
@@ -123,43 +127,10 @@ class SubscriptionRepository:
 
         db.commit()
 
-        # Invalidate cache
-        redis_client.delete(f"user_filters:{user_id}")
-        matching_pattern = "matching_users:*"
-        matching_keys = redis_client.keys(matching_pattern)
-        if matching_keys:
-            redis_client.delete(*matching_keys)
+        # Invalidate cache using the cache manager
+        SubscriptionCacheManager.invalidate_all(user_id)
 
         return True
-
-    @staticmethod
-    def count_subscriptions(db: Session, user_id: int) -> int:
-        """Count the number of subscriptions for a user"""
-        return db.query(UserFilter).filter(UserFilter.user_id == user_id).count()
-
-    @staticmethod
-    def list_subscriptions_paginated(db: Session, user_id: int, page: int = 0, per_page: int = 5) -> List[
-        Dict[str, Any]]:
-        """Get a paginated list of subscriptions"""
-        offset = page * per_page
-
-        filters = db.query(UserFilter).filter(
-            UserFilter.user_id == user_id
-        ).order_by(UserFilter.id).limit(per_page).offset(offset).all()
-
-        return [
-            {
-                "id": f.id,
-                "user_id": f.user_id,
-                "property_type": f.property_type,
-                "city": f.city,
-                "rooms_count": f.rooms_count,
-                "price_min": f.price_min,
-                "price_max": f.price_max,
-                "is_paused": f.is_paused
-            }
-            for f in filters
-        ]
 
     @staticmethod
     def remove_subscription(db: Session, subscription_id: int, user_id: int) -> bool:
@@ -175,15 +146,92 @@ class SubscriptionRepository:
         db.delete(filter_to_remove)
         db.commit()
 
-        # Invalidate caches
-        redis_client.delete(f"user_filters:{user_id}")
-        redis_client.delete(f"user_subscriptions_list:{user_id}")
-        matching_pattern = "matching_users:*"
-        matching_keys = redis_client.keys(matching_pattern)
-        if matching_keys:
-            redis_client.delete(*matching_keys)
+        # Invalidate cache using the cache manager
+        SubscriptionCacheManager.invalidate_all(user_id, subscription_id)
 
         return True
+
+    @staticmethod
+    def count_subscriptions(db: Session, user_id: int) -> int:
+        """Count the number of subscriptions for a user"""
+        return db.query(UserFilter).filter(UserFilter.user_id == user_id).count()
+
+    @staticmethod
+    def list_subscriptions_paginated(db: Session, user_id: int, page: int = 0, per_page: int = 5) -> List[
+        Dict[str, Any]]:
+        """Get a paginated list of subscriptions with caching"""
+        # Create a cache key that includes pagination parameters
+        cache_key = get_entity_cache_key("user_subscriptions_paginated", user_id, f"{page}:{per_page}")
+
+        # Try to get from the cache first
+        cached_data = BaseCacheManager.get(cache_key)
+        if cached_data:
+            return cached_data
+
+        # Cache miss, query database
+        offset = page * per_page
+
+        filters = db.query(UserFilter).filter(
+            UserFilter.user_id == user_id
+        ).order_by(UserFilter.id).limit(per_page).offset(offset).all()
+
+        # Format the results
+        result = []
+        for f in filters:
+            # Convert geo_id to city name if available
+            city_name = GEO_ID_MAPPING.get(f.city) if f.city else None
+
+            sub_dict = {
+                "id": f.id,
+                "user_id": f.user_id,
+                "property_type": f.property_type,
+                "city": f.city,
+                "city_name": city_name,
+                "rooms_count": f.rooms_count,
+                "price_min": f.price_min,
+                "price_max": f.price_max,
+                "is_paused": f.is_paused
+            }
+            result.append(sub_dict)
+
+        # Cache the result (shorter TTL for paginated data)
+        BaseCacheManager.set(cache_key, result, CacheTTL.SHORT)
+
+        return result
+
+    @staticmethod
+    def list_subscriptions(db: Session, user_id: int) -> List[Dict[str, Any]]:
+        """List user subscriptions with caching"""
+        # Try to get from the cache first using the cache manager
+        cached_subscriptions = SubscriptionCacheManager.get_user_subscriptions(user_id)
+        if cached_subscriptions:
+            return cached_subscriptions
+
+        # Cache miss, query database
+        filters = db.query(UserFilter).filter(UserFilter.user_id == user_id).all()
+
+        result = []
+        for f in filters:
+            # Convert geo_id to city name if available
+            from common.config import GEO_ID_MAPPING
+            city_name = GEO_ID_MAPPING.get(f.city) if f.city else None
+
+            sub_dict = {
+                "id": f.id,
+                "property_type": f.property_type,
+                "city_id": f.city,
+                "city_name": city_name,
+                "rooms_count": f.rooms_count,
+                "price_min": f.price_min,
+                "price_max": f.price_max,
+                "is_paused": f.is_paused
+            }
+            result.append(sub_dict)
+
+        # Cache the result
+        SubscriptionCacheManager.set_user_subscriptions(user_id, result)
+
+        return result
 
     @staticmethod
     def transfer_subscriptions(db: Session, from_user_id: int, to_user_id: int) -> bool:

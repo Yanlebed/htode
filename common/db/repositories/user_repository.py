@@ -1,12 +1,11 @@
 # common/db/repositories/user_repository.py
 from datetime import datetime, timedelta
-from typing import List, Optional, Union, Dict, Any
+from typing import List, Optional, Dict, Any
 
 from sqlalchemy.orm import Session
 
 from common.db.models.user import User
-from common.utils.cache import redis_cache, redis_client, CacheTTL
-
+from common.utils.cache_managers import UserCacheManager
 
 class UserRepository:
     """Repository for user operations"""
@@ -51,29 +50,43 @@ class UserRepository:
         user.free_until = datetime.now() + timedelta(days=7)
         db.commit()
 
-        # Invalidate cache
-        redis_client.delete(f"user_subscription:{user_id}")
+        # Invalidate cache using the cache manager
+        UserCacheManager.invalidate_all(user_id)
+
         return True
 
     @staticmethod
-    @redis_cache("subscription_status", ttl=CacheTTL.MEDIUM)
     def get_subscription_status(db: Session, user_id: int) -> Dict[str, Any]:
         """Get subscription status for a user with caching"""
+        # Try to get from cache first using the cache manager
+        cached_status = UserCacheManager.get_subscription_status(user_id)
+        if cached_status:
+            return cached_status
+
+        # Cache miss, calculate status
         user = UserRepository.get_by_id(db, user_id)
         if not user:
             return {"active": False}
 
         now = datetime.now()
-        free_active = user.free_until and user.free_until > now
-        paid_active = user.subscription_until and user.subscription_until > now
+        free_until = user.free_until
+        subscription_until = user.subscription_until
 
-        return {
+        free_active = free_until and free_until > now
+        paid_active = subscription_until and subscription_until > now
+
+        status = {
             "active": free_active or paid_active,
             "free_active": free_active,
             "paid_active": paid_active,
-            "free_until": user.free_until.isoformat() if user.free_until else None,
-            "subscription_until": user.subscription_until.isoformat() if user.subscription_until else None
+            "free_until": free_until.isoformat() if free_until else None,
+            "subscription_until": subscription_until.isoformat() if subscription_until else None
         }
+
+        # Cache the result
+        UserCacheManager.set_subscription_status(user_id, status)
+
+        return status
 
     @staticmethod
     def update_last_active(db: Session, user_id: int) -> bool:
@@ -180,6 +193,10 @@ class UserRepository:
 
         user.subscription_until = subscription_until
         db.commit()
+
+        # Invalidate cache using the cache manager
+        UserCacheManager.invalidate_all(user_id)
+
         return True
 
     @staticmethod
@@ -191,6 +208,8 @@ class UserRepository:
     @staticmethod
     def get_subscription_until(db: Session, user_id: int, free: bool = False) -> Optional[str]:
         """Get subscription expiration date for a user"""
+        # We could cache this, but it's better to use the more comprehensive get_subscription_status
+        # which already has caching via UserCacheManager
         user = db.query(User).filter(User.id == user_id).first()
 
         if not user:
