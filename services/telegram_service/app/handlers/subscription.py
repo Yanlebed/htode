@@ -4,19 +4,19 @@ import logging
 
 from aiogram import types
 
-from common.db.repositories.subscription_repository import SubscriptionRepository
 from common.db.session import db_session
+from common.db.repositories.subscription_repository import SubscriptionRepository
+from common.db.repositories.user_repository import UserRepository
+from common.db.models.subscription import UserFilter
+
 from ..bot import dp, bot
-from common.db.models import disable_subscription_for_user, \
-    enable_subscription_for_user, get_subscription_data_for_user, get_subscription_until_for_user, \
-    get_db_user_id_by_telegram_id, count_subscriptions, list_subscriptions_paginated, UserFilter
-from common.db.database import execute_query
 from common.config import GEO_ID_MAPPING
 from ..keyboards import (
     main_menu_keyboard,
     subscription_menu_keyboard, make_subscriptions_page_kb
 )
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from common.utils.cache import redis_client
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +28,17 @@ async def handle_sub_open(callback_query: types.CallbackQuery):
     page = int(page_str)
 
     telegram_id = callback_query.from_user.id
-    db_user_id = get_db_user_id_by_telegram_id(telegram_id)
 
-    # fetch the subscription using ORM
     with db_session() as db:
+        # Get database user ID
+        user = UserRepository.get_by_messenger_id(db, str(telegram_id), "telegram")
+        if not user:
+            await callback_query.answer("Користувач не знайдений.")
+            return
+
+        db_user_id = user.id
+
+        # Get subscription details
         sub = db.query(UserFilter).filter(
             UserFilter.id == sub_id,
             UserFilter.user_id == db_user_id
@@ -65,8 +72,6 @@ async def handle_sub_open(callback_query: types.CallbackQuery):
                f"💰 Ціна: {sub_dict['price_min']} - {sub_dict['price_max']} грн.\n" \
                f"{active}"
 
-        #TODO: add other options if some of them indicated
-
         # Build an inline keyboard with Pause/Resume, Delete, Edit, Back
         kb = InlineKeyboardMarkup()
         if sub_dict["is_paused"]:
@@ -92,9 +97,17 @@ async def handle_sub_pause(callback_query: types.CallbackQuery):
     page = int(page_str)
 
     telegram_id = callback_query.from_user.id
-    db_user_id = get_db_user_id_by_telegram_id(telegram_id)
 
     with db_session() as db:
+        # Get database user ID
+        user = UserRepository.get_by_messenger_id(db, str(telegram_id), "telegram")
+        if not user:
+            await callback_query.answer("Користувач не знайдений.")
+            return
+
+        db_user_id = user.id
+
+        # Update subscription
         subscription = db.query(UserFilter).filter(
             UserFilter.id == sub_id,
             UserFilter.user_id == db_user_id
@@ -103,6 +116,14 @@ async def handle_sub_pause(callback_query: types.CallbackQuery):
         if subscription:
             subscription.is_paused = True
             db.commit()
+
+            # Invalidate cache
+            redis_client.delete(f"user_filters:{db_user_id}")
+            matching_pattern = "matching_users:*"
+            matching_keys = redis_client.keys(matching_pattern)
+            if matching_keys:
+                redis_client.delete(*matching_keys)
+
             await callback_query.answer("Підписку призупинено.")
         else:
             await callback_query.answer("Підписка не знайдена.")
@@ -112,7 +133,6 @@ async def handle_sub_pause(callback_query: types.CallbackQuery):
     await handle_sub_open(callback_query)
 
 
-# Refactored handler using repository
 @dp.callback_query_handler(lambda c: c.data.startswith("sub_resume:"))
 async def handle_sub_resume(callback_query: types.CallbackQuery):
     _, sub_id_str, page_str = callback_query.data.split(":")
@@ -120,12 +140,26 @@ async def handle_sub_resume(callback_query: types.CallbackQuery):
     page = int(page_str)
 
     telegram_id = callback_query.from_user.id
-    db_user_id = get_db_user_id_by_telegram_id(telegram_id)
 
-    # Use repository instead of raw SQL
     with db_session() as db:
+        # Get database user ID
+        user = UserRepository.get_by_messenger_id(db, str(telegram_id), "telegram")
+        if not user:
+            await callback_query.answer("Користувач не знайдений.")
+            return
+
+        db_user_id = user.id
+
+        # Use repository method
         success = SubscriptionRepository.enable_subscription_by_id(db, sub_id, db_user_id)
         if success:
+            # Invalidate cache
+            redis_client.delete(f"user_filters:{db_user_id}")
+            matching_pattern = "matching_users:*"
+            matching_keys = redis_client.keys(matching_pattern)
+            if matching_keys:
+                redis_client.delete(*matching_keys)
+
             await callback_query.answer("Підписку поновлено.")
         else:
             await callback_query.answer("Підписка не знайдена.")
@@ -142,11 +176,32 @@ async def handle_sub_delete(callback_query: types.CallbackQuery):
     page = int(page_str)
 
     telegram_id = callback_query.from_user.id
-    db_user_id = get_db_user_id_by_telegram_id(telegram_id)
 
-    sql = "DELETE FROM user_filters WHERE id=%s AND user_id=%s"
-    execute_query(sql, [sub_id, db_user_id])
-    await callback_query.answer("Підписку видалено.")
+    with db_session() as db:
+        # Get database user ID
+        user = UserRepository.get_by_messenger_id(db, str(telegram_id), "telegram")
+        if not user:
+            await callback_query.answer("Користувач не знайдений.")
+            return
+
+        db_user_id = user.id
+
+        # Use repository method to remove subscription
+        success = SubscriptionRepository.remove_subscription(db, sub_id, db_user_id)
+
+        if success:
+            # Invalidate caches
+            redis_client.delete(f"user_filters:{db_user_id}")
+            redis_client.delete(f"user_subscriptions_list:{db_user_id}")
+            matching_pattern = "matching_users:*"
+            matching_keys = redis_client.keys(matching_pattern)
+            if matching_keys:
+                redis_client.delete(*matching_keys)
+
+            await callback_query.answer("Підписку видалено.")
+        else:
+            await callback_query.answer("Підписка не знайдена.")
+            return
 
     # Return to the list view
     await handle_subs_page(callback_query)
@@ -168,10 +223,21 @@ async def handle_subs_page(callback_query: types.CallbackQuery):
     page = int(page_str)
 
     telegram_id = callback_query.from_user.id
-    db_user_id = get_db_user_id_by_telegram_id(telegram_id)
 
-    total = count_subscriptions(db_user_id)
-    subs = list_subscriptions_paginated(db_user_id, page)
+    with db_session() as db:
+        # Get database user ID
+        user = UserRepository.get_by_messenger_id(db, str(telegram_id), "telegram")
+        if not user:
+            await callback_query.answer("Користувач не знайдений.")
+            return
+
+        db_user_id = user.id
+
+        # Get subscription count and paginated list
+        total = SubscriptionRepository.count_subscriptions(db, db_user_id)
+        subs = SubscriptionRepository.list_subscriptions_paginated(db, db_user_id, page)
+
+    # Create keyboard
     kb = make_subscriptions_page_kb(db_user_id, page, subs, total)
 
     await callback_query.message.edit_text("Ваші підписки:", reply_markup=kb)
@@ -181,86 +247,172 @@ async def handle_subs_page(callback_query: types.CallbackQuery):
 @dp.message_handler(lambda msg: msg.text == "📝 Мої підписки")
 async def show_subscriptions_menu(message: types.Message):
     telegram_id = message.from_user.id
-    db_user_id = get_db_user_id_by_telegram_id(telegram_id)
 
-    total = count_subscriptions(db_user_id)
+    with db_session() as db:
+        # Get database user ID
+        user = UserRepository.get_by_messenger_id(db, str(telegram_id), "telegram")
+        if not user:
+            await message.answer("Користувач не знайдений.")
+            return
+
+        db_user_id = user.id
+
+        # Get subscription count and first page
+        total = SubscriptionRepository.count_subscriptions(db, db_user_id)
+
     if total == 0:
         await message.answer("У вас немає підписок.", reply_markup=main_menu_keyboard())
         return
 
-    page = 0
-    subs = list_subscriptions_paginated(db_user_id, page)
+    with db_session() as db:
+        page = 0
+        subs = SubscriptionRepository.list_subscriptions_paginated(db, db_user_id, page)
+
+    # Create keyboard
     kb = make_subscriptions_page_kb(db_user_id, page, subs, total)
     await message.answer("Ваші підписки:", reply_markup=kb)
 
 
 @dp.callback_query_handler(lambda c: c.data == 'menu_my_subscription')
 async def my_subscription_handler(callback_query: types.CallbackQuery):
-    # You can fetch subscription status from DB:
     user_id = callback_query.from_user.id
-    db_user_id = get_db_user_id_by_telegram_id(user_id)
-    subscription_data = get_subscription_data_for_user(db_user_id)
-    subscription_valid_until = get_subscription_until_for_user(user_id)
-    city = GEO_ID_MAPPING.get(subscription_data['city'])
-    mapping_property = {"apartment": "Квартира", "house": "Будинок"}
-    ua_lang_property_type = mapping_property.get(subscription_data['property_type'], "")
 
-    text = f"""Деталі підписки:
-     - 🏙️ Місто: {city}
-     - 🏷 Тип нерухомості: {ua_lang_property_type}
-     - 🛏️ Кількість кімнат: {subscription_data['rooms_count']}
-     - 💰 Ціна: {str(subscription_data['price_min'])}-{str(subscription_data['price_max'])} грн.
+    with db_session() as db:
+        # Get database user ID
+        user = UserRepository.get_by_messenger_id(db, str(user_id), "telegram")
+        if not user:
+            await callback_query.answer("Користувач не знайдений.")
+            return
 
-     Підписка спливає {subscription_valid_until}
-     """
-    await bot.send_message(
-        chat_id=callback_query.message.chat.id,
-        text=text,
-        reply_markup=subscription_menu_keyboard()
-    )
+        db_user_id = user.id
+
+        # Get subscription data
+        subscription_data = SubscriptionRepository.get_subscription_data(db, db_user_id)
+        subscription_until = UserRepository.get_subscription_until(db, db_user_id)
+
+        if not subscription_data:
+            await callback_query.message.answer("У вас немає активної підписки.")
+            return
+
+        city = GEO_ID_MAPPING.get(subscription_data['city'])
+        mapping_property = {"apartment": "Квартира", "house": "Будинок"}
+        ua_lang_property_type = mapping_property.get(subscription_data['property_type'], "")
+
+        text = f"""Деталі підписки:
+         - 🏙️ Місто: {city}
+         - 🏷 Тип нерухомості: {ua_lang_property_type}
+         - 🛏️ Кількість кімнат: {subscription_data['rooms_count']}
+         - 💰 Ціна: {str(subscription_data['price_min'])}-{str(subscription_data['price_max'])} грн.
+
+         Підписка спливає {subscription_until}
+         """
+        await bot.send_message(
+            chat_id=callback_query.message.chat.id,
+            text=text,
+            reply_markup=subscription_menu_keyboard()
+        )
 
 
 @dp.callback_query_handler(lambda c: c.data == 'subs_disable')
 async def disable_subscription_handler(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
-    # Call your DB method to disable subscription
-    disable_subscription_for_user(user_id)
-    await bot.send_message(
-        chat_id=callback_query.message.chat.id,
-        text="Ваша підписка відключена.",
-        reply_markup=main_menu_keyboard()
-    )
+
+    with db_session() as db:
+        # Get database user ID
+        user = UserRepository.get_by_messenger_id(db, str(user_id), "telegram")
+        if not user:
+            await callback_query.answer("Користувач не знайдений.")
+            return
+
+        db_user_id = user.id
+
+        # Disable subscription
+        success = SubscriptionRepository.disable_subscription(db, db_user_id)
+
+        if success:
+            await bot.send_message(
+                chat_id=callback_query.message.chat.id,
+                text="Ваша підписка відключена.",
+                reply_markup=main_menu_keyboard()
+            )
+        else:
+            await callback_query.answer("Підписка не знайдена.")
 
 
 @dp.callback_query_handler(lambda c: c.data == 'subs_enable')
 async def enable_subscription_handler(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
-    enable_subscription_for_user(user_id)
-    await bot.send_message(
-        chat_id=callback_query.message.chat.id,
-        text="Ваша підписка включена.",
-        reply_markup=main_menu_keyboard()
-    )
+
+    with db_session() as db:
+        # Get database user ID
+        user = UserRepository.get_by_messenger_id(db, str(user_id), "telegram")
+        if not user:
+            await callback_query.answer("Користувач не знайдений.")
+            return
+
+        db_user_id = user.id
+
+        # Enable subscription
+        success = SubscriptionRepository.enable_subscription(db, db_user_id)
+
+        if success:
+            await bot.send_message(
+                chat_id=callback_query.message.chat.id,
+                text="Ваша підписка включена.",
+                reply_markup=main_menu_keyboard()
+            )
+        else:
+            await callback_query.answer("Підписка не знайдена.")
 
 
 @dp.message_handler(lambda msg: msg.text == "🛑 Відключити")
 async def handle_disable_subscription(message: types.Message):
     user_id = message.from_user.id
-    disable_subscription_for_user(user_id)
-    await message.answer(
-        "Ваша підписка відключена.",
-        reply_markup=main_menu_keyboard()
-    )
+
+    with db_session() as db:
+        # Get database user ID
+        user = UserRepository.get_by_messenger_id(db, str(user_id), "telegram")
+        if not user:
+            await message.answer("Користувач не знайдений.")
+            return
+
+        db_user_id = user.id
+
+        # Disable subscription
+        success = SubscriptionRepository.disable_subscription(db, db_user_id)
+
+        if success:
+            await message.answer(
+                "Ваша підписка відключена.",
+                reply_markup=main_menu_keyboard()
+            )
+        else:
+            await message.answer("Підписка не знайдена.")
 
 
 @dp.message_handler(lambda msg: msg.text == "✅ Включити")
 async def handle_enable_subscription(message: types.Message):
     user_id = message.from_user.id
-    enable_subscription_for_user(user_id)
-    await message.answer(
-        "Ваша підписка включена на безкоштовний період (або на платний, якщо ви вже оплачували).",
-        reply_markup=main_menu_keyboard()
-    )
+
+    with db_session() as db:
+        # Get database user ID
+        user = UserRepository.get_by_messenger_id(db, str(user_id), "telegram")
+        if not user:
+            await message.answer("Користувач не знайдений.")
+            return
+
+        db_user_id = user.id
+
+        # Enable subscription
+        success = SubscriptionRepository.enable_subscription(db, db_user_id)
+
+        if success:
+            await message.answer(
+                "Ваша підписка включена на безкоштовний період (або на платний, якщо ви вже оплачували).",
+                reply_markup=main_menu_keyboard()
+            )
+        else:
+            await message.answer("Підписка не знайдена.")
 
 
 @dp.message_handler(lambda msg: msg.text == "📝 Моя підписка")
@@ -269,24 +421,40 @@ async def handle_my_subscription(message: types.Message):
     Show subscription details & sub-menu keyboard.
     """
     user_id = message.from_user.id
-    db_user_id = get_db_user_id_by_telegram_id(user_id)
-    logger.info('User ID handle_my_subscription: %s', user_id)
-    logger.info('DB User ID handle_my_subscription: %s', db_user_id)
-    # Suppose get_subscription_data_for_user returns details from the DB
-    sub_data = get_subscription_data_for_user(db_user_id)
-    subscription_until = get_subscription_until_for_user(db_user_id, free=True)
-    if not subscription_until:
-        subscription_until = get_subscription_until_for_user(db_user_id, free=False)
 
-    city = GEO_ID_MAPPING.get(sub_data['city'])
-    mapping_property = {"apartment": "Квартира", "house": "Будинок"}
-    ua_lang_property_type = mapping_property.get(sub_data['property_type'], "")
-    rooms_list = sub_data['rooms_count']
-    rooms = []
-    for el in rooms_list:
-        rooms += str(el)
-    rooms = '-'.join(rooms)
-    if sub_data:
+    with db_session() as db:
+        # Get database user ID
+        user = UserRepository.get_by_messenger_id(db, str(user_id), "telegram")
+        if not user:
+            await message.answer("Користувач не знайдений.")
+            return
+
+        db_user_id = user.id
+
+        logger.info('User ID handle_my_subscription: %s', user_id)
+        logger.info('DB User ID handle_my_subscription: %s', db_user_id)
+
+        # Get subscription data
+        sub_data = SubscriptionRepository.get_subscription_data(db, db_user_id)
+        subscription_until = UserRepository.get_subscription_until(db, db_user_id, free=True)
+
+        if not subscription_until:
+            subscription_until = UserRepository.get_subscription_until(db, db_user_id, free=False)
+
+        if not sub_data:
+            await message.answer("У вас немає активної підписки.")
+            return
+
+        city = GEO_ID_MAPPING.get(sub_data['city'])
+        mapping_property = {"apartment": "Квартира", "house": "Будинок"}
+        ua_lang_property_type = mapping_property.get(sub_data['property_type'], "")
+
+        rooms_list = sub_data['rooms_count']
+        rooms = []
+        for el in rooms_list:
+            rooms.append(str(el))
+        rooms = '-'.join(rooms)
+
         text = (
             f"Деталі підписки:\n"
             f"  - Місто: {city}\n"
@@ -295,8 +463,6 @@ async def handle_my_subscription(message: types.Message):
             f"  - Ціна: {str(sub_data['price_min'])} - {str(sub_data['price_max'])} грн.\n\n"
             f"Підписка спливає {subscription_until}\n"
         )
-    else:
-        text = "У вас немає активної підписки."
 
     await message.answer(
         text,
