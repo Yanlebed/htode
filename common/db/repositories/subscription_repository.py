@@ -1,7 +1,9 @@
 # common/db/repositories/subscription_repository.py
-
+from datetime import datetime
 from typing import List, Optional, Dict, Any
 
+import logging
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from common.db.models.subscription import UserFilter
@@ -10,6 +12,8 @@ from common.utils.cache import CacheTTL
 from common.config import GEO_ID_MAPPING, get_key_by_value
 from common.utils.cache_managers import SubscriptionCacheManager, UserCacheManager, BaseCacheManager
 from common.utils.cache_invalidation import get_entity_cache_key
+
+logger = logging.getLogger(__name__)
 
 class SubscriptionRepository:
     """Repository for subscription operations"""
@@ -338,3 +342,33 @@ class SubscriptionRepository:
             # Add other fields as needed
         }
 
+    @staticmethod
+    def get_active_cities(db: Session) -> List[int]:
+        """
+        Get all distinct cities from active users' filters.
+
+        Args:
+            db: Database session
+
+        Returns:
+            List of distinct city IDs that have active subscriptions
+        """
+        try:
+            cities = db.query(UserFilter.city) \
+                .join(User, UserFilter.user_id == User.id) \
+                .filter(
+                UserFilter.city.isnot(None),
+                UserFilter.is_paused == False,
+                or_(
+                    User.subscription_until > datetime.now(),
+                    User.free_until > datetime.now()
+                )
+            ) \
+                .distinct() \
+                .all()
+
+            # Extract city IDs from result tuples
+            return [city[0] for city in cities]
+        except Exception as e:
+            logger.error(f"Error getting active cities: {e}")
+            return []

@@ -13,13 +13,17 @@ from sqlalchemy import select, or_
 
 from common.db.database import execute_query
 from common.db.models import UserFilter, User
-from common.db.repositories.ad_repository import AdRepository
 from common.db.session import db_session
 from common.utils.unified_request_utils import fetch_ads_flatfy
 from common.config import GEO_ID_MAPPING_FOR_INITIAL_RUN, AWS_CONFIG, REDIS_URL
 from common.celery_app import celery_app
 from common.utils.unified_request_utils import make_request
 from common.utils.ad_utils import process_and_insert_ad
+from common.db.repositories.subscription_repository import SubscriptionRepository
+from common.db.repositories.user_repository import UserRepository
+from common.db.repositories.ad_repository import AdRepository
+from common.db.models import Ad
+from sqlalchemy import func
 
 # ---------------------------
 # Configuration & Initialization
@@ -117,27 +121,22 @@ s3_client = boto3.client(
 
 @celery_app.task(name="scraper_service.app.tasks.fetch_new_ads")
 def fetch_new_ads() -> None:
-    # Replace with:
-    with db_session() as db:
-        # Get distinct cities from active users' filters
-        stmt = (
-            select(UserFilter.city)
-            .join(User, UserFilter.user_id == User.id)
-            .where(
-                UserFilter.city.isnot(None),
-                or_(User.subscription_until > datetime.now(), User.free_until > datetime.now())
-            )
-            .distinct()
-        )
-        distinct_cities = [row[0] for row in db.execute(stmt).all()]
+    try:
+        with db_session() as db:
+            # Get distinct cities from active users' filters using repository
 
-        if not distinct_cities:
-            logger.info("No subscribed cities found.")
-            return
+            # Using repository methods for better abstraction
+            active_cities = SubscriptionRepository.get_active_cities(db)
 
-        for city in distinct_cities:
-            logger.info(f"Fetching new ads for city: {city}")
-            _scrape_ads_for_city(city)
+            if not active_cities:
+                logger.info("No subscribed cities found.")
+                return
+
+            for city in active_cities:
+                logger.info(f"Fetching new ads for city: {city}")
+                _scrape_ads_for_city(city)
+    except Exception as e:
+        logger.error(f"Error fetching new ads: {e}")
 
 
 def _scrape_ads_for_city(geo_id: int) -> None:
@@ -233,32 +232,40 @@ def _insert_ad_if_new(ad_data: dict, geo_id: int, property_type: str, cutoff_tim
 
 @celery_app.task(name="scraper_service.app.tasks.handle_new_records")
 def handle_new_records(ad_ids: list) -> None:
-    """
-    Handler for newly inserted ad IDs.
-    Dispatches these ads to the notifier service for further processing.
-    """
+    """Handler for newly inserted ad IDs."""
     logger.info(f"Handling newly inserted ad IDs: {ad_ids}")
     if not ad_ids:
         return
 
-    sql = "SELECT * FROM ads WHERE id = ANY(%s)"
-    new_ads = execute_query(sql, [ad_ids], fetch=True)
-    if not new_ads:
-        logger.info("No ads found for the provided IDs.")
-        return
+    try:
+        with db_session() as db:
 
-    from common.celery_app import celery_app as shared_app
-    shared_app.send_task("notifier_service.app.tasks.sort_and_notify_new_ads", args=[new_ads])
-    logger.info("Dispatched new ads to the Notifier for sorting and matching.")
+            new_ads = []
+            for ad_id in ad_ids:
+                ad = AdRepository.get_full_ad_data(db, ad_id)
+                if ad:
+                    new_ads.append(ad)
+
+            if not new_ads:
+                logger.info("No ads found for the provided IDs.")
+                return
+
+            # Dispatch to notifier service
+            celery_app.send_task("notifier_service.app.tasks.sort_and_notify_new_ads", args=[new_ads])
+            logger.info("Dispatched new ads to the Notifier for sorting and matching.")
+    except Exception as e:
+        logger.error(f"Error handling new records: {e}")
 
 
 def is_initial_load_done() -> bool:
-    """
-    Checks if the initial ad load has been completed.
-    """
-    sql = "SELECT COUNT(*) as cnt FROM ads"
-    row = execute_query(sql, fetchone=True)
-    return row["cnt"] > 0
+    """Checks if the initial ad load has been completed."""
+    try:
+        with db_session() as db:
+            count = db.query(func.count(Ad.id)).scalar()
+            return count > 0
+    except Exception as e:
+        logger.error(f"Error checking if initial load is done: {e}")
+        return False  # Safer to return False if we can't determine
 
 
 @celery_app.task(name="scraper_service.app.tasks.initial_30_day_scrape")

@@ -14,6 +14,7 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
+    is_admin = Column(Boolean, default=False)
     telegram_id = Column(String, unique=True, index=True, nullable=True)
     viber_id = Column(String, unique=True, index=True, nullable=True)
     whatsapp_id = Column(String, unique=True, index=True, nullable=True)
