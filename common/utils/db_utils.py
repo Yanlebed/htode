@@ -3,43 +3,23 @@
 import logging
 from typing import Optional
 from common.db.database import execute_query
+from common.db.models import Ad
+from common.db.session import db_session
 
 logger = logging.getLogger(__name__)
 
 
 def get_ad_id_by_external_id(external_id: str) -> Optional[int]:
-    """
-    Safely retrieve the database ID for an ad using its external ID.
-
-    Args:
-        external_id: The external/source ID of the ad
-
-    Returns:
-        The database ID if found, None otherwise
-    """
-    try:
-        sql = "SELECT id FROM ads WHERE external_id = %s"
-        row = execute_query(sql, [external_id], fetchone=True)
-        return row["id"] if row else None
-    except Exception as e:
-        logger.error(f"Error retrieving ad ID for external_id={external_id}: {e}")
-        return None
+    with db_session() as db:
+        ad = db.query(Ad).filter(Ad.external_id == external_id).first()
+        return ad.id if ad else None
 
 
 def ensure_ad_exists(ad_id: int) -> bool:
-    """
-    Check if an ad with the given ID exists in the database.
-
-    Args:
-        ad_id: The database ID to check
-
-    Returns:
-        True if the ad exists, False otherwise
-    """
     try:
-        sql = "SELECT 1 FROM ads WHERE id = %s"
-        row = execute_query(sql, [ad_id], fetchone=True)
-        return bool(row)
+        with db_session() as db:
+            exists = db.query(db.query(Ad).filter(Ad.id == ad_id).exists()).scalar()
+            return exists
     except Exception as e:
         logger.error(f"Error checking if ad ID {ad_id} exists: {e}")
         return False

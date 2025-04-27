@@ -1,15 +1,17 @@
 # services/telegram_service/app/handlers/menu_handlers.py
-
+import decimal
 import logging
 
 from aiogram import types
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters import Text
 
+from common.db.session import db_session
 from common.utils.cache import redis_cache
 from ..bot import dp
 from ..states.basis_states import FilterStates
-from common.db.models import update_user_filter, start_free_subscription_of_user, get_db_user_id_by_telegram_id, get_or_create_user
+from common.db.models import update_user_filter, start_free_subscription_of_user, get_db_user_id_by_telegram_id, \
+    get_or_create_user, Ad
 from common.db.database import execute_query
 from common.config import GEO_ID_MAPPING, get_key_by_value, build_ad_text
 from common.celery_app import celery_app
@@ -298,49 +300,66 @@ def fetch_ads_for_period(filters, days, limit=3):
     Query your local ads table, matching the user's filters,
     for ads from the last `days` days. Return up to `limit` ads.
     """
-    # Implementation remains the same
-    where_clauses = []
-    params = []
-    city = filters.get('city')
+    try:
+        with db_session() as db:
+            # Start building the query
+            query = db.query(Ad)
 
-    if city:
-        where_clauses.append("city = %s")
-        geo_id = get_key_by_value(city, GEO_ID_MAPPING)
-        params.append(geo_id)
+            # Apply filters
+            city = filters.get('city')
+            if city:
+                geo_id = get_key_by_value(city, GEO_ID_MAPPING)
+                if geo_id:
+                    query = query.filter(Ad.city == geo_id)
 
-    if filters.get('property_type'):
-        where_clauses.append("property_type = %s")
-        params.append(filters['property_type'])
+            if filters.get('property_type'):
+                query = query.filter(Ad.property_type == filters['property_type'])
 
-    if filters.get('rooms') is not None:
-        where_clauses.append("rooms_count = ANY(%s)")
-        params.append(filters['rooms'])
+            if filters.get('rooms') is not None:
+                query = query.filter(Ad.rooms_count.in_(filters['rooms']))
 
-    if filters.get('price_min') is not None:
-        where_clauses.append("price >= %s")
-        params.append(filters['price_min'])
+            if filters.get('price_min') is not None:
+                query = query.filter(Ad.price >= filters['price_min'])
 
-    if filters.get('price_max') is not None:
-        where_clauses.append("price <= %s")
-        params.append(filters['price_max'])
+            if filters.get('price_max') is not None:
+                query = query.filter(Ad.price <= filters['price_max'])
 
-    # Now add the time window
-    where_clauses.append("insert_time >= NOW() - interval '%s day'")
-    params.append(days)
+            # Add time window
+            from datetime import datetime, timedelta
+            cutoff_date = datetime.now() - timedelta(days=days)
+            query = query.filter(Ad.insert_time >= cutoff_date)
 
-    # Build final WHERE
-    where_sql = " AND ".join(where_clauses)
-    sql = f"""
-        SELECT *
-        FROM ads
-        WHERE {where_sql}
-        ORDER BY insert_time DESC
-        LIMIT {limit}
-    """
-    logger.info('SQL: %s', sql)
-    logger.info('Params: %s', params)
-    rows = execute_query(sql, params, fetch=True)
-    return rows
+            # Order and limit
+            query = query.order_by(Ad.insert_time.desc()).limit(limit)
+
+            # Execute query
+            ads = query.all()
+
+            # Convert to dictionaries
+            result = []
+            for ad in ads:
+                ad_dict = {
+                    'id': ad.id,
+                    'external_id': ad.external_id,
+                    'property_type': ad.property_type,
+                    'city': ad.city,
+                    'address': ad.address,
+                    'price': float(ad.price) if isinstance(ad.price, decimal.Decimal) else ad.price,
+                    'square_feet': float(ad.square_feet) if isinstance(ad.square_feet,
+                                                                       decimal.Decimal) else ad.square_feet,
+                    'rooms_count': ad.rooms_count,
+                    'floor': ad.floor,
+                    'total_floors': ad.total_floors,
+                    'insert_time': ad.insert_time.isoformat() if ad.insert_time else None,
+                    'description': ad.description,
+                    'resource_url': ad.resource_url
+                }
+                result.append(ad_dict)
+
+            return result
+    except Exception as e:
+        logger.error(f"Error fetching ads for period: {e}")
+        return []
 
 
 @dp.message_handler(lambda msg: msg.text == "🤔 Як це працює?")

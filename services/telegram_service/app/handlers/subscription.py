@@ -3,10 +3,12 @@
 import logging
 
 from aiogram import types
+
+from common.db.session import db_session
 from ..bot import dp, bot
 from common.db.models import disable_subscription_for_user, \
     enable_subscription_for_user, get_subscription_data_for_user, get_subscription_until_for_user, \
-    get_db_user_id_by_telegram_id, count_subscriptions, list_subscriptions_paginated
+    get_db_user_id_by_telegram_id, count_subscriptions, list_subscriptions_paginated, UserFilter
 from common.db.database import execute_query
 from common.config import GEO_ID_MAPPING
 from ..keyboards import (
@@ -27,43 +29,59 @@ async def handle_sub_open(callback_query: types.CallbackQuery):
     telegram_id = callback_query.from_user.id
     db_user_id = get_db_user_id_by_telegram_id(telegram_id)
 
-    # fetch the subscription
-    sub = execute_query("SELECT * FROM user_filters WHERE id=%s AND user_id=%s",
-                        [sub_id, db_user_id], fetchone=True)
-    if not sub:
-        # subscription not found or belongs to another user
-        await callback_query.answer("Підписка не знайдена.")
-        return
+    # fetch the subscription using ORM
+    with db_session() as db:
+        sub = db.query(UserFilter).filter(
+            UserFilter.id == sub_id,
+            UserFilter.user_id == db_user_id
+        ).first()
 
-    mapping_property = {"apartment": "квартира", "house": "будинок"}
-    ua_lang_property_type = mapping_property.get(sub['property_type'], "")
-    city = GEO_ID_MAPPING.get(sub['city'])
-    active = '✅ Активна' if not sub['is_paused'] else '⏸️ Зупинена'
-    # Build text
-    text = f"Підписка #{sub_id}\n" \
-           f"🏷 Тип нерухомості: {ua_lang_property_type}\n" \
-           f"🏙️ Місто: {city}\n" \
-           f"💰 Ціна: {sub['price_min']} - {sub['price_max']} грн.\n" \
-           f"{active}"
+        if not sub:
+            # subscription not found or belongs to another user
+            await callback_query.answer("Підписка не знайдена.")
+            return
 
-    #TODO: add other options if some of them indicated
+        # Convert to dict for consistency with rest of function
+        sub_dict = {
+            'id': sub.id,
+            'user_id': sub.user_id,
+            'property_type': sub.property_type,
+            'city': sub.city,
+            'rooms_count': sub.rooms_count,
+            'price_min': sub.price_min,
+            'price_max': sub.price_max,
+            'is_paused': sub.is_paused
+        }
 
-    # Build an inline keyboard with Pause/Resume, Delete, Edit, Back
-    kb = InlineKeyboardMarkup()
-    if sub["is_paused"]:
-        kb.add(InlineKeyboardButton("Відновити", callback_data=f"sub_resume:{sub_id}:{page}"))
-    else:
-        kb.add(InlineKeyboardButton("Зупинити", callback_data=f"sub_pause:{sub_id}:{page}"))
+        mapping_property = {"apartment": "квартира", "house": "будинок"}
+        ua_lang_property_type = mapping_property.get(sub_dict['property_type'], "")
+        city = GEO_ID_MAPPING.get(sub_dict['city'])
+        active = '✅ Активна' if not sub_dict['is_paused'] else '⏸️ Зупинена'
+        # Build text
+        text = f"Підписка #{sub_id}\n" \
+               f"🏷 Тип нерухомості: {ua_lang_property_type}\n" \
+               f"🏙️ Місто: {city}\n" \
+               f"💰 Ціна: {sub_dict['price_min']} - {sub_dict['price_max']} грн.\n" \
+               f"{active}"
 
-    kb.add(
-        InlineKeyboardButton("Видалити", callback_data=f"sub_delete:{sub_id}:{page}"),
-        InlineKeyboardButton("Редагувати", callback_data=f"sub_edit:{sub_id}:{page}"),
-    )
-    # "Back to list"
-    kb.add(InlineKeyboardButton("<< Назад", callback_data=f"subs_page:{page}"))
+        #TODO: add other options if some of them indicated
 
-    await callback_query.message.edit_text(text, reply_markup=kb)
-    await callback_query.answer()
+        # Build an inline keyboard with Pause/Resume, Delete, Edit, Back
+        kb = InlineKeyboardMarkup()
+        if sub_dict["is_paused"]:
+            kb.add(InlineKeyboardButton("Відновити", callback_data=f"sub_resume:{sub_id}:{page}"))
+        else:
+            kb.add(InlineKeyboardButton("Зупинити", callback_data=f"sub_pause:{sub_id}:{page}"))
+
+        kb.add(
+            InlineKeyboardButton("Видалити", callback_data=f"sub_delete:{sub_id}:{page}"),
+            InlineKeyboardButton("Редагувати", callback_data=f"sub_edit:{sub_id}:{page}"),
+        )
+        # "Back to list"
+        kb.add(InlineKeyboardButton("<< Назад", callback_data=f"subs_page:{page}"))
+
+        await callback_query.message.edit_text(text, reply_markup=kb)
+        await callback_query.answer()
 
 
 @dp.callback_query_handler(lambda c: c.data.startswith("sub_pause:"))
@@ -75,9 +93,19 @@ async def handle_sub_pause(callback_query: types.CallbackQuery):
     telegram_id = callback_query.from_user.id
     db_user_id = get_db_user_id_by_telegram_id(telegram_id)
 
-    sql = "UPDATE user_filters SET is_paused=true WHERE id=%s AND user_id=%s"
-    execute_query(sql, [sub_id, db_user_id])
-    await callback_query.answer("Підписку призупинено.")
+    with db_session() as db:
+        subscription = db.query(UserFilter).filter(
+            UserFilter.id == sub_id,
+            UserFilter.user_id == db_user_id
+        ).first()
+
+        if subscription:
+            subscription.is_paused = True
+            db.commit()
+            await callback_query.answer("Підписку призупинено.")
+        else:
+            await callback_query.answer("Підписка не знайдена.")
+            return
 
     # Re-open subscription detail
     await handle_sub_open(callback_query)

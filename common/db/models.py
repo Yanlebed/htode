@@ -8,7 +8,7 @@ import logging
 from typing import List, Dict, Any, Optional, Union
 from datetime import datetime
 
-from common.db.models import AdPhone, Ad
+from common.db.models import AdPhone, Ad, UserFilter
 from .database import execute_query
 from common.config import GEO_ID_MAPPING, get_key_by_value
 from common.utils.phone_parser import extract_phone_numbers_from_resource
@@ -368,9 +368,7 @@ def batch_find_users_for_ads(ads):
     return results
 
 
-def get_subscription_data_for_user(user_id):
-    """Get subscription data for a user with caching"""
-
+def get_subscription_data_for_user(user_id: int):
     cache_key = f"user_subscription:{user_id}"
     cached = redis_client.get(cache_key)
 
@@ -392,8 +390,7 @@ def get_subscription_data_for_user(user_id):
         return None
 
 
-def get_full_ad_data(ad_id):
-    """Get complete ad data with joined images and phones (with caching)"""
+def get_full_ad_data(ad_id: int):
     cache_key = f"full_ad:{ad_id}"
 
     # Try to get from cache
@@ -401,37 +398,19 @@ def get_full_ad_data(ad_id):
     if cached:
         return json.loads(cached)
 
-    # Database query with multiple joins and eager loading
-    sql = """
-          SELECT a.*,
-                 array_agg(DISTINCT ai.image_url) as images,
-                 array_agg(DISTINCT ap.phone)     as phones,
-                 ap.viber_link
-          FROM ads a
-                   LEFT JOIN ad_images ai ON a.id = ai.ad_id
-                   LEFT JOIN ad_phones ap ON a.id = ap.ad_id
-          WHERE a.id = %s
-          GROUP BY a.id, ap.viber_link \
-          """
+    try:
+        with db_session() as db:
+            ad_data = AdRepository.get_full_ad_data(db, ad_id)
 
-    ad_data = execute_query(sql, [ad_id], fetchone=True)
+            if ad_data:
+                # Cache for 30 minutes
+                redis_client.set(cache_key, json.dumps(ad_data), ex=CacheTTL.MEDIUM)
+                return ad_data
 
-    if ad_data:
-        # Convert to JSON serializable directly
-        serializable_ad_data = {}
-        for key, value in ad_data.items():
-            if isinstance(value, decimal.Decimal):
-                serializable_ad_data[key] = float(value)
-            elif isinstance(value, datetime) or isinstance(value, datetime.date):
-                serializable_ad_data[key] = value.isoformat()
-            else:
-                serializable_ad_data[key] = value
-
-        # Cache for 30 minutes
-        redis_client.set(cache_key, json.dumps(serializable_ad_data), ex=CacheTTL.MEDIUM)
-        return serializable_ad_data
-
-    return None
+            return None
+    except Exception as e:
+        logger.error(f"Error getting full ad data for {ad_id}: {e}")
+        return None
 
 
 def batch_get_full_ad_data(ad_ids):
@@ -512,49 +491,17 @@ def batch_get_full_ad_data(ad_ids):
     return results
 
 
-def list_favorites_with_eager_loading(user_id):
+def list_favorites_with_eager_loading(user_id: int):
     """
     List user's favorite ads with eager loading of related data
     This prevents N+1 query problems by loading all related data in a single query
     """
-    sql = """
-          SELECT fa.id,
-                 fa.ad_id,
-                 ads.price,
-                 ads.address,
-                 ads.city,
-                 ads.property_type,
-                 ads.rooms_count,
-                 ads.resource_url,
-                 ads.external_id,
-                 ads.square_feet,
-                 ads.floor,
-                 ads.total_floors,
-                 array_agg(DISTINCT ai.image_url) as images,
-                 array_agg(DISTINCT ap.phone)     as phones,
-                 ap.viber_link
-          FROM favorite_ads fa
-                   JOIN ads ON fa.ad_id = ads.id
-                   LEFT JOIN ad_images ai ON ads.id = ai.ad_id
-                   LEFT JOIN ad_phones ap ON ads.id = ap.ad_id
-          WHERE fa.user_id = %s
-          GROUP BY fa.id, ads.price, ads.address, ads.city, ads.property_type,
-                   ads.rooms_count, ads.resource_url, ads.external_id, ads.square_feet,
-                   ads.floor, ads.total_floors, ap.viber_link
-          ORDER BY fa.created_at DESC \
-          """
-
-    results = execute_query(sql, [user_id], fetch=True)
-
-    # Convert decimal values for JSON serialization
-    for result in results:
-        for key, value in result.items():
-            if isinstance(value, decimal.Decimal):
-                result[key] = float(value)
-            elif isinstance(value, datetime) or isinstance(value, datetime.date):
-                result[key] = value.isoformat()
-
-    return results
+    try:
+        with db_session() as db:
+            return FavoriteRepository.list_favorites(db, user_id)
+    except Exception as e:
+        logger.error(f"Error listing favorites with eager loading: {e}")
+        return []
 
 
 def add_subscription(user_id, property_type, city_id, rooms_count, price_min, price_max):
@@ -586,7 +533,7 @@ def add_subscription(user_id, property_type, city_id, rooms_count, price_min, pr
         return subscription.id
 
 
-def list_subscriptions(user_id):
+def list_subscriptions(user_id: int):
     """List user subscriptions with caching"""
     cache_key = f"user_subscriptions_list:{user_id}"
     cached = redis_client.get(cache_key)
@@ -594,75 +541,76 @@ def list_subscriptions(user_id):
     if cached:
         return json.loads(cached)
 
-    sql = """
-          SELECT id, property_type, city, rooms_count, price_min, price_max
-          FROM user_filters
-          WHERE user_id = %s
-          ORDER BY id \
-          """
-    result = execute_query(sql, [user_id], fetch=True)
+    try:
+        with db_session() as db:
+            subscriptions = SubscriptionRepository.list_subscriptions(db, user_id)
 
-    # Convert for JSON serialization
-    serializable_result = []
-    for row in result:
-        serializable_row = {}
-        for key, value in row.items():
-            if isinstance(value, decimal.Decimal):
-                serializable_row[key] = float(value)
-            else:
-                serializable_row[key] = value
-        serializable_result.append(serializable_row)
+            # Cache for 5 minutes
+            redis_client.set(cache_key, json.dumps(subscriptions), ex=CacheTTL.MEDIUM)
 
-    # Cache for 5 minutes
-    redis_client.set(cache_key, json.dumps(serializable_result), ex=CacheTTL.MEDIUM)
-
-    return serializable_result
+            return subscriptions
+    except Exception as e:
+        logger.error(f"Error listing subscriptions for user {user_id}: {e}")
+        return []
 
 
-def remove_subscription(subscription_id, user_id):
+def remove_subscription(subscription_id: int, user_id: int) -> bool:
     """
     Remove a subscription with cache invalidation
     """
-    sql = "DELETE FROM user_filters WHERE id = %s AND user_id = %s"
-    execute_query(sql, [subscription_id, user_id])
+    try:
+        with db_session() as db:
+            success = SubscriptionRepository.remove_subscription(db, subscription_id, user_id)
 
-    # Invalidate relevant cache entries
-    redis_client.delete(f"user_filters:{user_id}")
-    redis_client.delete(f"user_subscriptions_list:{user_id}")
+            # Invalidate relevant cache entries
+            redis_client.delete(f"user_filters:{user_id}")
+            redis_client.delete(f"user_subscriptions_list:{user_id}")
 
-    # Invalidate matching_users cache as filter changes might affect matching
-    matching_keys = redis_client.keys("matching_users:*")
-    if matching_keys:
-        redis_client.delete(*matching_keys)
+            # Invalidate matching_users cache as filter changes might affect matching
+            matching_keys = redis_client.keys("matching_users:*")
+            if matching_keys:
+                redis_client.delete(*matching_keys)
+
+            return success
+    except Exception as e:
+        logger.error(f"Error removing subscription {subscription_id} for user {user_id}: {e}")
+        return False
 
 
-def update_subscription(subscription_id, user_id, new_values):
+def update_subscription(subscription_id: int, user_id: int, new_values: dict):
     """
     Update a subscription with cache invalidation
     """
-    sql = """
-          UPDATE user_filters
-          SET property_type = %s,
-              city          = %s,
-              rooms_count   = %s,
-              price_min     = %s,
-              price_max     = %s
-          WHERE id = %s
-            AND user_id = %s \
-          """
-    params = [new_values['property_type'], new_values['city'],
-              new_values['rooms_count'], new_values['price_min'], new_values['price_max'],
-              subscription_id, user_id]
-    execute_query(sql, params)
+    try:
+        with db_session() as db:
+            # Get the subscription
+            subscription = db.query(UserFilter).filter(
+                UserFilter.id == subscription_id,
+                UserFilter.user_id == user_id
+            ).first()
 
-    # Invalidate relevant cache entries
-    redis_client.delete(f"user_filters:{user_id}")
-    redis_client.delete(f"user_subscriptions_list:{user_id}")
+            if not subscription:
+                return False
 
-    # Invalidate matching_users cache
-    matching_keys = redis_client.keys("matching_users:*")
-    if matching_keys:
-        redis_client.delete(*matching_keys)
+            # Update values
+            for key, value in new_values.items():
+                setattr(subscription, key, value)
+
+            db.commit()
+
+            # Invalidate relevant cache entries
+            redis_client.delete(f"user_filters:{user_id}")
+            redis_client.delete(f"user_subscriptions_list:{user_id}")
+
+            # Invalidate matching_users cache
+            matching_keys = redis_client.keys("matching_users:*")
+            if matching_keys:
+                redis_client.delete(*matching_keys)
+
+            return True
+    except Exception as e:
+        logger.error(f"Error updating subscription {subscription_id} for user {user_id}: {e}")
+        return False
 
 
 def add_favorite_ad(user_id: int, ad_id: int) -> Optional[int]:
