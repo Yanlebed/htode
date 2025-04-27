@@ -22,67 +22,45 @@ send_subscription_notification = registered_tasks['send_subscription_notificatio
 def check_expired_conversations():
     """
     Check for expired Viber conversations and clean up.
-    This is Viber-specific and doesn't have an equivalent in other platforms.
-
-    Viber conversations expire after 24 hours, so we need to handle this.
     """
-    from common.db.database import execute_query
+    from common.db.session import db_session
+    from common.db.repositories.user_repository import UserRepository
 
     logger.info("Checking for expired Viber conversations")
 
     try:
-        # Get users with Viber IDs who were active in the last 24-28 hours
-        sql = """
-              SELECT id, viber_id, last_active
-              FROM users
-              WHERE viber_id IS NOT NULL
-                AND last_active > NOW() - interval '28 hours'
-                AND last_active \
-                  < NOW() - interval '24 hours'
-              """
-        users = execute_query(sql, fetch=True)
+        with db_session() as db:
+            # Use repository method instead of raw SQL
+            users_with_expired_conversations = UserRepository.get_users_with_expired_viber_conversations(db)
 
-        for user in users:
-            user_id = user["id"]
-            viber_id = user["viber_id"]
+            for user in users_with_expired_conversations:
+                user_id = user.id
+                viber_id = user.viber_id
 
-            logger.info(f"Marking Viber conversation as expired for user {user_id} (Viber ID: {viber_id})")
+                logger.info(f"Marking Viber conversation as expired for user {user_id} (Viber ID: {viber_id})")
 
-            # Update the last_conversation_expired flag
-            update_sql = """
-                         UPDATE users
-                         SET viber_conversation_expired = TRUE
-                         WHERE id = %s
-                         """
-            execute_query(update_sql, [user_id])
+                # Update the user using repository
+                UserRepository.mark_viber_conversation_expired(db, user_id)
 
-            # Send a reminder message via another channel if available
-            try:
-                # Check if user has other messaging channels
-                check_sql = """
-                            SELECT telegram_id, whatsapp_id
-                            FROM users
-                            WHERE id = %s
-                              AND (telegram_id IS NOT NULL OR whatsapp_id IS NOT NULL)
-                            """
-                other_channels = execute_query(check_sql, [user_id], fetchone=True)
+                # Send a reminder message via another channel if available
+                try:
+                    # Check if user has other messaging channels
+                    if user.telegram_id or user.whatsapp_id:
+                        reminder_text = (
+                            "Ваша Viber сесія закінчилася. Щоб продовжити отримувати сповіщення через Viber, "
+                            "будь ласка, напишіть будь-яке повідомлення нашому боту."
+                        )
 
-                if other_channels:
-                    reminder_text = (
-                        "Ваша Viber сесія закінчилася. Щоб продовжити отримувати сповіщення через Viber, "
-                        "будь ласка, напишіть будь-яке повідомлення нашому боту."
-                    )
+                        # Use the unified task to send the notification
+                        send_subscription_notification.delay(
+                            user_id=user_id,
+                            notification_type="conversation_expired",
+                            data={"text": reminder_text}
+                        )
+                except Exception as channel_err:
+                    logger.error(f"Error sending channel reminder: {channel_err}")
 
-                    # Use the unified task to send the notification
-                    send_subscription_notification.delay(
-                        user_id=user_id,
-                        notification_type="conversation_expired",
-                        data={"text": reminder_text}
-                    )
-            except Exception as channel_err:
-                logger.error(f"Error sending channel reminder: {channel_err}")
-
-        return {"status": "success", "users_processed": len(users)}
+            return {"status": "success", "users_processed": len(users_with_expired_conversations)}
 
     except Exception as e:
         logger.error(f"Error checking expired Viber conversations: {e}")

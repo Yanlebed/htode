@@ -1,10 +1,13 @@
 # common/db/repositories/media_repository.py
 from typing import List, Optional, Dict, Any
+import logging
 from datetime import datetime, timedelta
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 from common.db.models.media import WhatsAppMedia
 from common.db.repositories.base_repository import BaseRepository
+
+logger = logging.getLogger(__name__)
 
 
 class MediaRepository(BaseRepository):
@@ -61,3 +64,25 @@ class MediaRepository(BaseRepository):
 
         db.commit()
         return result
+
+    @staticmethod
+    def get_unprocessed_media(db: Session, limit: int = 50) -> List[WhatsAppMedia]:
+        """
+        Get unprocessed media records.
+
+        Args:
+            db: Database session
+            limit: Maximum number of records to retrieve
+
+        Returns:
+            List of unprocessed WhatsAppMedia records
+        """
+        try:
+            return db.query(WhatsAppMedia) \
+                .filter(WhatsAppMedia.processed == False) \
+                .order_by(desc(WhatsAppMedia.created_at)) \
+                .limit(limit) \
+                .all()
+        except Exception as e:
+            logger.error(f"Error getting unprocessed media: {e}")
+            return []

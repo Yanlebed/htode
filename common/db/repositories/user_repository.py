@@ -1,11 +1,15 @@
 # common/db/repositories/user_repository.py
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
+import logging
 
 from sqlalchemy.orm import Session
 
 from common.db.models.user import User
 from common.utils.cache_managers import UserCacheManager
+
+logger = logging.getLogger(__name__)
+
 
 class UserRepository:
     """Repository for user operations"""
@@ -221,3 +225,78 @@ class UserRepository:
         if date_field:
             return date_field.strftime("%d.%m.%Y")
         return None
+
+    @staticmethod
+    def get_admin_user(db: Session) -> Optional[User]:
+        """
+        Get an admin user (first one found).
+
+        Args:
+            db: Database session
+
+        Returns:
+            Admin user or None if not found
+        """
+        try:
+            # Assuming you have an is_admin column in your users table
+            # If not, you may need to adjust this query based on your admin identification logic
+            return db.query(User).filter(User.is_admin == True).first()
+        except Exception as e:
+            logger.error(f"Error getting admin user: {e}")
+            return None
+
+    @staticmethod
+    def get_users_with_expired_viber_conversations(db: Session) -> List[User]:
+        """
+        Get users with Viber IDs who were active in the last 24-28 hours
+        (indicating their Viber conversations likely expired).
+
+        Args:
+            db: Database session
+
+        Returns:
+            List of users with expired Viber conversations
+        """
+        try:
+            return db.query(User) \
+                .filter(
+                User.viber_id.isnot(None),
+                User.last_active > datetime.now() - timedelta(hours=28),
+                User.last_active < datetime.now() - timedelta(hours=24),
+                User.viber_conversation_expired == False
+            ) \
+                .all()
+        except Exception as e:
+            logger.error(f"Error getting users with expired Viber conversations: {e}")
+            return []
+
+    @staticmethod
+    def mark_viber_conversation_expired(db: Session, user_id: int) -> bool:
+        """
+        Mark a user's Viber conversation as expired.
+
+        Args:
+            db: Database session
+            user_id: ID of the user
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            user = db.query(User).get(user_id)
+            if not user:
+                logger.warning(f"User {user_id} not found")
+                return False
+
+            user.viber_conversation_expired = True
+            db.commit()
+
+            # Invalidate user cache
+            from common.utils.cache_managers import UserCacheManager
+            UserCacheManager.invalidate_all(user_id)
+
+            return True
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Error marking Viber conversation as expired for user {user_id}: {e}")
+            return False
