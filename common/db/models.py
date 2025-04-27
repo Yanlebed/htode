@@ -558,31 +558,32 @@ def list_favorites_with_eager_loading(user_id):
 
 
 def add_subscription(user_id, property_type, city_id, rooms_count, price_min, price_max):
-    """
-    Adds a new subscription row for this user with cache invalidation.
-    We assume you already checked that the user doesn't exceed 20 subscriptions.
-    """
-    # First, ensure the user has < 20
-    sql_count = "SELECT COUNT(*) as cnt FROM user_filters WHERE user_id = %s"
-    row = execute_query(sql_count, [user_id], fetchone=True)
-    if row["cnt"] >= 20:
-        raise ValueError("You already have 20 subscriptions, cannot add more.")
+    # Replace with:
+    with db_session() as db:
+        # Check subscription count
+        count = SubscriptionRepository.count_subscriptions(db, user_id)
+        if count >= 20:
+            raise ValueError("You already have 20 subscriptions, cannot add more.")
 
-    sql_insert = """
-                 INSERT INTO user_filters (user_id, property_type, city, rooms_count, price_min, price_max)
-                 VALUES (%s, %s, %s, %s, %s, %s) RETURNING id \
-                 """
-    sub = execute_query(sql_insert, [user_id, property_type, city_id, rooms_count, price_min, price_max], fetchone=True)
+        # Create filter data
+        filter_data = {
+            'property_type': property_type,
+            'city': city_id,
+            'rooms_count': rooms_count,
+            'price_min': price_min,
+            'price_max': price_max
+        }
 
-    # Invalidate the user_filters cache
-    redis_client.delete(f"user_filters:{user_id}")
+        # Add subscription
+        subscription = SubscriptionRepository.add_subscription(db, user_id, filter_data)
 
-    # Invalidate matching users cache for all ads since filter changes might affect matching
-    matching_keys = redis_client.keys("matching_users:*")
-    if matching_keys:
-        redis_client.delete(*matching_keys)
+        # Invalidate cache
+        redis_client.delete(f"user_filters:{user_id}")
+        matching_keys = redis_client.keys("matching_users:*")
+        if matching_keys:
+            redis_client.delete(*matching_keys)
 
-    return sub["id"]
+        return subscription.id
 
 
 def list_subscriptions(user_id):
