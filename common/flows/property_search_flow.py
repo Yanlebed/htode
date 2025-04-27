@@ -2,7 +2,7 @@
 
 import logging
 
-from common.db.models import (
+from common.db.operations import (
     update_user_filter,
     get_or_create_user,
     get_db_user_id_by_telegram_id

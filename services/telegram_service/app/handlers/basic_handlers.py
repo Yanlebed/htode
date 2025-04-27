@@ -15,7 +15,7 @@ from ..keyboards import (
     edit_parameters_keyboard, floor_keyboard,
     main_menu_keyboard
 )
-from common.db.models import get_or_create_user
+from common.db.operations import get_or_create_user
 from ..utils.message_utils import (
     safe_send_message, safe_answer_callback_query,
     safe_edit_message

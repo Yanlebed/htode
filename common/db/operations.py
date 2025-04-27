@@ -1,24 +1,28 @@
-# common/db/models.py
+# common/db/operations.py
+
 """
-Improved database models with batch queries and eager loading
+This module contains database operations that combine models and repositories.
+It should be imported after both models and repositories are initialized.
 """
+
 import json
-import decimal
 import logging
 from typing import List, Dict, Any, Optional, Union
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from common.db.models import AdPhone, UserFilter, Ad
-from .database import execute_query
-from common.config import GEO_ID_MAPPING, get_key_by_value
-from common.utils.phone_parser import extract_phone_numbers_from_resource
-from common.utils.cache import redis_cache, CacheTTL, batch_get_cached, batch_set_cached, redis_client
+from sqlalchemy import or_
 
-from common.db.repositories.user_repository import UserRepository
 from common.db.session import db_session
+from common.db.models.user import User
+from common.db.models.subscription import UserFilter
+from common.db.models.ad import Ad, AdPhone
+from common.db.repositories.user_repository import UserRepository
 from common.db.repositories.subscription_repository import SubscriptionRepository
 from common.db.repositories.ad_repository import AdRepository
 from common.db.repositories.favorite_repository import FavoriteRepository
+from common.utils.cache import redis_cache, CacheTTL, batch_get_cached, batch_set_cached, redis_client
+from common.config import GEO_ID_MAPPING, get_key_by_value
+from common.utils.phone_parser import extract_phone_numbers_from_resource
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +47,6 @@ def get_or_create_user(messenger_id, messenger_type="telegram"):
         logger.info(f"Creating user with {messenger_type} id: {messenger_id}")
 
         # Create a new user
-        from datetime import datetime, timedelta
         free_until = datetime.now() + timedelta(days=7)
 
         # Create user with the appropriate messenger ID
@@ -83,24 +86,37 @@ def update_user_filter(user_id, filters):
             }
 
             # Update or create user filter
-            SubscriptionRepository.update_user_filter(db, user_id, filter_data)
+            user_filter = SubscriptionRepository.update_user_filter(db, user_id, filter_data)
 
             logger.info(
                 f"Updated filters: [{user_id}, {property_type}, {geo_id}, {rooms_count}, {price_min}, {price_max}]")
 
             # Invalidate relevant cache entries
-            cache_key = f"user_filters:{user_id}"
-            redis_client.delete(cache_key)
+            invalidate_user_filter_caches(user_id)
 
-            # Also invalidate the matching users cache for ads that might match this filter
-            matching_pattern = "matching_users:*"
-            matching_keys = redis_client.keys(matching_pattern)
-            if matching_keys:
-                redis_client.delete(*matching_keys)
+            return user_filter
 
     except Exception as e:
         logger.error(f"Error updating user filters: {e}")
         raise
+
+
+def invalidate_user_filter_caches(user_id: int):
+    """Centralized function to invalidate all related caches when a user filter changes"""
+    # Invalidate user filter cache
+    redis_client.delete(f"user_filters:{user_id}")
+
+    # Invalidate subscription list cache
+    redis_client.delete(f"user_subscriptions_list:{user_id}")
+
+    # Invalidate matching users cache for ads
+    matching_pattern = "matching_users:*"
+    matching_keys = redis_client.keys(matching_pattern)
+    if matching_keys:
+        redis_client.delete(*matching_keys)
+
+    # Invalidate subscription status cache
+    redis_client.delete(f"subscription_status:{user_id}")
 
 
 @redis_cache("user_filters", ttl=CacheTTL.MEDIUM)
@@ -129,22 +145,20 @@ def batch_get_user_filters(user_ids):
     # Fetch missing data from database in batches to avoid huge IN clauses
     results = dict(cached_results)  # Start with cached results
 
-    for i in range(0, len(missing_user_ids), BATCH_SIZE):
-        batch = missing_user_ids[i:i + BATCH_SIZE]
+    with db_session() as db:
+        for i in range(0, len(missing_user_ids), BATCH_SIZE):
+            batch = missing_user_ids[i:i + BATCH_SIZE]
 
-        placeholders = ','.join(['%s'] * len(batch))
-        sql = f"SELECT * FROM user_filters WHERE user_id IN ({placeholders})"
-        rows = execute_query(sql, batch, fetch=True)
+            # Use repository to get filters for this batch
+            batch_results = {}
+            for user_id in batch:
+                user_filter = SubscriptionRepository.get_user_filters(db, user_id)
+                if user_filter:
+                    results[user_id] = user_filter
+                    batch_results[user_id] = user_filter
 
-        # Process results
-        batch_results = {}
-        for row in rows:
-            user_id = row['user_id']
-            results[user_id] = row
-            batch_results[user_id] = row
-
-        # Cache the batch results
-        batch_set_cached(batch_results, ttl=CacheTTL.MEDIUM, prefix="user_filters")
+            # Cache the batch results
+            batch_set_cached(batch_results, ttl=CacheTTL.MEDIUM, prefix="user_filters")
 
     return results
 
@@ -218,7 +232,6 @@ def find_users_for_ad(ad):
             return []
 
         # Create a cache key based on the ad's primary attributes that affect matching
-
         cache_key = f"matching_users:{ad_id}"
 
         # Try to get results from cache first
@@ -230,12 +243,11 @@ def find_users_for_ad(ad):
         logger.info(f'Looking for users for ad: {ad}')
 
         with db_session() as db:
-            # Convert dict to Ad object if needed
+            # Use repository to find matching users
             if isinstance(ad, dict):
                 existing_ad = db.query(Ad).get(ad_id)
                 if not existing_ad:
                     # Create temporary Ad object for matching
-                    from common.db.models.ad import Ad
                     ad_obj = Ad(
                         id=ad_id,
                         property_type=ad.get('property_type'),
@@ -298,70 +310,54 @@ def batch_find_users_for_ads(ads):
         return cached_results
 
     # Process the remaining ads
-    # Since each ad has unique matching criteria, we still need to process them individually
-    # But we can optimize how we fetch and process the user filters
+    with db_session() as db:
+        # Get all active users
+        active_users = db.query(User.id).filter(
+            or_(
+                User.free_until > datetime.now(),
+                User.subscription_until > datetime.now()
+            )
+        ).all()
 
-    # First, get all active users
-    active_users_sql = """
-                       SELECT id \
-                       FROM users
-                       WHERE free_until > NOW() \
-                          OR subscription_until > NOW() \
-                       """
-    active_users = execute_query(active_users_sql, fetch=True)
-    active_user_ids = [row['id'] for row in active_users]
+        active_user_ids = [row[0] for row in active_users]
 
-    if not active_user_ids:
-        # No active users, no matches possible
-        return cached_results
+        if not active_user_ids:
+            # No active users, no matches possible
+            return cached_results
 
-    # Get all user filters in one query
-    user_filters = batch_get_user_filters(active_user_ids)
+        # Get all user filters in one query
+        user_filters = batch_get_user_filters(active_user_ids)
 
-    # Process each ad against all user filters in memory
-    for ad in ads_to_process:
-        ad_id = ad.get('id')
-        if not ad_id:
-            continue
-
-        # Extract ad properties for matching
-        ad_property_type = ad.get('property_type')
-        ad_city = ad.get('city')
-        ad_rooms = ad.get('rooms_count')
-        ad_price = ad.get('price')
-
-        matching_users = []
-
-        # Check each user's filters against this ad
-        for user_id, filters in user_filters.items():
-            if filters.get('is_paused', False):
+        # Process each ad against all user filters in memory
+        for ad in ads_to_process:
+            ad_id = ad.get('id')
+            if not ad_id:
                 continue
 
-            # Check property type match
-            if filters.get('property_type') and filters['property_type'] != ad_property_type:
-                continue
+            # Use repository to find matching users for this ad
+            with db_session() as db:
+                # Convert dict to Ad object if needed
+                if isinstance(ad, dict):
+                    existing_ad = db.query(Ad).get(ad_id)
+                    if not existing_ad:
+                        # Create temporary Ad object for matching
+                        ad_obj = Ad(
+                            id=ad_id,
+                            property_type=ad.get('property_type'),
+                            city=ad.get('city'),
+                            rooms_count=ad.get('rooms_count'),
+                            price=ad.get('price')
+                        )
+                    else:
+                        ad_obj = existing_ad
+                else:
+                    ad_obj = ad
 
-            # Check city match
-            if filters.get('city') and filters['city'] != ad_city:
-                continue
+                matching_users = AdRepository.find_users_for_ad(db, ad_obj)
 
-            # Check rooms match
-            if filters.get('rooms_count') and ad_rooms not in filters['rooms_count']:
-                continue
-
-            # Check price range
-            if filters.get('price_min') and ad_price < filters['price_min']:
-                continue
-
-            if filters.get('price_max') and ad_price > filters['price_max']:
-                continue
-
-            # All criteria matched
-            matching_users.append(user_id)
-
-        # Store results and cache them
-        results[ad_id] = matching_users
-        redis_client.set(f"matching_users:{ad_id}", json.dumps(matching_users), ex=CacheTTL.STANDARD)
+            # Store results and cache them
+            results[ad_id] = matching_users
+            redis_client.set(f"matching_users:{ad_id}", json.dumps(matching_users), ex=CacheTTL.STANDARD)
 
     # Combine cached and newly processed results
     results.update(cached_results)
@@ -450,43 +446,16 @@ def batch_get_full_ad_data(ad_ids):
     # Process batches of missing ads
     results = dict(cached_results)  # Start with cached results
 
-    for i in range(0, len(missing_ad_ids), BATCH_SIZE):
-        batch = missing_ad_ids[i:i + BATCH_SIZE]
+    with db_session() as db:
+        for i in range(0, len(missing_ad_ids), BATCH_SIZE):
+            batch = missing_ad_ids[i:i + BATCH_SIZE]
 
-        # Using a single optimized query with array_agg to get all joined data at once
-        sql = """
-              SELECT a.*,
-                     array_agg(DISTINCT ai.image_url) as images,
-                     array_agg(DISTINCT ap.phone)     as phones,
-                     ap.viber_link,
-                     a.id                             as ad_id
-              FROM ads a
-                       LEFT JOIN ad_images ai ON a.id = ai.ad_id
-                       LEFT JOIN ad_phones ap ON a.id = ap.ad_id
-              WHERE a.id = ANY (%s)
-              GROUP BY a.id, ap.viber_link
-              """
-
-        rows = execute_query(sql, [batch], fetch=True)
-
-        # Process results and cache them
-        for row in rows:
-            ad_id = row.get('ad_id')
-
-            # Convert to JSON serializable format
-            serializable_data = {}
-            for key, value in row.items():
-                if isinstance(value, decimal.Decimal):
-                    serializable_data[key] = float(value)
-                elif isinstance(value, datetime) or isinstance(value, datetime.date):
-                    serializable_data[key] = value.isoformat()
-                else:
-                    serializable_data[key] = value
-
-            results[ad_id] = serializable_data
-
-            # Cache individual results
-            redis_client.set(f"full_ad:{ad_id}", json.dumps(serializable_data), ex=CacheTTL.MEDIUM)
+            for ad_id in batch:
+                ad_data = AdRepository.get_full_ad_data(db, ad_id)
+                if ad_data:
+                    results[ad_id] = ad_data
+                    # Cache individual results
+                    redis_client.set(f"full_ad:{ad_id}", json.dumps(ad_data), ex=CacheTTL.MEDIUM)
 
     return results
 
@@ -525,10 +494,7 @@ def add_subscription(user_id, property_type, city_id, rooms_count, price_min, pr
         subscription = SubscriptionRepository.add_subscription(db, user_id, filter_data)
 
         # Invalidate cache
-        redis_client.delete(f"user_filters:{user_id}")
-        matching_keys = redis_client.keys("matching_users:*")
-        if matching_keys:
-            redis_client.delete(*matching_keys)
+        invalidate_user_filter_caches(user_id)
 
         return subscription.id
 
@@ -563,13 +529,7 @@ def remove_subscription(subscription_id: int, user_id: int) -> bool:
             success = SubscriptionRepository.remove_subscription(db, subscription_id, user_id)
 
             # Invalidate relevant cache entries
-            redis_client.delete(f"user_filters:{user_id}")
-            redis_client.delete(f"user_subscriptions_list:{user_id}")
-
-            # Invalidate matching_users cache as filter changes might affect matching
-            matching_keys = redis_client.keys("matching_users:*")
-            if matching_keys:
-                redis_client.delete(*matching_keys)
+            invalidate_user_filter_caches(user_id)
 
             return success
     except Exception as e:
@@ -599,13 +559,7 @@ def update_subscription(subscription_id: int, user_id: int, new_values: dict):
             db.commit()
 
             # Invalidate relevant cache entries
-            redis_client.delete(f"user_filters:{user_id}")
-            redis_client.delete(f"user_subscriptions_list:{user_id}")
-
-            # Invalidate matching_users cache
-            matching_keys = redis_client.keys("matching_users:*")
-            if matching_keys:
-                redis_client.delete(*matching_keys)
+            invalidate_user_filter_caches(user_id)
 
             return True
     except Exception as e:
@@ -709,7 +663,6 @@ def get_full_ad_description(resource_url):
 
     cache_key = f"ad_description:{resource_url}"
     cached = redis_client.get(cache_key)
-
     if cached:
         return cached.decode('utf-8')
 
@@ -743,7 +696,6 @@ def store_ad_phones(resource_url: str, ad_id: int) -> int:
                 return 0
 
             # Extract phones from resource
-            from common.utils.phone_parser import extract_phone_numbers_from_resource
             result = extract_phone_numbers_from_resource(resource_url)
             phones = result.phone_numbers
             viber_link = result.viber_link
@@ -795,10 +747,7 @@ def warm_cache_for_user(user_id):
         # If we have favorites, prefetch full data for those ads
         if favorites:
             ad_ids = [fav.get('ad_id') for fav in favorites if fav.get('ad_id')]
-
-            with db_session() as db:
-                for ad_id in ad_ids:
-                    AdRepository.get_full_ad_data(db, ad_id)
+            batch_get_full_ad_data(ad_ids)
 
         logger.info(f"Cache warmed for user_id: {user_id}")
     except Exception as e:
@@ -900,17 +849,14 @@ def get_ad_images(ad_id: Union[int, Dict[str, Any]]) -> List[str]:
         if cached:
             return json.loads(cached)
 
-        # Query database for images
-        sql = "SELECT image_url FROM ad_images WHERE ad_id = %s"
-        rows = execute_query(sql, [ad_id], fetch=True)
+        # Query database for images using repository
+        with db_session() as db:
+            image_urls = AdRepository.get_ad_images(db, ad_id)
 
-        if rows:
-            urls = [row["image_url"] for row in rows]
             # Cache for 1 hour (images rarely change)
-            redis_client.set(cache_key, json.dumps(urls), ex=3600)
-            return urls
+            redis_client.set(cache_key, json.dumps(image_urls), ex=3600)
+            return image_urls
 
-        return []
     except Exception as e:
         logger.error(f"Error getting ad images: {e}")
         return []
@@ -931,14 +877,7 @@ def disable_subscription_for_user(user_id: int) -> bool:
             success = SubscriptionRepository.disable_subscription(db, user_id)
 
             # Invalidate relevant cache entries
-            cache_key = f"user_filters:{user_id}"
-            redis_client.delete(cache_key)
-
-            # Also invalidate matching users cache for ads
-            matching_pattern = "matching_users:*"
-            matching_keys = redis_client.keys(matching_pattern)
-            if matching_keys:
-                redis_client.delete(*matching_keys)
+            invalidate_user_filter_caches(user_id)
 
             logger.info(f"Disabled subscription for user {user_id}")
             return success
@@ -962,14 +901,7 @@ def enable_subscription_for_user(user_id: int) -> bool:
             success = SubscriptionRepository.enable_subscription(db, user_id)
 
             # Invalidate relevant cache entries
-            cache_key = f"user_filters:{user_id}"
-            redis_client.delete(cache_key)
-
-            # Also invalidate matching users cache for ads
-            matching_pattern = "matching_users:*"
-            matching_keys = redis_client.keys(matching_pattern)
-            if matching_keys:
-                redis_client.delete(*matching_keys)
+            invalidate_user_filter_caches(user_id)
 
             logger.info(f"Enabled subscription for user {user_id}")
             return success

@@ -2,7 +2,6 @@
 
 import logging
 from typing import Optional
-from common.db.database import execute_query
 from common.db.models import Ad
 from common.db.session import db_session
 

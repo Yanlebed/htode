@@ -164,7 +164,7 @@ def process_successful_payment(order_id: str) -> bool:
 
     # Update user subscription
     try:
-        from common.db.models import enable_subscription_for_user
+        from common.db.operations import enable_subscription_for_user
         enable_subscription_for_user(user_id)
         logger.info(f"Subscription activated for user {user_id}")
         return True

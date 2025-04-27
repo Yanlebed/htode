@@ -3,7 +3,7 @@
 import logging
 from typing import Dict, Any, List, Union
 
-from common.db.models import (
+from common.db.operations import (
     get_subscription_data_for_user,
     get_subscription_until_for_user, update_user_filter, add_favorite_ad,
     remove_favorite_ad, list_favorites

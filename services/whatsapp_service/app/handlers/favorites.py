@@ -2,7 +2,7 @@
 
 import logging
 from ..utils.message_utils import safe_send_message, safe_send_media
-from common.db.models import list_favorites, get_db_user_id_by_telegram_id, remove_favorite_ad, get_full_ad_description
+from common.db.operations import list_favorites, get_db_user_id_by_telegram_id, remove_favorite_ad, get_full_ad_description
 
 logger = logging.getLogger(__name__)
 
