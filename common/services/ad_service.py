@@ -7,8 +7,8 @@ from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 from common.db.repositories.ad_repository import AdRepository
-from common.utils.cache import redis_client
 from common.utils.unified_request_utils import make_request
+from common.utils.cache_managers import AdCacheManager
 
 logger = logging.getLogger(__name__)
 
@@ -26,18 +26,17 @@ class AdService:
         Returns:
             Dictionary with ad data or None if not found
         """
-        # Try to get from cache first
-        cache_key = f"full_ad:{ad_id}"
-        cached = redis_client.get(cache_key)
-        if cached:
-            return json.loads(cached)
+        # Try to get from the cache first using the cache manager
+        cached_data = AdCacheManager.get_full_ad_data(ad_id)
+        if cached_data:
+            return cached_data
 
-        # Get from repository
+        # Get from a repository
         ad_data = AdRepository.get_full_ad_data(db, ad_id)
 
+        # Cache if found
         if ad_data:
-            # Cache for 30 minutes
-            redis_client.set(cache_key, json.dumps(ad_data), ex=1800)
+            AdCacheManager.set_full_ad_data(ad_id, ad_data)
 
         return ad_data
 
@@ -183,7 +182,7 @@ class AdService:
         for ad in old_ads:
             should_delete = True
 
-            # Check if ad is still active
+            # Check if the ad is still active
             if check_activity and not AdService.is_ad_inactive(ad.resource_url):
                 should_delete = False
 
@@ -201,8 +200,8 @@ class AdService:
                         if delete_s3_image(image_url):
                             images_deleted_count += 1
 
-                    # Clear cache
-                    AdService.clear_ad_cache(ad.id, ad.resource_url)
+                    # Clear cache using the cache manager
+                    AdCacheManager.invalidate_all(ad.id, ad.resource_url)
 
         return deleted_count, images_deleted_count
 
@@ -215,19 +214,5 @@ class AdService:
             ad_id: ID of the ad
             resource_url: Optional resource URL
         """
-        keys_to_delete = [
-            f"full_ad:{ad_id}",
-            f"matching_users:{ad_id}"
-        ]
-
-        if resource_url:
-            keys_to_delete.extend([
-                f"extra_images:{resource_url}",
-                f"ad_description:{resource_url}"
-            ])
-
-        # Delete all keys that exist
-        existing_keys = [key for key in keys_to_delete if redis_client.exists(key)]
-        if existing_keys:
-            redis_client.delete(*existing_keys)
-            logger.debug(f"Cleared {len(existing_keys)} cache keys for ad {ad_id}")
+        # Use the cache manager to invalidate all ad-related caches
+        AdCacheManager.invalidate_all(ad_id, resource_url)

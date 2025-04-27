@@ -41,6 +41,14 @@ def cache_key(prefix, *args, **kwargs):
     return ":".join(key_parts)
 
 
+def get_entity_cache_key(entity_type, entity_id, suffix=None):
+    """Generate a standardized cache key for an entity"""
+    key = f"{entity_type}:{entity_id}"
+    if suffix:
+        key += f":{suffix}"
+    return key
+
+
 def redis_cache(prefix, ttl=CacheTTL.STANDARD):
     """Cache decorator that uses Redis with standardized TTL"""
 

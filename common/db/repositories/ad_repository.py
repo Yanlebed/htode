@@ -1,17 +1,20 @@
-# common/db/repositories/ad_repository.py (Updated)
-from typing import List, Optional, Dict, Any, Union
+# common/db/repositories/ad_repository.py
+
+from typing import List, Optional, Dict, Any
 import decimal
 import json
 import logging
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, or_, not_, text
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session, joinedload
 
 from common.db.models import FavoriteAd
 from common.db.models.ad import Ad, AdImage, AdPhone
 from common.utils.cache import redis_cache, redis_client, CacheTTL
 from common.config import GEO_ID_MAPPING, get_key_by_value
+from common.utils.cache_invalidation import invalidate_ad_caches
+from common.utils.cache_managers import AdCacheManager, BaseCacheManager
 
 logger = logging.getLogger(__name__)
 
@@ -102,9 +105,15 @@ class AdRepository:
         return query.all()
 
     @staticmethod
-    @redis_cache("full_ad", ttl=CacheTTL.MEDIUM)
+    @staticmethod
     def get_full_ad_data(db: Session, ad_id: int) -> Optional[Dict[str, Any]]:
         """Get complete ad data with images and phones"""
+        # Try to get from cache first using the cache manager
+        cached_data = AdCacheManager.get_full_ad_data(ad_id)
+        if cached_data:
+            return cached_data
+
+        # Cache miss, query database
         ad = db.query(Ad) \
             .options(
             joinedload(Ad.images),
@@ -136,6 +145,9 @@ class AdRepository:
             "viber_link": next((phone.viber_link for phone in ad.phones if phone.viber_link), None)
         }
 
+        # Cache the result
+        AdCacheManager.set_full_ad_data(ad_id, ad_dict)
+
         return ad_dict
 
     @staticmethod
@@ -146,9 +158,8 @@ class AdRepository:
         db.commit()
         db.refresh(image)
 
-        # Invalidate cache
-        redis_client.delete(f"full_ad:{ad_id}")
-        redis_client.delete(f"ad_images:{ad_id}")
+        # Use centralized cache invalidation
+        invalidate_ad_caches(ad_id)
 
         return image
 
@@ -160,17 +171,28 @@ class AdRepository:
         db.commit()
         db.refresh(ad_phone)
 
-        # Invalidate cache
-        redis_client.delete(f"full_ad:{ad_id}")
+        # Use centralized cache invalidation
+        invalidate_ad_caches(ad_id)
 
         return ad_phone
 
     @staticmethod
-    @redis_cache("ad_images", ttl=CacheTTL.LONG)
+    @staticmethod
     def get_ad_images(db: Session, ad_id: int) -> List[str]:
-        """Get all images for an ad"""
+        """Get all images for an ad with caching"""
+        # Try to get from cache first using the cache manager
+        cached_images = AdCacheManager.get_ad_images(ad_id)
+        if cached_images:
+            return cached_images
+
+        # Cache miss, query database
         images = db.query(AdImage).filter(AdImage.ad_id == ad_id).all()
-        return [img.image_url for img in images]
+        image_urls = [img.image_url for img in images]
+
+        # Cache the result
+        AdCacheManager.set_ad_images(ad_id, image_urls)
+
+        return image_urls
 
     @staticmethod
     def get_ad_phones(db: Session, ad_id: int) -> List[Dict[str, str]]:
@@ -182,11 +204,22 @@ class AdRepository:
         ]
 
     @staticmethod
-    @redis_cache("ad_description", ttl=CacheTTL.LONG)
     def get_full_description(db: Session, resource_url: str) -> Optional[str]:
-        """Get full ad description by resource URL"""
+        """Get full ad description by resource URL with caching"""
+        # Try to get from cache first using the cache manager
+        cached_description = AdCacheManager.get_ad_description(resource_url)
+        if cached_description:
+            return cached_description
+
+        # Cache miss, query database
         ad = db.query(Ad).filter(Ad.resource_url == resource_url).first()
-        return ad.description if ad else None
+        description = ad.description if ad else None
+
+        # Cache the result if found
+        if description:
+            AdCacheManager.set_ad_description(resource_url, description)
+
+        return description
 
     @staticmethod
     @redis_cache("ads_period", ttl=300)  # 5 minute cache
@@ -245,27 +278,27 @@ class AdRepository:
     def find_users_for_ad(db: Session, ad) -> List[int]:
         """
         Finds users whose subscription filters match this ad.
-
-        Args:
-            db: Database session
-            ad: Ad object or dictionary
-
-        Returns:
-            List of user IDs
+        Uses caching to improve performance.
         """
         from common.db.models.user import User
         from common.db.models.subscription import UserFilter
 
         try:
-            # Create a cache key based on the ad's primary attributes that affect matching
+            # Get ad ID for caching
             ad_id = ad.id if hasattr(ad, 'id') else ad.get('id')
-            cache_key = f"matching_users:{ad_id}"
+            if not ad_id:
+                logger.warning("Cannot find users for ad without ID")
+                return []
 
-            # Try to get results from cache first
-            cached = redis_client.get(cache_key)
-            if cached:
-                return json.loads(cached)
+            # Create a cache key
+            key = f"matching_users:{ad_id}"
 
+            # Try to get from cache
+            cached_users = BaseCacheManager.get(key)
+            if cached_users:
+                return cached_users
+
+            # Cache miss, perform the query
             # Get ad properties for matching
             if hasattr(ad, 'property_type'):
                 # It's an ORM object
@@ -331,8 +364,8 @@ class AdRepository:
             results = query.all()
             user_ids = [result[0] for result in results]
 
-            # Cache the results for 1 hour
-            redis_client.set(cache_key, json.dumps(user_ids), ex=CacheTTL.STANDARD)
+            # Cache the results
+            BaseCacheManager.set(key, user_ids, CacheTTL.STANDARD)
 
             return user_ids
 
@@ -359,6 +392,8 @@ class AdRepository:
                 logger.warning(f"Attempted to delete non-existent ad with ID {ad_id}")
                 return False
 
+            resource_url = ad.resource_url
+
             # Delete related data
             # Note: You can also rely on CASCADE if set up in your model relationships
 
@@ -374,6 +409,9 @@ class AdRepository:
             # Delete the ad itself
             db.delete(ad)
             db.commit()
+
+            # Use centralized cache invalidation
+            invalidate_ad_caches(ad_id, resource_url)
 
             logger.info(f"Successfully deleted ad {ad_id} and related data")
             return True
