@@ -8,6 +8,8 @@ from common.db.session import db_session
 from common.db.repositories.subscription_repository import SubscriptionRepository
 from common.db.repositories.user_repository import UserRepository
 from common.db.models.subscription import UserFilter
+from common.utils.cache_managers import SubscriptionCacheManager, UserCacheManager
+from common.utils.cache_invalidation import get_entity_cache_key
 
 from ..bot import dp, bot
 from common.config import GEO_ID_MAPPING
@@ -16,7 +18,7 @@ from ..keyboards import (
     subscription_menu_keyboard, make_subscriptions_page_kb
 )
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from common.utils.cache import redis_client
+from ..utils.message_utils import safe_send_message
 
 logger = logging.getLogger(__name__)
 
@@ -117,12 +119,9 @@ async def handle_sub_pause(callback_query: types.CallbackQuery):
             subscription.is_paused = True
             db.commit()
 
-            # Invalidate cache
-            redis_client.delete(f"user_filters:{db_user_id}")
-            matching_pattern = "matching_users:*"
-            matching_keys = redis_client.keys(matching_pattern)
-            if matching_keys:
-                redis_client.delete(*matching_keys)
+            # Invalidate cache using cache managers
+            SubscriptionCacheManager.invalidate_all(db_user_id, sub_id)
+            UserCacheManager.invalidate_all(db_user_id)
 
             await callback_query.answer("Підписку призупинено.")
         else:
@@ -153,12 +152,9 @@ async def handle_sub_resume(callback_query: types.CallbackQuery):
         # Use repository method
         success = SubscriptionRepository.enable_subscription_by_id(db, sub_id, db_user_id)
         if success:
-            # Invalidate cache
-            redis_client.delete(f"user_filters:{db_user_id}")
-            matching_pattern = "matching_users:*"
-            matching_keys = redis_client.keys(matching_pattern)
-            if matching_keys:
-                redis_client.delete(*matching_keys)
+            # Invalidate cache using cache managers
+            SubscriptionCacheManager.invalidate_all(db_user_id, sub_id)
+            UserCacheManager.invalidate_all(db_user_id)
 
             await callback_query.answer("Підписку поновлено.")
         else:
@@ -190,13 +186,9 @@ async def handle_sub_delete(callback_query: types.CallbackQuery):
         success = SubscriptionRepository.remove_subscription(db, sub_id, db_user_id)
 
         if success:
-            # Invalidate caches
-            redis_client.delete(f"user_filters:{db_user_id}")
-            redis_client.delete(f"user_subscriptions_list:{db_user_id}")
-            matching_pattern = "matching_users:*"
-            matching_keys = redis_client.keys(matching_pattern)
-            if matching_keys:
-                redis_client.delete(*matching_keys)
+            # Invalidate caches using cache managers
+            SubscriptionCacheManager.invalidate_all(db_user_id, sub_id)
+            UserCacheManager.invalidate_all(db_user_id)
 
             await callback_query.answer("Підписку видалено.")
         else:
@@ -235,7 +227,17 @@ async def handle_subs_page(callback_query: types.CallbackQuery):
 
         # Get subscription count and paginated list
         total = SubscriptionRepository.count_subscriptions(db, db_user_id)
-        subs = SubscriptionRepository.list_subscriptions_paginated(db, db_user_id, page)
+
+        # Try to get subscriptions from the cache first
+        cache_key = get_entity_cache_key("user_subscriptions_paginated", db_user_id, f"{page}:5")
+        cached_subs = SubscriptionCacheManager.get(cache_key)
+
+        if cached_subs:
+            subs = cached_subs
+        else:
+            # Not in cache, get from a database
+            subs = SubscriptionRepository.list_subscriptions_paginated(db, db_user_id, page)
+            # Cache the result (done inside the repository)
 
     # Create keyboard
     kb = make_subscriptions_page_kb(db_user_id, page, subs, total)
@@ -266,7 +268,17 @@ async def show_subscriptions_menu(message: types.Message):
 
     with db_session() as db:
         page = 0
-        subs = SubscriptionRepository.list_subscriptions_paginated(db, db_user_id, page)
+
+        # Try to get from the cache first
+        cache_key = get_entity_cache_key("user_subscriptions_paginated", db_user_id, f"{page}:5")
+        cached_subs = SubscriptionCacheManager.get(cache_key)
+
+        if cached_subs:
+            subs = cached_subs
+        else:
+            # Not in cache, get from a database
+            subs = SubscriptionRepository.list_subscriptions_paginated(db, db_user_id, page)
+            # Cache is handled in the repository
 
     # Create keyboard
     kb = make_subscriptions_page_kb(db_user_id, page, subs, total)
@@ -286,9 +298,26 @@ async def my_subscription_handler(callback_query: types.CallbackQuery):
 
         db_user_id = user.id
 
-        # Get subscription data
-        subscription_data = SubscriptionRepository.get_subscription_data(db, db_user_id)
-        subscription_until = UserRepository.get_subscription_until(db, db_user_id)
+        # Try to get subscription data from cache first
+        cached_subscription = SubscriptionCacheManager.get_user_subscriptions(db_user_id)
+
+        if cached_subscription:
+            subscription_data = cached_subscription
+        else:
+            # Not in cache, get from database
+            subscription_data = SubscriptionRepository.get_subscription_data(db, db_user_id)
+            # Cache would be set by the repository if found
+
+        # Try to get subscription expiration date from cache
+        cache_key_sub_until = get_entity_cache_key("user_subscription", db_user_id, "free")
+        cached_until = UserCacheManager.get(cache_key_sub_until)
+
+        if cached_until:
+            subscription_until = cached_until
+        else:
+            # Not in cache, get from database
+            subscription_until = UserRepository.get_subscription_until(db, db_user_id)
+            # Cache would be set by the repository if found
 
         if not subscription_data:
             await callback_query.message.answer("У вас немає активної підписки.")
@@ -330,6 +359,9 @@ async def disable_subscription_handler(callback_query: types.CallbackQuery):
         success = SubscriptionRepository.disable_subscription(db, db_user_id)
 
         if success:
+            # Invalidate cache
+            SubscriptionCacheManager.invalidate_all(db_user_id)
+
             await bot.send_message(
                 chat_id=callback_query.message.chat.id,
                 text="Ваша підписка відключена.",
@@ -356,6 +388,9 @@ async def enable_subscription_handler(callback_query: types.CallbackQuery):
         success = SubscriptionRepository.enable_subscription(db, db_user_id)
 
         if success:
+            # Invalidate cache
+            SubscriptionCacheManager.invalidate_all(db_user_id)
+
             await bot.send_message(
                 chat_id=callback_query.message.chat.id,
                 text="Ваша підписка включена.",
@@ -382,6 +417,9 @@ async def handle_disable_subscription(message: types.Message):
         success = SubscriptionRepository.disable_subscription(db, db_user_id)
 
         if success:
+            # Invalidate cache
+            SubscriptionCacheManager.invalidate_all(db_user_id)
+
             await message.answer(
                 "Ваша підписка відключена.",
                 reply_markup=main_menu_keyboard()
@@ -407,6 +445,9 @@ async def handle_enable_subscription(message: types.Message):
         success = SubscriptionRepository.enable_subscription(db, db_user_id)
 
         if success:
+            # Invalidate cache
+            SubscriptionCacheManager.invalidate_all(db_user_id)
+
             await message.answer(
                 "Ваша підписка включена на безкоштовний період (або на платний, якщо ви вже оплачували).",
                 reply_markup=main_menu_keyboard()
@@ -434,12 +475,32 @@ async def handle_my_subscription(message: types.Message):
         logger.info('User ID handle_my_subscription: %s', user_id)
         logger.info('DB User ID handle_my_subscription: %s', db_user_id)
 
-        # Get subscription data
-        sub_data = SubscriptionRepository.get_subscription_data(db, db_user_id)
-        subscription_until = UserRepository.get_subscription_until(db, db_user_id, free=True)
+        # Try to get subscription data from cache first
+        cached_data = SubscriptionCacheManager.get_user_subscriptions(db_user_id)
+
+        if cached_data:
+            sub_data = cached_data
+        else:
+            # Not in cache, get from database
+            sub_data = SubscriptionRepository.get_subscription_data(db, db_user_id)
+            # Cache is set in the repository if found
+
+        # Try to get subscription until date from cache
+        cache_key_until = get_entity_cache_key("user_subscription", db_user_id, "free")
+        subscription_until = UserCacheManager.get(cache_key_until)
 
         if not subscription_until:
-            subscription_until = UserRepository.get_subscription_until(db, db_user_id, free=False)
+            # Try paid subscription if free is not available
+            cache_key_until = get_entity_cache_key("user_subscription", db_user_id, "paid")
+            subscription_until = UserCacheManager.get(cache_key_until)
+
+            if not subscription_until:
+                # Not in cache, get from database
+                subscription_until = UserRepository.get_subscription_until(db, db_user_id, free=True)
+
+                if not subscription_until:
+                    subscription_until = UserRepository.get_subscription_until(db, db_user_id, free=False)
+                # Cache is set in the repository if found
 
         if not sub_data:
             await message.answer("У вас немає активної підписки.")
