@@ -7,6 +7,10 @@ import json
 from aiogram import types
 from aiogram.dispatcher import FSMContext
 
+from common.db.repositories.ad_repository import AdRepository
+from common.db.repositories.favorite_repository import FavoriteRepository
+from common.db.repositories.user_repository import UserRepository
+from common.db.session import db_session
 from common.utils.ad_utils import get_ad_images
 from ..bot import dp, bot
 
@@ -29,37 +33,41 @@ async def handle_add_fav(callback_query: types.CallbackQuery):
         # Get the part after "add_fav:"
         callback_data = callback_query.data.split("add_fav:")[1]
 
-        # Check if it's a URL or an ID
-        if callback_data.startswith("http"):
-            resource_url = callback_data
-            logger.info(f"Looking up ad ID for resource_url: {resource_url}")
+        # Database user ID
+        telegram_id = callback_query.from_user.id
 
-            # Find the ad by its resource_url
-            sql = "SELECT id FROM ads WHERE resource_url = %s"
-            result = execute_query(sql, [resource_url], fetchone=True)
+        with db_session() as db:
+            db_user_id = UserRepository.get_by_messenger_id(db, str(telegram_id), "telegram")
 
-            if not result:
-                logger.error(f"Ad not found for resource_url: {resource_url}")
-                await callback_query.answer("Оголошення не знайдено.", show_alert=True)
+            if not db_user_id:
+                logger.error(f"User not found for telegram_id: {telegram_id}")
+                await callback_query.answer("Помилка: Користувач не знайдений.", show_alert=True)
                 return
 
-            ad_id = result["id"]
-            logger.info(f"Found ad ID {ad_id} for resource_url: {resource_url}")
-        else:
-            # It's already an ID
-            ad_id = int(callback_data)
+            # Parse ad ID
+            if callback_data.startswith("http"):
+                # It's a URL, find ad by resource_url
+                resource_url = callback_data
+                ad = AdRepository.get_by_resource_url(db, resource_url)
 
-        telegram_id = callback_query.from_user.id
-        db_user_id = get_db_user_id_by_telegram_id(telegram_id)
+                if not ad:
+                    logger.error(f"Ad not found for resource_url: {resource_url}")
+                    await callback_query.answer("Оголошення не знайдено.", show_alert=True)
+                    return
 
-        if not db_user_id:
-            logger.error(f"User not found for telegram_id: {telegram_id}")
-            await callback_query.answer("Помилка: Користувач не знайдений.", show_alert=True)
-            return
+                ad_id = ad.id
+            else:
+                # It's already an ID
+                ad_id = int(callback_data)
 
-        # Add to favorites
-        add_favorite_ad(db_user_id, ad_id)
+            # Add to favorites
+            favorite = FavoriteRepository.add_favorite(db, db_user_id.id, ad_id)
 
+            if not favorite:
+                await callback_query.answer("Помилка при додаванні до обраних.", show_alert=True)
+                return
+
+        # Update UI to show the "Added to favorites" button
         # Get the existing reply markup
         reply_markup = callback_query.message.reply_markup
 

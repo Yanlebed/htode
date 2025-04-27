@@ -94,3 +94,43 @@ class UserRepository:
         db.commit()
         db.refresh(user)
         return user
+
+    @staticmethod
+    def get_users_with_expiring_subscription(db: Session, days: int) -> List[User]:
+        """
+        Get users whose subscription is expiring in the specified number of days.
+
+        Args:
+            db: Database session
+            days: Number of days until expiration
+
+        Returns:
+            List of User objects
+        """
+        future_date = datetime.now() + timedelta(days=days, hours=1)
+        past_date = datetime.now() + timedelta(days=days - 1)
+
+        return db.query(User).filter(
+            User.subscription_until.isnot(None),
+            User.subscription_until > datetime.now(),
+            User.subscription_until < future_date,
+            User.subscription_until > past_date
+        ).all()
+
+    @staticmethod
+    def get_active_users(db: Session, days: int = 7, limit: int = 100) -> List[User]:
+        """
+        Get users who have been active within the specified number of days.
+
+        Args:
+            db: Database session
+            days: Number of days to consider as active
+            limit: Maximum number of users to return
+
+        Returns:
+            List of User objects
+        """
+        cutoff_date = datetime.now() - timedelta(days=days)
+        return db.query(User).filter(
+            User.last_active > cutoff_date
+        ).limit(limit).all()
