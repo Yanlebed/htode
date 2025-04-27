@@ -13,7 +13,7 @@ from common.verification.phone_service import (
     get_user_by_phone,
     transfer_subscriptions
 )
-from common.db.models import get_db_user_id_by_telegram_id
+from common.db.operations import get_db_user_id_by_telegram_id
 from ..keyboards import (
     phone_request_keyboard,
     verification_code_keyboard,

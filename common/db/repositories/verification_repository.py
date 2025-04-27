@@ -1,12 +1,16 @@
 # common/db/repositories/verification_repository.py
+
 from datetime import datetime, timedelta
 import random
 import string
+from typing import Optional
 from sqlalchemy.orm import Session
+
 from common.db.models.verification import VerificationCode
+from common.db.repositories.base_repository import BaseRepository
 
 
-class VerificationRepository:
+class VerificationRepository(BaseRepository):
     """Repository for verification operations"""
 
     @staticmethod
@@ -45,12 +49,27 @@ class VerificationRepository:
     @staticmethod
     def cleanup_expired_codes(db: Session) -> int:
         """Clean up expired verification codes"""
-        query = db.query(VerificationCode).filter(
+        result = db.query(VerificationCode).filter(
             VerificationCode.expires_at <= datetime.now()
-        )
+        ).delete()
 
-        count = query.count()
-        query.delete()
         db.commit()
+        return result
 
-        return count
+    @staticmethod
+    def get_recent_verification_attempts(db: Session, phone_number: str, minutes: int = 30) -> int:
+        """Count recent verification attempts for a phone number"""
+        time_threshold = datetime.now() - timedelta(minutes=minutes)
+
+        return db.query(VerificationCode).filter(
+            VerificationCode.phone_number == phone_number,
+            VerificationCode.created_at >= time_threshold
+        ).count()
+
+    @staticmethod
+    def get_by_phone_and_code(db: Session, phone_number: str, code: str) -> Optional[VerificationCode]:
+        """Get verification record by phone and code"""
+        return db.query(VerificationCode).filter(
+            VerificationCode.phone_number == phone_number,
+            VerificationCode.code == code
+        ).first()

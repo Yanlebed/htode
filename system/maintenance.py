@@ -475,7 +475,7 @@ def cache_warming() -> Dict[str, int]:
             ad_ids = [ad['ad_id'] for ad in top_ads if ad.get('ad_id')]
 
             # Batch fetch ad data
-            from common.db.models import batch_get_full_ad_data
+            from common.db.operations import batch_get_full_ad_data
             batch_get_full_ad_data(ad_ids)
             cached_items += len(ad_ids)
 
@@ -491,7 +491,7 @@ def cache_warming() -> Dict[str, int]:
             user_ids = [user['id'] for user in active_users if user.get('id')]
 
             # Batch fetch user filters
-            from common.db.models import batch_get_user_filters
+            from common.db.operations import batch_get_user_filters
             batch_get_user_filters(user_ids)
             cached_items += len(user_ids)
 

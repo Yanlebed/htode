@@ -8,6 +8,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 from common.db.models.user import User
 from common.db.repositories.user_repository import UserRepository
+from common.messaging.tasks import send_notification
 
 logger = logging.getLogger(__name__)
 
@@ -53,13 +54,19 @@ class UserService:
         Returns:
             Dictionary with counts of reminders sent
         """
-        from common.messaging.tasks import send_notification
 
         reminders_sent = 0
 
         # Check for subscriptions expiring in 3, 2, and 1 days
         for days in [3, 2, 1]:
-            users = UserRepository.get_users_with_expiring_subscription(db, days)
+            today = datetime.now().date()
+            target_date = today + timedelta(days=days)
+
+            # Get users whose subscription expires on the target date
+            # Using ORM instead of raw SQL
+            users = db.query(User).filter(
+                func.date(User.subscription_until) == target_date
+            ).all()
 
             for user in users:
                 user_id = user.id
@@ -96,12 +103,11 @@ class UserService:
                 reminders_sent += 1
 
         # Notify on day of expiration
-        today_users = db.query(User).filter(
-            User.subscription_until.isnot(None),
-            func.date(User.subscription_until) == datetime.now().date()
+        users_today = db.query(User).filter(
+            func.date(User.subscription_until) == today
         ).all()
 
-        for user in today_users:
+        for user in users_today:
             user_id = user.id
             end_date = user.subscription_until.strftime("%d.%m.%Y %H:%M")
 

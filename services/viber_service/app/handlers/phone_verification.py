@@ -10,7 +10,7 @@ from common.verification.phone_service import (
     get_user_by_phone,
     transfer_subscriptions
 )
-from common.db.models import get_or_create_user
+from common.db.operations import get_or_create_user
 
 logger = logging.getLogger(__name__)
 

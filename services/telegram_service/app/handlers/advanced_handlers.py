@@ -9,7 +9,7 @@ from aiogram.utils.exceptions import MessageNotModified
 from ..bot import dp, bot
 from ..states.basis_states import FilterStates
 from ..keyboards import floor_keyboard
-from common.db.models import get_extra_images
+from common.db.operations import get_extra_images
 
 logger = logging.getLogger(__name__)
 

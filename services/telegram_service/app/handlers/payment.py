@@ -3,7 +3,7 @@
 from aiogram import types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from ..bot import dp
-from common.db.models import get_db_user_id_by_telegram_id
+from common.db.operations import get_db_user_id_by_telegram_id
 from ..payment.wayforpay import create_payment_form_url
 
 

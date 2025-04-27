@@ -3,12 +3,10 @@
 import logging
 import re
 
-from common.db.models import (
-    update_user_filter,
-    start_free_subscription_of_user
-)
 from common.config import GEO_ID_MAPPING, get_key_by_value
 from common.messaging.unified_flow import MessageFlow, FlowContext, flow_library
+from common.db.operations import get_db_user_id_by_telegram_id, update_user_filter, start_free_subscription_of_user, \
+    get_or_create_user
 
 logger = logging.getLogger(__name__)
 
@@ -487,7 +485,6 @@ async def save_subscription(context: FlowContext):
     price_max = context.data.get("price_max")
 
     # Get user database ID
-    from common.db.models import get_db_user_id_by_telegram_id
 
     # Try multiple approaches to get user_db_id
     user_db_id = context.data.get("user_db_id")
@@ -496,7 +493,6 @@ async def save_subscription(context: FlowContext):
         user_db_id = get_db_user_id_by_telegram_id(context.user_id, messenger_type=context.platform)
 
     if not user_db_id:
-        from common.db.models import get_or_create_user
         user_db_id = get_or_create_user(context.user_id, messenger_type=context.platform)
         context.update(user_db_id=user_db_id)
 

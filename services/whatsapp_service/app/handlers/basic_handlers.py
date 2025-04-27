@@ -4,7 +4,7 @@ import logging
 import asyncio
 from ..bot import state_manager
 from ..utils.message_utils import safe_send_message
-from common.db.models import (
+from common.db.operations import (
     get_or_create_user,
     update_user_filter,
     start_free_subscription_of_user

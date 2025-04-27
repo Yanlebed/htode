@@ -5,13 +5,17 @@ import os
 import json
 import hashlib
 import hmac
-from datetime import datetime
 from typing import Optional
 
 from fastapi import FastAPI, Query, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
+
+from common.db.session import db_session
+from common.db.repositories.payment_repository import PaymentRepository
+from common.db.repositories.user_repository import UserRepository
+from datetime import datetime, timedelta
 
 # Configure logging
 logging.basicConfig(
@@ -405,117 +409,80 @@ async def update_non_approved_payment_status(order_id: str, transaction_status: 
 async def process_approved_payment(order_id: str, callback_data: dict):
     """Process approved payment and update subscription"""
     try:
-        import time
-        from common.db.database import execute_query
+        with db_session() as db:
+            # Get order details from database using repository
+            payment_order = PaymentRepository.get_order_by_id(db, order_id)
 
-        # Get order details from database
-        sql_order = """
-                    SELECT user_id, amount, period
-                    FROM payment_orders
-                    WHERE order_id = %s \
-                    """
-        order_data = execute_query(sql_order, [order_id], fetchone=True)
+            if not payment_order:
+                logger.error(f"Order not found: {order_id}")
+                return
 
-        if not order_data:
-            logger.error(f"Order not found: {order_id}")
-            return
+            user_id = payment_order.user_id
+            period = payment_order.period
+            amount = payment_order.amount
 
-        user_id = order_data["user_id"]
-        period = order_data["period"]
+            # Determine subscription duration in days
+            period_days = 30  # Default to 30 days
+            if period == "3months":
+                period_days = 90
+            elif period == "6months":
+                period_days = 180
+            elif period == "12months":
+                period_days = 365
 
-        # Determine subscription duration in days
-        period_days = 30  # Default to 30 days
-        if period == "3months":
-            period_days = 90
-        elif period == "6months":
-            period_days = 180
-        elif period == "12months":
-            period_days = 365
+            # Update payment status
+            payment_order.status = "completed"
+            payment_order.updated_at = datetime.now()
+            db.commit()
 
-        # Update payment status
-        sql_update = """
-                     UPDATE payment_orders
-                     SET status = 'completed'
-                     WHERE order_id = %s \
-                     """
-        execute_query(sql_update, [order_id])
+            # Create payment history entry
+            payment_history_data = {
+                "user_id": user_id,
+                "order_id": order_id,
+                "amount": amount,
+                "subscription_period": period,
+                "status": "completed",
+                "transaction_id": callback_data.get("authCode", ""),
+                "card_mask": callback_data.get("cardPan", ""),
+                "payment_details": str(callback_data)
+            }
 
-        # Store in payment history
-        sql_history = """
-                      INSERT INTO payment_history
-                      (user_id, order_id, amount, subscription_period, status, transaction_id, card_mask, \
-                       payment_details)
-                      VALUES (%s, %s, %s, %s, %s, %s, %s, %s) \
-                      """
-        execute_query(sql_history, [
-            user_id,
-            order_id,
-            callback_data.get("amount", order_data["amount"]),
-            period,
-            "completed",
-            callback_data.get("authCode", ""),
-            callback_data.get("cardPan", ""),
-            json.dumps(callback_data)
-        ])
+            PaymentRepository.create_payment_history(db, payment_history_data)
 
-        # Check if user already has an active subscription
-        sql_check = """
-                    SELECT subscription_until
-                    FROM users
-                    WHERE id = %s \
-                    """
-        user_sub = execute_query(sql_check, [user_id], fetchone=True)
+            # Get the user
+            user = UserRepository.get_by_id(db, user_id)
 
-        # Calculate new subscription end date
-        if user_sub and user_sub["subscription_until"] and user_sub["subscription_until"] > datetime.now():
-            # Extend existing subscription
-            sql_subscription = """
-                               UPDATE users
-                               SET subscription_until = subscription_until + interval '%s days'
-                               WHERE id = %s
-                                   RETURNING subscription_until \
-                               """
-        else:
-            # Set new subscription
-            sql_subscription = """
-                               UPDATE users
-                               SET subscription_until = NOW() + interval '%s days'
-                               WHERE id = %s
-                                   RETURNING subscription_until \
-                               """
+            # Update subscription end date
+            if user.subscription_until and user.subscription_until > datetime.now():
+                # Extend existing subscription
+                user.subscription_until = user.subscription_until + timedelta(days=period_days)
+            else:
+                # Set new subscription
+                user.subscription_until = datetime.now() + timedelta(days=period_days)
 
-        # Update subscription
-        sub_result = execute_query(sql_subscription, [period_days, user_id], fetchone=True)
-        logger.info(f"Updated subscription for user {user_id} until {sub_result['subscription_until']}")
+            db.commit()
 
-        # Get messenger ID for notification
-        sql_messenger = """
-                        SELECT telegram_id, viber_id, whatsapp_id
-                        FROM users
-                        WHERE id = %s \
-                        """
-        messenger_result = execute_query(sql_messenger, [user_id], fetchone=True)
+            logger.info(f"Updated subscription for user {user_id} until {user.subscription_until}")
 
-        if messenger_result:
-            # Format the date for display
-            sub_date = sub_result["subscription_until"].strftime("%d.%m.%Y")
+            # Format the date for notification
+            sub_date = user.subscription_until.strftime("%d.%m.%Y")
 
             # Determine which messenger to use
             messenger_type = None
             messenger_id = None
             task_name = None
 
-            if messenger_result.get("telegram_id"):
+            if user.telegram_id:
                 messenger_type = "telegram"
-                messenger_id = messenger_result["telegram_id"]
+                messenger_id = user.telegram_id
                 task_name = 'telegram_service.app.tasks.send_subscription_notification'
-            elif messenger_result.get("viber_id"):
+            elif user.viber_id:
                 messenger_type = "viber"
-                messenger_id = messenger_result["viber_id"]
+                messenger_id = user.viber_id
                 task_name = 'viber_service.app.tasks.send_subscription_notification'
-            elif messenger_result.get("whatsapp_id"):
+            elif user.whatsapp_id:
                 messenger_type = "whatsapp"
-                messenger_id = messenger_result["whatsapp_id"]
+                messenger_id = user.whatsapp_id
                 task_name = 'whatsapp_service.app.tasks.send_subscription_notification'
 
             if messenger_type and messenger_id and task_name:
@@ -528,7 +495,7 @@ async def process_approved_payment(order_id: str, callback_data: dict):
                         "payment_success",
                         {
                             "order_id": order_id,
-                            "amount": callback_data.get("amount", order_data["amount"]),
+                            "amount": amount,
                             "subscription_until": sub_date
                         }
                     ]

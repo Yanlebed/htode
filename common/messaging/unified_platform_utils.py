@@ -64,7 +64,7 @@ def resolve_user_id(user_id: Union[int, str], platform: Optional[str] = None) ->
     Returns:
         Tuple of (database_user_id, platform_name, platform_id)
     """
-    from common.db.models import get_db_user_id_by_telegram_id, get_platform_ids_for_user
+    from common.db.operations import get_db_user_id_by_telegram_id, get_platform_ids_for_user
 
     # Case 1: Database user ID
     if isinstance(user_id, int) or (isinstance(user_id, str) and user_id.isdigit()):
