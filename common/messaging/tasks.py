@@ -6,6 +6,8 @@ import uuid
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 
+from sqlalchemy import func
+
 from common.celery_app import celery_app
 from common.db.database import execute_query
 from common.db.operations import get_platform_ids_for_user, get_db_user_id_by_telegram_id, get_full_ad_description, Ad
@@ -13,6 +15,7 @@ from .service import messaging_service
 from .handlers.support_handler import handle_support_command, handle_support_category, SUPPORT_CATEGORIES
 from common.db.repositories.user_repository import UserRepository
 from common.db.session import db_session
+from ..db.models import User
 
 logger = logging.getLogger(__name__)
 
@@ -401,64 +404,80 @@ def send_subscription_notification(user_id, notification_type, data):
 @celery_app.task(name='common.messaging.tasks.check_expiring_subscriptions')
 def check_expiring_subscriptions():
     """
-    Consolidated task to check for expiring subscriptions and send reminders.
+    Check for expiring subscriptions and send reminders.
     Replaces duplicate implementations across platform-specific modules.
     """
     try:
+        reminders_sent = 0
+
         # Check for subscriptions expiring in 3, 2, and 1 days
         for days in [3, 2, 1]:
             # Find users whose subscription expires in exactly `days` days
-            sql = """
-                  SELECT id, subscription_until
-                  FROM users
-                  WHERE subscription_until IS NOT NULL
-                    AND subscription_until > NOW()
-                    AND subscription_until < NOW() + interval '%s days 1 hour'
-                    AND subscription_until \
-                      > NOW() + interval '%s days'
-                  """
-            users = execute_query(sql, [days, days - 1], fetch=True)
+            with db_session() as db:
+                users = UserRepository.get_users_with_expiring_subscription(db, days)
 
             for user in users:
-                user_id = user["id"]
-                end_date = user["subscription_until"].strftime("%d.%m.%Y")
+                user_id = user.id
+                end_date = user.subscription_until.strftime("%d.%m.%Y")
+
+                # Determine the template based on days remaining
+                if days == 1:
+                    template = (
+                        "⚠️ Ваша підписка закінчується завтра!\n\n"
+                        "Дата закінчення: {end_date}\n\n"
+                        "Щоб не втратити доступ до сервісу, оновіть підписку зараз."
+                    )
+                else:
+                    # Determine plural form
+                    days_word = "день" if days == 1 else "дні" if days < 5 else "днів"
+                    template = (
+                        "⚠️ Нагадування про підписку\n\n"
+                        "Ваша підписка закінчується через {days} "
+                        "{days_word}.\n"
+                        "Дата закінчення: {end_date}\n\n"
+                        "Щоб продовжити користуватися сервісом, оновіть підписку."
+                    )
 
                 # Send notification using the consolidated task
-                send_subscription_notification.delay(
-                    user_id,
-                    "expiration_reminder",
-                    {
-                        "days_left": days,
-                        "subscription_until": end_date
+                send_notification.delay(
+                    user_id=user_id,
+                    template=template,
+                    data={
+                        "days": days,
+                        "days_word": days_word,
+                        "end_date": end_date
                     }
                 )
+                reminders_sent += 1
 
         # Also notify on the day of expiration
-        sql_today = """
-                    SELECT id, subscription_until
-                    FROM users
-                    WHERE subscription_until IS NOT NULL
-                      AND DATE (subscription_until) = CURRENT_DATE
-                    """
-        today_users = execute_query(sql_today, fetch=True)
+        with db_session() as db:
+            from datetime import date
+            users_today = db.query(User).filter(
+                User.subscription_until.isnot(None),
+                func.date(User.subscription_until) == date.today()
+            ).all()
 
-        for user in today_users:
-            user_id = user["id"]
-            end_date = user["subscription_until"].strftime("%d.%m.%Y %H:%M")
+        for user in users_today:
+            user_id = user.id
+            end_date = user.subscription_until.strftime("%d.%m.%Y %H:%M")
 
-            # Send notification using the consolidated task
-            send_subscription_notification.delay(
-                user_id,
-                "expiration_today",
-                {"subscription_until": end_date}
+            # Send notification
+            send_notification.delay(
+                user_id=user_id,
+                template=(
+                    "⚠️ Ваша підписка закінчується сьогодні!\n\n"
+                    "Час закінчення: {end_date}\n\n"
+                    "Щоб не втратити доступ до сервісу, оновіть підписку зараз."
+                ),
+                data={"end_date": end_date}
             )
+            reminders_sent += 1
 
-        return {"status": "success", "users_notified": len(users) + len(today_users)}
-
+        return {"status": "success", "reminders_sent": reminders_sent}
     except Exception as e:
         logger.error(f"Error checking expiring subscriptions: {e}")
         return {"status": "error", "error": str(e)}
-
 
 @celery_app.task(name='common.messaging.tasks.process_show_more_description')
 def process_show_more_description(user_id, resource_url, message_id=None, platform=None):

@@ -9,10 +9,6 @@ import uuid
 from redis import Redis
 from contextlib import contextmanager
 
-from sqlalchemy import select, or_
-
-from common.db.database import execute_query
-from common.db.models import UserFilter, User
 from common.db.session import db_session
 from common.utils.unified_request_utils import fetch_ads_flatfy
 from common.config import GEO_ID_MAPPING_FOR_INITIAL_RUN, AWS_CONFIG, REDIS_URL
@@ -20,7 +16,6 @@ from common.celery_app import celery_app
 from common.utils.unified_request_utils import make_request
 from common.utils.ad_utils import process_and_insert_ad
 from common.db.repositories.subscription_repository import SubscriptionRepository
-from common.db.repositories.user_repository import UserRepository
 from common.db.repositories.ad_repository import AdRepository
 from common.db.models import Ad
 from sqlalchemy import func
