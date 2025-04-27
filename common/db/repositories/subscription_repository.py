@@ -9,6 +9,7 @@ from common.db.models.user import User
 from common.utils.cache import CacheTTL
 from common.config import GEO_ID_MAPPING, get_key_by_value
 from common.utils.cache_managers import SubscriptionCacheManager, UserCacheManager, BaseCacheManager
+from common.utils.cache_invalidation import get_entity_cache_key
 
 class SubscriptionRepository:
     """Repository for subscription operations"""
@@ -160,9 +161,9 @@ class SubscriptionRepository:
         Dict[str, Any]]:
         """Get a paginated list of subscriptions with caching"""
         # Create a cache key that includes pagination parameters
-        cache_key = f"user_subscriptions_paginated:{user_id}:{page}:{per_page}"
+        cache_key = get_entity_cache_key("user_subscriptions_paginated", user_id, f"{page}:{per_page}")
 
-        # Try to get from cache first
+        # Try to get from the cache first
         cached_data = BaseCacheManager.get(cache_key)
         if cached_data:
             return cached_data
@@ -175,19 +176,23 @@ class SubscriptionRepository:
         ).order_by(UserFilter.id).limit(per_page).offset(offset).all()
 
         # Format the results
-        result = [
-            {
+        result = []
+        for f in filters:
+            # Convert geo_id to city name if available
+            city_name = GEO_ID_MAPPING.get(f.city) if f.city else None
+
+            sub_dict = {
                 "id": f.id,
                 "user_id": f.user_id,
                 "property_type": f.property_type,
                 "city": f.city,
+                "city_name": city_name,
                 "rooms_count": f.rooms_count,
                 "price_min": f.price_min,
                 "price_max": f.price_max,
                 "is_paused": f.is_paused
             }
-            for f in filters
-        ]
+            result.append(sub_dict)
 
         # Cache the result (shorter TTL for paginated data)
         BaseCacheManager.set(cache_key, result, CacheTTL.SHORT)

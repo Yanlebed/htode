@@ -1,7 +1,7 @@
 # common/utils/cache_invalidation.py
 
 import logging
-from typing import Optional, Union
+from typing import Optional, List, Union
 
 from common.utils.cache import redis_client
 
@@ -53,6 +53,7 @@ def invalidate_user_caches(user_id: int) -> int:
     # Additional pattern-based keys
     pattern_keys = [
         f"matching_users:*",  # Invalidate any ad matches for this user
+        f"user_subscriptions_paginated:{user_id}:*",  # Invalidate paginated subscription caches
     ]
 
     # Collect all pattern-matching keys
@@ -86,16 +87,23 @@ def invalidate_subscription_caches(user_id: int, subscription_id: Optional[int] 
     keys_to_delete = [
         get_entity_cache_key("user_filters", user_id),
         get_entity_cache_key("user_subscriptions_list", user_id),
-        get_entity_cache_key("subscription_status", user_id),
+        get_entity_cache_key("subscription_status", user_id)
     ]
 
     if subscription_id:
         keys_to_delete.append(get_entity_cache_key("subscription", subscription_id))
 
-    # Invalidate any matching users patterns
-    matching_keys = redis_client.keys("matching_users:*")
-    if matching_keys:
-        keys_to_delete.extend(matching_keys)
+    # Pattern-based keys
+    pattern_keys = [
+        "matching_users:*",  # Invalidate any matching users patterns for ads
+        f"user_subscriptions_paginated:{user_id}:*",  # Invalidate all paginated subscription caches
+    ]
+
+    # Collect all pattern-matching keys
+    for pattern in pattern_keys:
+        matching_keys = redis_client.keys(pattern)
+        if matching_keys:
+            keys_to_delete.extend(matching_keys)
 
     # Delete all collected keys
     count = 0
