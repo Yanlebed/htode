@@ -35,6 +35,73 @@ class AdRepository:
         return db.query(Ad).filter(Ad.resource_url == resource_url).first()
 
     @staticmethod
+    def create_ad(db: Session, ad_data: Dict[str, Any]) -> Ad:
+        """Create a new ad"""
+        ad = Ad(**ad_data)
+        db.add(ad)
+        db.commit()
+        db.refresh(ad)
+        return ad
+
+    @staticmethod
+    def update_ad(db: Session, ad_id: int, ad_data: Dict[str, Any]) -> Optional[Ad]:
+        """Update an existing ad"""
+        ad = AdRepository.get_by_id(db, ad_id)
+        if not ad:
+            return None
+
+        for key, value in ad_data.items():
+            if hasattr(ad, key):
+                setattr(ad, key, value)
+
+        db.commit()
+        db.refresh(ad)
+        return ad
+
+    @staticmethod
+    def delete_ad(db: Session, ad_id: int) -> bool:
+        """Delete an ad by ID"""
+        ad = AdRepository.get_by_id(db, ad_id)
+        if not ad:
+            return False
+
+        db.delete(ad)
+        db.commit()
+        return True
+
+    @staticmethod
+    def get_ads_by_filter(
+            db: Session,
+            filter_data: Dict[str, Any],
+            limit: int = 10,
+            offset: int = 0
+    ) -> List[Ad]:
+        """Get ads based on filter criteria"""
+        query = db.query(Ad)
+
+        # Apply filters
+        if 'property_type' in filter_data and filter_data['property_type']:
+            query = query.filter(Ad.property_type == filter_data['property_type'])
+
+        if 'city' in filter_data and filter_data['city']:
+            query = query.filter(Ad.city == filter_data['city'])
+
+        if 'rooms_count' in filter_data and filter_data['rooms_count']:
+            query = query.filter(Ad.rooms_count.in_(filter_data['rooms_count']))
+
+        if 'price_min' in filter_data and filter_data['price_min']:
+            query = query.filter(Ad.price >= filter_data['price_min'])
+
+        if 'price_max' in filter_data and filter_data['price_max']:
+            query = query.filter(Ad.price <= filter_data['price_max'])
+
+        # Apply ordering and pagination
+        query = query.order_by(Ad.insert_time.desc())
+        query = query.limit(limit).offset(offset)
+
+        return query.all()
+
+    @staticmethod
     @redis_cache("full_ad", ttl=CacheTTL.MEDIUM)
     def get_full_ad_data(db: Session, ad_id: int) -> Optional[Dict[str, Any]]:
         """Get complete ad data with images and phones"""
@@ -72,28 +139,6 @@ class AdRepository:
         return ad_dict
 
     @staticmethod
-    def create_ad(db: Session, ad_data: Dict[str, Any]) -> Ad:
-        """Create a new ad"""
-        ad = Ad(
-            external_id=ad_data.get("external_id"),
-            property_type=ad_data.get("property_type"),
-            city=ad_data.get("city"),
-            address=ad_data.get("address"),
-            price=ad_data.get("price"),
-            square_feet=ad_data.get("square_feet"),
-            rooms_count=ad_data.get("rooms_count"),
-            floor=ad_data.get("floor"),
-            total_floors=ad_data.get("total_floors"),
-            description=ad_data.get("description"),
-            resource_url=ad_data.get("resource_url"),
-            insert_time=ad_data.get("insert_time") or datetime.now()
-        )
-        db.add(ad)
-        db.commit()
-        db.refresh(ad)
-        return ad
-
-    @staticmethod
     def add_image(db: Session, ad_id: int, image_url: str) -> AdImage:
         """Add an image to an ad"""
         image = AdImage(ad_id=ad_id, image_url=image_url)
@@ -126,6 +171,15 @@ class AdRepository:
         """Get all images for an ad"""
         images = db.query(AdImage).filter(AdImage.ad_id == ad_id).all()
         return [img.image_url for img in images]
+
+    @staticmethod
+    def get_ad_phones(db: Session, ad_id: int) -> List[Dict[str, str]]:
+        """Get all phones for an ad"""
+        phones = db.query(AdPhone).filter(AdPhone.ad_id == ad_id).all()
+        return [
+            {"phone": p.phone, "viber_link": p.viber_link}
+            for p in phones
+        ]
 
     @staticmethod
     @redis_cache("ad_description", ttl=CacheTTL.LONG)
@@ -344,16 +398,16 @@ class AdRepository:
         return db.query(Ad).filter(Ad.insert_time < cutoff_date).all()
 
     @staticmethod
-    def get_ad_images(db: Session, ad_id: int) -> List[str]:
+    def get_description_by_resource_url(db: Session, resource_url: str) -> Optional[str]:
         """
-        Get all image URLs for an ad.
+        Get the full description of an ad by its resource URL.
 
         Args:
             db: Database session
-            ad_id: ID of the ad
+            resource_url: Resource URL of the ad
 
         Returns:
-            List of image URLs
+            Ad description or None if not found
         """
-        images = db.query(AdImage).filter(AdImage.ad_id == ad_id).all()
-        return [img.image_url for img in images]
+        ad = db.query(Ad).filter(Ad.resource_url == resource_url).first()
+        return ad.description if ad else None
