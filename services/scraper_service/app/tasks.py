@@ -220,7 +220,7 @@ def _insert_ad_if_new(ad_data: dict, geo_id: int, property_type: str, cutoff_tim
             if last_update_time < cutoff_time:
                 return None
 
-        # Check if ad already exists
+        # Check if the ad already exists
         existing_ad = AdRepository.get_by_external_id(db, ad_unique_id)
         if existing_ad:
             return None
@@ -276,7 +276,7 @@ def initial_30_day_scrape() -> None:
         return
 
     # Try to acquire the lock
-    lock_id = acquire_lock("initial_scrape", expire_time=3600)  # 1 hour lock
+    lock_id = acquire_lock("initial_scrape", expire_time=3600)  # 1-hour lock
     if not lock_id:
         logger.info("Initial scrape is already in progress by another worker. Skipping.")
         return

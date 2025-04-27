@@ -4,6 +4,13 @@ import logging
 from typing import Optional, List, Union
 
 from common.utils.cache import redis_client
+from common.utils.cache_managers import (
+    BaseCacheManager,
+    UserCacheManager,
+    AdCacheManager,
+    SubscriptionCacheManager,
+    FavoriteCacheManager
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,41 +43,7 @@ def invalidate_user_caches(user_id: int) -> int:
     Returns:
         Number of invalidated cache keys
     """
-    # List of standard user-related cache prefixes
-    prefixes = [
-        "user_filters",
-        "user_subscriptions_list",
-        "user_favorites",
-        "user_subscription",
-        "subscription_status",
-        "user_subscription:True",  # For free subscription
-        "user_subscription:False"  # For paid subscription
-    ]
-
-    # Individual keys to invalidate
-    keys_to_delete = [get_entity_cache_key(prefix, user_id) for prefix in prefixes]
-
-    # Additional pattern-based keys
-    pattern_keys = [
-        f"matching_users:*",  # Invalidate any ad matches for this user
-        f"user_subscriptions_paginated:{user_id}:*",  # Invalidate paginated subscription caches
-    ]
-
-    # Collect all pattern-matching keys
-    for pattern in pattern_keys:
-        matching_keys = redis_client.keys(pattern)
-        if matching_keys:
-            keys_to_delete.extend(matching_keys)
-
-    # Delete all collected keys
-    count = 0
-    if keys_to_delete:
-        existing_keys = [key for key in keys_to_delete if redis_client.exists(key)]
-        if existing_keys:
-            count = redis_client.delete(*existing_keys)
-            logger.debug(f"Invalidated {count} cache keys for user {user_id}")
-
-    return count
+    return UserCacheManager.invalidate_all(user_id)
 
 
 def invalidate_subscription_caches(user_id: int, subscription_id: Optional[int] = None) -> int:
@@ -84,36 +57,7 @@ def invalidate_subscription_caches(user_id: int, subscription_id: Optional[int] 
     Returns:
         Number of invalidated cache keys
     """
-    keys_to_delete = [
-        get_entity_cache_key("user_filters", user_id),
-        get_entity_cache_key("user_subscriptions_list", user_id),
-        get_entity_cache_key("subscription_status", user_id)
-    ]
-
-    if subscription_id:
-        keys_to_delete.append(get_entity_cache_key("subscription", subscription_id))
-
-    # Pattern-based keys
-    pattern_keys = [
-        "matching_users:*",  # Invalidate any matching users patterns for ads
-        f"user_subscriptions_paginated:{user_id}:*",  # Invalidate all paginated subscription caches
-    ]
-
-    # Collect all pattern-matching keys
-    for pattern in pattern_keys:
-        matching_keys = redis_client.keys(pattern)
-        if matching_keys:
-            keys_to_delete.extend(matching_keys)
-
-    # Delete all collected keys
-    count = 0
-    if keys_to_delete:
-        existing_keys = [key for key in keys_to_delete if redis_client.exists(key)]
-        if existing_keys:
-            count = redis_client.delete(*existing_keys)
-            logger.debug(f"Invalidated {count} subscription cache keys for user {user_id}")
-
-    return count
+    return SubscriptionCacheManager.invalidate_all(user_id, subscription_id)
 
 
 def invalidate_ad_caches(ad_id: int, resource_url: Optional[str] = None) -> int:
@@ -127,27 +71,7 @@ def invalidate_ad_caches(ad_id: int, resource_url: Optional[str] = None) -> int:
     Returns:
         Number of invalidated cache keys
     """
-    keys_to_delete = [
-        get_entity_cache_key("full_ad", ad_id),
-        get_entity_cache_key("ad_images", ad_id),
-        get_entity_cache_key("matching_users", ad_id)
-    ]
-
-    if resource_url:
-        keys_to_delete.extend([
-            get_entity_cache_key("extra_images", resource_url),
-            get_entity_cache_key("ad_description", resource_url)
-        ])
-
-    # Delete all collected keys
-    count = 0
-    if keys_to_delete:
-        existing_keys = [key for key in keys_to_delete if redis_client.exists(key)]
-        if existing_keys:
-            count = redis_client.delete(*existing_keys)
-            logger.debug(f"Invalidated {count} cache keys for ad {ad_id}")
-
-    return count
+    return AdCacheManager.invalidate_all(ad_id, resource_url)
 
 
 def invalidate_favorite_caches(user_id: int) -> int:
@@ -160,19 +84,7 @@ def invalidate_favorite_caches(user_id: int) -> int:
     Returns:
         Number of invalidated cache keys
     """
-    keys_to_delete = [
-        get_entity_cache_key("user_favorites", user_id)
-    ]
-
-    # Delete all collected keys
-    count = 0
-    if keys_to_delete:
-        existing_keys = [key for key in keys_to_delete if redis_client.exists(key)]
-        if existing_keys:
-            count = redis_client.delete(*existing_keys)
-            logger.debug(f"Invalidated {count} favorite cache keys for user {user_id}")
-
-    return count
+    return FavoriteCacheManager.invalidate_all(user_id)
 
 
 def invalidate_phone_caches(ad_id: int) -> int:
@@ -208,18 +120,35 @@ def warm_cache_for_user(user_id: int) -> None:
 
     try:
         # Prefetch user filters
-        get_user_filters(user_id)
+        filters = get_user_filters(user_id)
+
+        # Store in cache using manager
+        if filters:
+            UserCacheManager.set_filters(user_id, filters)
 
         # Prefetch user's favorites
         favorites = list_favorites(user_id)
 
+        # Store in cache using manager
+        if favorites:
+            FavoriteCacheManager.set_user_favorites(user_id, favorites)
+
         # Prefetch subscription data
-        get_subscription_data_for_user(user_id)
+        subscription_data = get_subscription_data_for_user(user_id)
+
+        # Store in cache using manager
+        if subscription_data:
+            SubscriptionCacheManager.set_user_subscriptions(user_id, [subscription_data])
 
         # If we have favorites, prefetch full data for those ads
         if favorites:
             ad_ids = [fav.get('ad_id') for fav in favorites if fav.get('ad_id')]
-            batch_get_full_ad_data(ad_ids)
+            ad_data_dict = batch_get_full_ad_data(ad_ids)
+
+            # Store each ad in cache using manager
+            for ad_id, ad_data in ad_data_dict.items():
+                if ad_data:
+                    AdCacheManager.set_full_ad_data(ad_id, ad_data)
 
         logger.info(f"Cache warmed for user_id: {user_id}")
     except Exception as e:

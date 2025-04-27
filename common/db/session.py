@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 # Create the database URL from config
 DATABASE_URL = f"postgresql://{DB_CONFIG['user']}:{DB_CONFIG['password']}@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}"
 
-# Create engine and session factory with connection pooling settings
+# Create an engine and session factory with connection pooling settings
 engine = create_engine(
     DATABASE_URL,
     pool_pre_ping=True,

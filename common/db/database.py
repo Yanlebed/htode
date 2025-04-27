@@ -1,4 +1,4 @@
-# common/db/database.py - Improved with connection context manager
+# common/db/database.py
 
 from psycopg2.pool import ThreadedConnectionPool
 from psycopg2.extras import RealDictCursor

@@ -1,14 +1,13 @@
 # common/utils/cache_managers.py
 import json
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 
 from common.utils.cache import redis_client, CacheTTL
 from common.utils.cache_invalidation import (
     get_entity_cache_key,
     invalidate_user_caches,
     invalidate_subscription_caches,
-    invalidate_ad_caches,
     invalidate_favorite_caches
 )
 
@@ -20,7 +19,7 @@ class BaseCacheManager:
 
     @staticmethod
     def get(key: str) -> Optional[Any]:
-        """Get a value from cache"""
+        """Get a value from a cache"""
         data = redis_client.get(key)
         if data:
             try:
@@ -32,7 +31,7 @@ class BaseCacheManager:
 
     @staticmethod
     def set(key: str, value: Any, ttl: int = CacheTTL.STANDARD) -> None:
-        """Set a value in cache"""
+        """Set a value in the cache"""
         redis_client.set(key, json.dumps(value), ex=ttl)
 
     @staticmethod
@@ -42,8 +41,68 @@ class BaseCacheManager:
 
     @staticmethod
     def key_exists(key: str) -> bool:
-        """Check if a key exists in cache"""
+        """Check if a key exists in the cache"""
         return bool(redis_client.exists(key))
+
+    @staticmethod
+    def delete_pattern(pattern: str) -> int:
+        """
+        Delete all keys matching a pattern
+
+        Args:
+            pattern: Redis a key pattern to match (e.g., "user:*:filters")
+
+        Returns:
+            Number of deleted keys
+        """
+        keys = redis_client.keys(pattern)
+        if keys:
+            return redis_client.delete(*keys)
+        return 0
+
+    @staticmethod
+    def delete_keys(keys: List[str]) -> int:
+        """
+        Delete multiple keys
+
+        Args:
+            keys: List of keys to delete
+
+        Returns:
+            Number of deleted keys
+        """
+        if not keys:
+            return 0
+
+        existing_keys = [key for key in keys if redis_client.exists(key)]
+        if existing_keys:
+            return redis_client.delete(*existing_keys)
+        return 0
+
+    @staticmethod
+    def invalidate_keys_for_entity(entity_type: str, entity_id: Union[int, str],
+                                   extra_patterns: List[str] = None) -> int:
+        """
+        Invalidate all keys related to a specific entity
+
+        Args:
+            entity_type: Type of entity (e.g., 'user', 'ad')
+            entity_id: Entity ID
+            extra_patterns: Optional additional patterns to match
+
+        Returns:
+            Number of invalidated keys
+        """
+        # Base pattern for this entity
+        pattern = f"{entity_type}:{entity_id}*"
+        count = BaseCacheManager.delete_pattern(pattern)
+
+        # Process additional patterns if provided
+        if extra_patterns:
+            for extra_pattern in extra_patterns:
+                count += BaseCacheManager.delete_pattern(extra_pattern)
+
+        return count
 
 
 class UserCacheManager(BaseCacheManager):
@@ -84,7 +143,7 @@ class SubscriptionCacheManager(BaseCacheManager):
 
     @staticmethod
     def get_user_subscriptions(user_id: int) -> Optional[List[Dict[str, Any]]]:
-        """Get cached user subscriptions list"""
+        """Get a cached user subscriptions list"""
         key = get_entity_cache_key("user_subscriptions_list", user_id)
         return BaseCacheManager.get(key)
 
@@ -142,8 +201,44 @@ class AdCacheManager(BaseCacheManager):
 
     @staticmethod
     def invalidate_all(ad_id: int, resource_url: Optional[str] = None) -> int:
-        """Invalidate all ad-related caches"""
-        return invalidate_ad_caches(ad_id, resource_url)
+        """
+        Invalidate all ad-related caches
+
+        Args:
+            ad_id: Ad ID
+            resource_url: Optional resource URL
+
+        Returns:
+            Number of invalidated keys
+        """
+        # Collect keys to delete
+        keys_to_delete = [
+            get_entity_cache_key("full_ad", ad_id),
+            get_entity_cache_key("ad_images", ad_id),
+            get_entity_cache_key("matching_users", ad_id)
+        ]
+
+        # Add resource URL-related keys
+        if resource_url:
+            keys_to_delete.extend([
+                get_entity_cache_key("extra_images", resource_url),
+                get_entity_cache_key("ad_description", resource_url)
+            ])
+
+        # Delete all collected keys
+        deleted_count = BaseCacheManager.delete_keys(keys_to_delete)
+
+        # Also delete any pattern-based keys that might be related
+        pattern_keys = [
+            f"ad:{ad_id}:*",
+            f"matching_users:*"  # This might be broader than needed
+        ]
+
+        for pattern in pattern_keys:
+            deleted_count += BaseCacheManager.delete_pattern(pattern)
+
+        logger.debug(f"Invalidated {deleted_count} cache keys for ad {ad_id}")
+        return deleted_count
 
 
 class FavoriteCacheManager(BaseCacheManager):
