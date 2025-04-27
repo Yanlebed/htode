@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import and_, or_, not_, text
 from sqlalchemy.orm import Session, joinedload
 
+from common.db.models import FavoriteAd
 from common.db.models.ad import Ad, AdImage, AdPhone
 from common.utils.cache import redis_cache, redis_client, CacheTTL
 from common.config import GEO_ID_MAPPING, get_key_by_value
@@ -284,3 +285,75 @@ class AdRepository:
         except Exception as e:
             logger.error(f"Error finding users for ad {ad_id if 'ad_id' in locals() else 'unknown'}: {e}")
             return []
+
+    @staticmethod
+    def delete_with_related(db: Session, ad_id: int) -> bool:
+        """
+        Delete an ad and all its related data (images, phones, favorites) using transaction.
+
+        Args:
+            db: Database session
+            ad_id: ID of the ad to delete
+
+        Returns:
+            True if the ad was deleted successfully, False otherwise
+        """
+        try:
+            # Get the ad first
+            ad = db.query(Ad).get(ad_id)
+            if not ad:
+                logger.warning(f"Attempted to delete non-existent ad with ID {ad_id}")
+                return False
+
+            # Delete related data
+            # Note: You can also rely on CASCADE if set up in your model relationships
+
+            # Delete from favorite_ads
+            db.query(FavoriteAd).filter(FavoriteAd.ad_id == ad_id).delete()
+
+            # Delete from ad_phones
+            db.query(AdPhone).filter(AdPhone.ad_id == ad_id).delete()
+
+            # Delete from ad_images
+            db.query(AdImage).filter(AdImage.ad_id == ad_id).delete()
+
+            # Delete the ad itself
+            db.delete(ad)
+            db.commit()
+
+            logger.info(f"Successfully deleted ad {ad_id} and related data")
+            return True
+
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Error deleting ad {ad_id}: {e}")
+            return False
+
+    @staticmethod
+    def get_older_than(db: Session, cutoff_date: datetime) -> List[Ad]:
+        """
+        Get ads older than the specified date.
+
+        Args:
+            db: Database session
+            cutoff_date: Date before which ads are considered old
+
+        Returns:
+            List of Ad objects
+        """
+        return db.query(Ad).filter(Ad.insert_time < cutoff_date).all()
+
+    @staticmethod
+    def get_ad_images(db: Session, ad_id: int) -> List[str]:
+        """
+        Get all image URLs for an ad.
+
+        Args:
+            db: Database session
+            ad_id: ID of the ad
+
+        Returns:
+            List of image URLs
+        """
+        images = db.query(AdImage).filter(AdImage.ad_id == ad_id).all()
+        return [img.image_url for img in images]

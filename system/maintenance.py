@@ -8,12 +8,44 @@ from typing import List, Tuple, Dict, Any
 
 from common.celery_app import celery_app
 from common.db.database import execute_query, get_db_connection
+from common.db.models import Ad
+from common.db.session import db_session
 from common.utils.s3_utils import delete_s3_image
 from common.utils.unified_request_utils import make_request
 from common.utils.cache import redis_client, CacheTTL
 from common.config import GEO_ID_MAPPING
+from common.verification.services.ad_service import AdService
+from common.verification.services.user_service import UserService
 
 logger = logging.getLogger(__name__)
+
+
+@celery_app.task(name='system.maintenance.check_expiring_subscriptions')
+def check_expiring_subscriptions() -> Dict[str, Any]:
+    """
+    Check for expiring subscriptions and send reminders.
+    """
+    start_time = time.time()
+
+    try:
+        with db_session() as db:
+            results = UserService.check_expiring_subscriptions(db)
+
+        execution_time = time.time() - start_time
+        logger.info(f"Checked expiring subscriptions in {execution_time:.2f} seconds")
+
+        return {
+            "status": "success",
+            "reminders_sent": results["reminders_sent"],
+            "execution_time_seconds": execution_time
+        }
+    except Exception as e:
+        logger.error(f"Error checking expiring subscriptions: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "execution_time_seconds": time.time() - start_time
+        }
 
 
 @celery_app.task(name='system.maintenance.cleanup_old_ads')
@@ -32,71 +64,34 @@ def cleanup_old_ads(days_old: int = 30, check_activity: bool = True) -> Dict[str
     logger.info(f"Starting cleanup of ads older than {days_old} days (check_activity={check_activity})")
     start_time = time.time()
 
-    # Calculate cutoff date
-    cutoff_date = datetime.now() - timedelta(days=days_old)
-    logger.info(f"Cutoff date for old ads: {cutoff_date}")
+    try:
+        with db_session() as db:
+            deleted_count, images_deleted_count = AdService.cleanup_old_ads(db, days_old, check_activity)
 
-    # Get candidate ads for cleanup
-    candidates = get_old_ads_for_cleanup(cutoff_date)
-    logger.info(f"Found {len(candidates)} ads older than {days_old} days")
+        execution_time = time.time() - start_time
+        logger.info(
+            f"Cleanup completed in {execution_time:.2f} seconds. "
+            f"Deleted: {deleted_count}, Images deleted: {images_deleted_count}"
+        )
 
-    if not candidates:
         return {
             "status": "completed",
-            "ads_checked": 0,
-            "ads_deleted": 0,
-            "images_deleted": 0,
+            "ads_deleted": deleted_count,
+            "images_deleted": images_deleted_count,
+            "execution_time_seconds": execution_time
+        }
+    except Exception as e:
+        logger.error(f"Error in cleanup_old_ads: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
             "execution_time_seconds": time.time() - start_time
         }
 
-    # Process ads in batches to avoid memory issues with large datasets
-    batch_size = 100
-    total_deleted = 0
-    total_images_deleted = 0
-    total_checked = 0
 
-    for i in range(0, len(candidates), batch_size):
-        batch = candidates[i:i + batch_size]
-        logger.info(
-            f"Processing batch {i // batch_size + 1}/{(len(candidates) + batch_size - 1) // batch_size} ({len(batch)} ads)")
-
-        # Process each ad in the batch
-        deleted, images_deleted, checked = process_ads_batch(batch, check_activity)
-
-        total_deleted += deleted
-        total_images_deleted += images_deleted
-        total_checked += checked
-
-    execution_time = time.time() - start_time
-    logger.info(
-        f"Cleanup completed in {execution_time:.2f} seconds. Checked: {total_checked}, Deleted: {total_deleted}, Images deleted: {total_images_deleted}")
-
-    return {
-        "status": "completed",
-        "ads_checked": total_checked,
-        "ads_deleted": total_deleted,
-        "images_deleted": total_images_deleted,
-        "execution_time_seconds": execution_time
-    }
-
-
-def get_old_ads_for_cleanup(cutoff_date: datetime) -> List[Dict[str, Any]]:
-    """
-    Retrieve ads older than the cutoff date for potential cleanup.
-
-    Args:
-        cutoff_date: Date before which ads are considered old
-
-    Returns:
-        List of ad dictionaries with id, external_id, resource_url
-    """
-    sql = """
-          SELECT id, external_id, resource_url
-          FROM ads
-          WHERE insert_time < %s \
-          """
-
-    return execute_query(sql, [cutoff_date], fetch=True) or []
+def get_old_ads_for_cleanup(cutoff_date: datetime) -> List[Ad]:
+    with db_session() as db:
+        return db.query(Ad).filter(Ad.insert_time < cutoff_date).all()
 
 
 def process_ads_batch(batch: List[Dict[str, Any]], check_activity: bool) -> Tuple[int, int, int]:

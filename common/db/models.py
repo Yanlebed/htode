@@ -782,27 +782,28 @@ def get_full_ad_description(resource_url):
         return None
 
 
-def store_ad_phones(resource_url, ad_id):
+def store_ad_phones(resource_url: str, ad_id: int) -> int:
     """
     Extracts phone numbers and stores them with cache invalidation
     """
     try:
         with db_session() as db:
             # First check if the ad exists in the database
-            ad = db.query(Ad).get(ad_id)
+            ad = AdRepository.get_by_id(db, ad_id)
 
             if not ad:
                 logger.warning(f"Cannot store phones for ad_id={ad_id} - ad doesn't exist in the database")
                 return 0
 
             # Extract phones from resource
+            from common.utils.phone_parser import extract_phone_numbers_from_resource
             result = extract_phone_numbers_from_resource(resource_url)
             phones = result.phone_numbers
             viber_link = result.viber_link
 
             # Delete existing phones for this ad to avoid duplicates
-            # This could be added to the AdRepository if not already there
-            db.query(AdPhone).filter(AdPhone.ad_id == ad_id).delete()
+            phones_count = db.query(AdPhone).filter(AdPhone.ad_id == ad_id).delete()
+            logger.info(f"Deleted {phones_count} existing phones for ad_id={ad_id}")
 
             phones_added = 0
 
