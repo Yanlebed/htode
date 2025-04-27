@@ -4,12 +4,14 @@ import time
 import mimetypes
 import boto3
 import redis
-import json
 
 from botocore.exceptions import ClientError
 from common.config import AWS_CONFIG, REDIS_URL
 from common.utils.unified_request_utils import make_request
-from common.db.database import execute_query
+from common.db.session import db_session
+from common.db.repositories.ad_repository import AdRepository
+from common.utils.cache_managers import AdCacheManager
+
 
 logger = logging.getLogger(__name__)
 
@@ -163,29 +165,21 @@ def _upload_image_to_s3(image_url, ad_unique_id, max_retries=3, retry_delay=1):
 
 
 def get_image_urls_for_ad(ad_id, max_images=5):
-    """Get S3 image URLs for an ad from the database with caching"""
-    # Try cache first
-    cache_key = f"image_urls:{ad_id}"
-    cached = redis_client.get(cache_key)
-    if cached:
-        return json.loads(cached)
+    """Get S3 image URLs for an ad using the repository pattern with caching"""
+    # Try to get from the cache first
+    cached_images = AdCacheManager.get_ad_images(ad_id)
+    if cached_images:
+        # Limit to max_images if needed
+        return cached_images[:max_images] if max_images else cached_images
 
-    # If not in cache, query database
+    # Not in cache, get from a database
     try:
-        sql = """
-              SELECT image_url \
-              FROM ad_images
-              WHERE ad_id = %s
-              ORDER BY id
-                  LIMIT %s \
-              """
-        rows = execute_query(sql, [ad_id, max_images], fetch=True)
-        if rows:
-            urls = [row['image_url'] for row in rows]
-            # Cache for 1 hour (images rarely change)
-            redis_client.set(cache_key, json.dumps(urls), ex=3600)
-            return urls
-        return []
+        with db_session() as db:
+            images = AdRepository.get_ad_images(db, ad_id)
+
+            # Cache the result for future requests (done in AdRepository)
+            # Just return the result here
+            return images[:max_images] if max_images else images
     except Exception as e:
         logger.error(f"Error retrieving image URLs for ad {ad_id}: {e}")
         return []
