@@ -228,7 +228,6 @@ class SubscriptionRepository:
         db.commit()
         return True
 
-
     @staticmethod
     def add_subscription(db: Session, user_id: int, filter_data: Dict[str, Any]) -> UserFilter:
         """Add a new subscription"""
@@ -244,3 +243,50 @@ class SubscriptionRepository:
         db.commit()
         db.refresh(user_filter)
         return user_filter
+
+    @staticmethod
+    def enable_subscription_by_id(db: Session, subscription_id: int, user_id: int) -> bool:
+        """
+        Enable a specific subscription by its ID.
+
+        Args:
+            db: Database session
+            subscription_id: ID of the subscription to enable
+            user_id: ID of the user who owns the subscription
+
+        Returns:
+            True if successful, False if subscription not found
+        """
+        subscription = db.query(UserFilter).filter(
+            UserFilter.id == subscription_id,
+            UserFilter.user_id == user_id
+        ).first()
+
+        if not subscription:
+            return False
+
+        subscription.is_paused = False
+        db.commit()
+        return True
+
+
+    @staticmethod
+    def get_subscription_data(db: Session, user_id: int) -> Optional[Dict[str, Any]]:
+        """Get subscription data for a user"""
+        user_filter = db.query(UserFilter).filter(UserFilter.user_id == user_id).first()
+
+        if not user_filter:
+            return None
+
+        return {
+            "id": user_filter.id,
+            "user_id": user_filter.user_id,
+            "property_type": user_filter.property_type,
+            "city": user_filter.city,
+            "rooms_count": user_filter.rooms_count,
+            "price_min": user_filter.price_min,
+            "price_max": user_filter.price_max,
+            "is_paused": user_filter.is_paused,
+            # Add other fields as needed
+        }
+

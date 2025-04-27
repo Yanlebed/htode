@@ -17,8 +17,7 @@ from ..bot import dp, bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 
 from common.config import build_ad_text, REDIS_URL
-from common.db.models import add_favorite_ad, remove_favorite_ad, list_favorites, get_db_user_id_by_telegram_id, \
-    get_full_ad_description
+
 from common.db.database import execute_query
 from ..utils.message_utils import safe_send_message, safe_send_photo, safe_answer_callback_query
 

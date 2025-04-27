@@ -8,7 +8,7 @@ import logging
 from typing import List, Dict, Any, Optional, Union
 from datetime import datetime
 
-from common.db.models import AdPhone, Ad, UserFilter
+from common.db.models import AdPhone, UserFilter, Ad
 from .database import execute_query
 from common.config import GEO_ID_MAPPING, get_key_by_value
 from common.utils.phone_parser import extract_phone_numbers_from_resource
@@ -717,8 +717,7 @@ def get_full_ad_description(resource_url):
 
     try:
         with db_session() as db:
-            ad = AdRepository.get_by_resource_url(db, resource_url)
-            description = ad.description if ad else None
+            description = AdRepository.get_description_by_resource_url(db, resource_url)
 
         if description:
             # Cache for 1 hour - descriptions rarely change

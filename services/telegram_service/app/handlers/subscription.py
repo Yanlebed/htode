@@ -4,6 +4,7 @@ import logging
 
 from aiogram import types
 
+from common.db.repositories.subscription_repository import SubscriptionRepository
 from common.db.session import db_session
 from ..bot import dp, bot
 from common.db.models import disable_subscription_for_user, \
@@ -111,6 +112,7 @@ async def handle_sub_pause(callback_query: types.CallbackQuery):
     await handle_sub_open(callback_query)
 
 
+# Refactored handler using repository
 @dp.callback_query_handler(lambda c: c.data.startswith("sub_resume:"))
 async def handle_sub_resume(callback_query: types.CallbackQuery):
     _, sub_id_str, page_str = callback_query.data.split(":")
@@ -120,9 +122,14 @@ async def handle_sub_resume(callback_query: types.CallbackQuery):
     telegram_id = callback_query.from_user.id
     db_user_id = get_db_user_id_by_telegram_id(telegram_id)
 
-    sql = "UPDATE user_filters SET is_paused=false WHERE id=%s AND user_id=%s"
-    execute_query(sql, [sub_id, db_user_id])
-    await callback_query.answer("Підписку поновлено.")
+    # Use repository instead of raw SQL
+    with db_session() as db:
+        success = SubscriptionRepository.enable_subscription_by_id(db, sub_id, db_user_id)
+        if success:
+            await callback_query.answer("Підписку поновлено.")
+        else:
+            await callback_query.answer("Підписка не знайдена.")
+            return
 
     # Re-open subscription detail
     await handle_sub_open(callback_query)

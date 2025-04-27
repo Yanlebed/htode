@@ -87,13 +87,47 @@ class UserRepository:
         return True
 
     @staticmethod
-    def create_user(db: Session, user_data: dict) -> User:
-        """Create a new user"""
+    def create_messenger_user(
+            db: Session, messenger_id: str, messenger_type: str, free_until: datetime
+    ) -> User:
+        """Create a new user with messenger ID"""
+        messenger_field = f"{messenger_type}_id"
+        user_data = {
+            messenger_field: messenger_id,
+            "free_until": free_until
+        }
         user = User(**user_data)
         db.add(user)
         db.commit()
         db.refresh(user)
         return user
+
+    @staticmethod
+    def update_messenger_id(
+            db: Session, user_id: int, messenger_id: str, messenger_type: str
+    ) -> bool:
+        """Update/set a messenger ID for a user"""
+        user = UserRepository.get_by_id(db, user_id)
+        if not user:
+            return False
+
+        setattr(user, f"{messenger_type}_id", messenger_id)
+        db.commit()
+        return True
+
+    @staticmethod
+    def link_phone_number(
+            db: Session, user_id: int, phone_number: str, verified: bool = False
+    ) -> bool:
+        """Link a phone number to a user"""
+        user = UserRepository.get_by_id(db, user_id)
+        if not user:
+            return False
+
+        user.phone_number = phone_number
+        user.phone_verified = verified
+        db.commit()
+        return True
 
     @staticmethod
     def get_users_with_expiring_subscription(db: Session, days: int) -> List[User]:
@@ -134,3 +168,37 @@ class UserRepository:
         return db.query(User).filter(
             User.last_active > cutoff_date
         ).limit(limit).all()
+
+    @staticmethod
+    def update_subscription_end_date(
+            db: Session, user_id: int, subscription_until: datetime
+    ) -> bool:
+        """Update user subscription end date"""
+        user = UserRepository.get_by_id(db, user_id)
+        if not user:
+            return False
+
+        user.subscription_until = subscription_until
+        db.commit()
+        return True
+
+    @staticmethod
+    def get_user_id_by_telegram_id(db: Session, telegram_id: str) -> Optional[int]:
+        """Get database user ID from Telegram ID"""
+        user = db.query(User).filter(User.telegram_id == telegram_id).first()
+        return user.id if user else None
+
+    @staticmethod
+    def get_subscription_until(db: Session, user_id: int, free: bool = False) -> Optional[str]:
+        """Get subscription expiration date for a user"""
+        user = db.query(User).filter(User.id == user_id).first()
+
+        if not user:
+            return None
+
+        # Get the appropriate date field
+        date_field = user.free_until if free else user.subscription_until
+
+        if date_field:
+            return date_field.strftime("%d.%m.%Y")
+        return None
