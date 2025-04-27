@@ -300,3 +300,21 @@ class UserRepository:
             db.rollback()
             logger.error(f"Error marking Viber conversation as expired for user {user_id}: {e}")
             return False
+
+    @staticmethod
+    def create_user(db: Session, user_data: Dict[str, Any]) -> User:
+        """
+        Create a new user with the provided data.
+
+        Args:
+            db: Database session
+            user_data: Dictionary with user data
+
+        Returns:
+            Created User instance
+        """
+        user = User(**user_data)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        return user

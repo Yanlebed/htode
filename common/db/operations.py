@@ -5,7 +5,6 @@ This module contains database operations that combine models and repositories.
 It should be imported after both models and repositories are initialized.
 """
 
-import json
 import logging
 from typing import List, Dict, Any, Optional, Union
 from datetime import datetime, timedelta
@@ -27,8 +26,7 @@ from common.utils.cache_invalidation import (
     invalidate_user_caches,
     invalidate_subscription_caches,
     invalidate_ad_caches,
-    invalidate_favorite_caches,
-    warm_cache_for_user
+    invalidate_favorite_caches
 )
 
 from common.utils.cache_managers import (
@@ -338,26 +336,25 @@ def batch_find_users_for_ads(ads):
             if not ad_id:
                 continue
 
-            # Use repository to find matching users for this ad
-            with db_session() as db:
-                # Convert dict to Ad object if needed
-                if isinstance(ad, dict):
-                    existing_ad = db.query(Ad).get(ad_id)
-                    if not existing_ad:
-                        # Create temporary Ad object for matching
-                        ad_obj = Ad(
-                            id=ad_id,
-                            property_type=ad.get('property_type'),
-                            city=ad.get('city'),
-                            rooms_count=ad.get('rooms_count'),
-                            price=ad.get('price')
-                        )
-                    else:
-                        ad_obj = existing_ad
+            # Convert dict to Ad object if needed
+            if isinstance(ad, dict):
+                existing_ad = db.query(Ad).get(ad_id)
+                if not existing_ad:
+                    # Create temporary Ad object for matching
+                    ad_obj = Ad(
+                        id=ad_id,
+                        property_type=ad.get('property_type'),
+                        city=ad.get('city'),
+                        rooms_count=ad.get('rooms_count'),
+                        price=ad.get('price')
+                    )
                 else:
-                    ad_obj = ad
+                    ad_obj = existing_ad
+            else:
+                ad_obj = ad
 
-                matching_users = AdRepository.find_users_for_ad(db, ad_obj)
+            # Use repository to find matching users
+            matching_users = AdRepository.find_users_for_ad(db, ad_obj)
 
             # Store results and cache them
             results[ad_id] = matching_users
@@ -371,7 +368,7 @@ def get_subscription_data_for_user(user_id: int) -> dict:
     """
     Get subscription data for a user with caching
     """
-    # Try to get from cache using the cache manager
+    # Try to get from the cache using the cache manager
     cached_data = SubscriptionCacheManager.get_user_subscriptions(user_id)
     if cached_data:
         return cached_data

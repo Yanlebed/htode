@@ -7,7 +7,10 @@ import os
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from common.db.database import execute_query
+
+from common.db.session import db_session
+from common.db.repositories.email_verification_repository import EmailVerificationRepository
+from common.db.repositories.user_repository import UserRepository
 
 logger = logging.getLogger(__name__)
 
@@ -44,16 +47,9 @@ def create_verification_token(email):
     token = generate_verification_token()
     expires_at = datetime.now() + timedelta(minutes=EMAIL_VERIFICATION_EXPIRY_MINUTES)
 
-    # Delete any existing tokens for this email
-    delete_sql = "DELETE FROM email_verification_tokens WHERE email = %s"
-    execute_query(delete_sql, [email])
-
-    # Insert new token
-    insert_sql = """
-                 INSERT INTO email_verification_tokens (email, token, expires_at)
-                 VALUES (%s, %s, %s) \
-                 """
-    execute_query(insert_sql, [email, token, expires_at])
+    with db_session() as db:
+        # Create token using repository
+        EmailVerificationRepository.create_token(db, email, token, expires_at)
 
     # Send verification email
     send_verification_email(email, token)
@@ -72,65 +68,48 @@ def verify_token(email, token):
     # Normalize email
     email = email.lower().strip()
 
-    # Get the verification record
-    select_sql = """
-                 SELECT id, token, expires_at, attempts
-                 FROM email_verification_tokens
-                 WHERE email = %s \
-                 """
-    record = execute_query(select_sql, [email], fetchone=True)
+    with db_session() as db:
+        # Get the verification record
+        token_record = EmailVerificationRepository.get_token(db, email)
 
-    if not record:
-        return False, "No verification token found for this email"
+        if not token_record:
+            return False, "No verification token found for this email"
 
-    # Check if expired
-    if datetime.now() > record['expires_at']:
-        return False, "Verification token has expired"
+        # Check if expired
+        if datetime.now() > token_record.expires_at:
+            return False, "Verification token has expired"
 
-    # Check attempts
-    if record['attempts'] >= MAX_VERIFICATION_ATTEMPTS:
-        return False, "Too many verification attempts"
+        # Check attempts
+        if token_record.attempts >= MAX_VERIFICATION_ATTEMPTS:
+            return False, "Too many verification attempts"
 
-    # Increment attempt counter
-    update_sql = """
-                 UPDATE email_verification_tokens
-                 SET attempts = attempts + 1
-                 WHERE id = %s \
-                 """
-    execute_query(update_sql, [record['id']])
+        # Verify token
+        if not EmailVerificationRepository.verify_token(db, email, token):
+            return False, "Invalid verification token"
 
-    # Check token
-    if record['token'] != token:
-        return False, "Invalid verification token"
+        # Mark email as verified
+        EmailVerificationRepository.mark_email_verified(db, email)
 
-    # Mark email as verified
-    mark_email_verified(email)
+        # Delete the token
+        EmailVerificationRepository.delete_token(db, email)
 
-    # Delete the token
-    delete_sql = "DELETE FROM email_verification_tokens WHERE id = %s"
-    execute_query(delete_sql, [record['id']])
-
-    return True, None
+        return True, None
 
 
 def mark_email_verified(email):
     """Mark an email as verified"""
-    update_sql = """
-                 UPDATE users
-                 SET email_verified = TRUE
-                 WHERE email = %s \
-                 """
-    execute_query(update_sql, [email])
-    logger.info(f"Marked email {email} as verified")
+    with db_session() as db:
+        EmailVerificationRepository.mark_email_verified(db, email)
+        logger.info(f"Marked email {email} as verified")
 
 
 def send_verification_email(email, token):
-    """Send verification email with token"""
+    """Send verification email with a token"""
     if not EMAIL_SERVICE_ENABLED:
         # For development, just log the token
         logger.info(f"EMAIL SERVICE DISABLED. Would send token {token} to {email}")
 
-        # Write to file in debug mode
+        # Write to the file in debug mode
         if EMAIL_SERVICE_DEBUG:
             try:
                 with open(f"email_token_{email.replace('@', '_at_')}.txt", "w") as f:
@@ -141,7 +120,7 @@ def send_verification_email(email, token):
         return True
 
     try:
-        # Create message
+        # Create a message
         msg = MIMEMultipart()
         msg['From'] = FROM_EMAIL
         msg['To'] = email
@@ -179,7 +158,7 @@ def send_verification_email(email, token):
 def link_messenger_account(email, messenger_type, messenger_id):
     """
     Link a messenger account to a user with the given email.
-    If user with email doesn't exist, creates a new user.
+    If a user with email doesn't exist, creates a new user.
 
     Returns:
         The user's database ID
@@ -187,46 +166,39 @@ def link_messenger_account(email, messenger_type, messenger_id):
     # Normalize email
     email = email.lower().strip()
 
-    # Check if user with this email exists
-    select_sql = "SELECT id FROM users WHERE email = %s"
-    user = execute_query(select_sql, [email], fetchone=True)
+    with db_session() as db:
+        # Check if the user with this email exists
+        user = UserRepository.get_by_email(db, email)
 
-    if user:
-        # Update existing user
-        if messenger_type == "telegram":
-            update_sql = "UPDATE users SET telegram_id = %s WHERE id = %s"
-        elif messenger_type == "viber":
-            update_sql = "UPDATE users SET viber_id = %s WHERE id = %s"
-        elif messenger_type == "whatsapp":
-            update_sql = "UPDATE users SET whatsapp_id = %s WHERE id = %s"
+        if user:
+            # Update existing user with messenger ID
+            if messenger_type == "telegram":
+                user.telegram_id = messenger_id
+            elif messenger_type == "viber":
+                user.viber_id = messenger_id
+            elif messenger_type == "whatsapp":
+                user.whatsapp_id = messenger_id
+            else:
+                raise ValueError(f"Invalid messenger type: {messenger_type}")
+
+            db.commit()
+            logger.info(f"Linked {messenger_type} account {messenger_id} to existing user {user.id}")
+            return user.id
         else:
-            raise ValueError(f"Invalid messenger type: {messenger_type}")
+            # Create a new user with this email and messenger ID
+            free_until = datetime.now() + timedelta(days=7)
 
-        execute_query(update_sql, [messenger_id, user['id']])
-        logger.info(f"Linked {messenger_type} account {messenger_id} to existing user {user['id']}")
-        return user['id']
-    else:
-        # Create new user with this email and messenger ID
-        free_until = (datetime.now() + timedelta(days=7)).isoformat()
+            # Prepare user data
+            user_data = {
+                "email": email,
+                "email_verified": True,
+                "free_until": free_until
+            }
 
-        if messenger_type == "telegram":
-            insert_sql = """
-                         INSERT INTO users (email, email_verified, telegram_id, free_until)
-                         VALUES (%s, TRUE, %s, %s) RETURNING id \
-                         """
-        elif messenger_type == "viber":
-            insert_sql = """
-                         INSERT INTO users (email, email_verified, viber_id, free_until)
-                         VALUES (%s, TRUE, %s, %s) RETURNING id \
-                         """
-        elif messenger_type == "whatsapp":
-            insert_sql = """
-                         INSERT INTO users (email, email_verified, whatsapp_id, free_until)
-                         VALUES (%s, TRUE, %s, %s) RETURNING id \
-                         """
-        else:
-            raise ValueError(f"Invalid messenger type: {messenger_type}")
+            # Add messenger-specific ID
+            user_data[f"{messenger_type}_id"] = messenger_id
 
-        user = execute_query(insert_sql, [email, messenger_id, free_until], fetchone=True, commit=True)
-        logger.info(f"Created new user with {messenger_type} account {messenger_id}")
-        return user['id']
+            # Create user
+            user = UserRepository.create_user(db, user_data)
+            logger.info(f"Created new user with {messenger_type} account {messenger_id}")
+            return user.id

@@ -105,7 +105,6 @@ class AdRepository:
         return query.all()
 
     @staticmethod
-    @staticmethod
     def get_full_ad_data(db: Session, ad_id: int) -> Optional[Dict[str, Any]]:
         """Get complete ad data with images and phones"""
         # Try to get from cache first using the cache manager
@@ -116,8 +115,8 @@ class AdRepository:
         # Cache miss, query database
         ad = db.query(Ad) \
             .options(
-            joinedload(Ad.images),
-            joinedload(Ad.phones)
+            joinedload(Ad.images).limit(20),  # Limit images to 20
+            joinedload(Ad.phones).limit(10)  # Limit phones to 10
         ) \
             .filter(Ad.id == ad_id) \
             .first()

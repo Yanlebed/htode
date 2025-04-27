@@ -8,6 +8,7 @@ from typing import Dict, Any
 from sqlalchemy import or_, func
 
 from common.celery_app import celery_app
+from common.db.operations import batch_get_full_ad_data, batch_get_user_filters
 from common.db.session import db_session
 from common.db.models.favorite import FavoriteAd
 from common.db.models.verification import VerificationCode
@@ -17,6 +18,7 @@ from common.db.repositories.ad_repository import AdRepository
 from common.utils.s3_utils import delete_s3_image
 from common.utils.cache import redis_client, CacheTTL
 from common.config import GEO_ID_MAPPING
+from common.utils.cache_managers import BaseCacheManager, AdCacheManager, UserCacheManager
 
 logger = logging.getLogger(__name__)
 
@@ -200,23 +202,11 @@ def clear_ad_cache(ad_id: int, resource_url: str = None):
         ad_id: ID of the ad
         resource_url: Optional resource URL for additional cache keys
     """
-    keys_to_delete = [
-        f"full_ad:{ad_id}",
-        f"ad_images:{ad_id}",
-        f"matching_users:{ad_id}"
-    ]
+    from common.utils.cache_managers import AdCacheManager
 
-    if resource_url:
-        keys_to_delete.extend([
-            f"extra_images:{resource_url}",
-            f"ad_description:{resource_url}"
-        ])
-
-    # Delete all keys that exist
-    existing_keys = [key for key in keys_to_delete if redis_client.exists(key)]
-    if existing_keys:
-        redis_client.delete(*existing_keys)
-        logger.debug(f"Cleared {len(existing_keys)} cache keys for ad {ad_id}")
+    # Use the cache manager to handle invalidation
+    AdCacheManager.invalidate_all(ad_id, resource_url)
+    logger.debug(f"Cleared cache for ad {ad_id}")
 
 
 @celery_app.task(name='system.maintenance.cleanup_expired_verification_codes')
@@ -273,52 +263,46 @@ def cleanup_redis_cache(pattern: str = None, older_than_days: int = None) -> Dic
         Dictionary with count of deleted cache entries
     """
     start_time = time.time()
-    deleted_count = 0
 
     if not pattern:
         # Use a generic pattern to match all cache keys
         pattern = "*"
 
-    # Get all keys matching the pattern
-    matching_keys = redis_client.keys(pattern)
-    logger.info(f"Found {len(matching_keys)} keys matching pattern: {pattern}")
-
-    if not matching_keys:
-        return {"deleted_count": 0, "execution_time_seconds": time.time() - start_time}
+    deleted_count = 0
 
     if older_than_days is not None:
         # Only delete keys older than the specified threshold
-        keys_to_delete = []
+        # Using a custom ttl-based approach since Redis doesn't track key age directly
+        max_ttl = CacheTTL.EXTENDED  # 7 days
 
-        # Use pipeline for efficiency
-        pipe = redis_client.pipeline()
-        for key in matching_keys:
-            pipe.ttl(key)
-        ttls = pipe.execute()
+        # Get all keys matching the pattern
+        matching_keys = redis_client.keys(pattern)
+        logger.info(f"Found {len(matching_keys)} keys matching pattern: {pattern}")
 
-        # Calculate which keys to delete based on TTL
-        for i, key in enumerate(matching_keys):
-            ttl = ttls[i]
+        if matching_keys:
+            # Check TTL for each key
+            keys_to_delete = []
 
-            # If TTL is -1 (no expiration) or -2 (key doesn't exist), skip
-            if ttl < 0:
-                continue
+            for key in matching_keys:
+                ttl = redis_client.ttl(key)
 
-            # Calculate original TTL based on remaining TTL
-            max_ttl = CacheTTL.EXTENDED  # Assume 7 days as maximum TTL
-            age_seconds = max_ttl - ttl
-            age_days = age_seconds / 86400  # Convert to days
+                # If TTL is -1 (no expiration) or -2 (key doesn't exist), skip
+                if ttl < 0:
+                    continue
 
-            if age_days > older_than_days:
-                keys_to_delete.append(key)
+                # Calculate age in the past days
+                age_seconds = max_ttl - ttl
+                age_days = age_seconds / 86400  # Convert to days
 
-        if keys_to_delete:
-            redis_client.delete(*keys_to_delete)
-            deleted_count = len(keys_to_delete)
+                if age_days > older_than_days:
+                    keys_to_delete.append(key)
+
+            # Delete the filtered keys
+            if keys_to_delete:
+                deleted_count = BaseCacheManager.delete_keys(keys_to_delete)
     else:
         # Delete all matching keys
-        redis_client.delete(*matching_keys)
-        deleted_count = len(matching_keys)
+        deleted_count = BaseCacheManager.delete_pattern(pattern)
 
     execution_time = time.time() - start_time
     logger.info(f"Deleted {deleted_count} cache keys in {execution_time:.2f} seconds")
@@ -403,9 +387,6 @@ def optimize_database() -> Dict[str, Any]:
 def cache_warming() -> Dict[str, int]:
     """
     Warm up cache for frequently accessed data
-
-    Returns:
-        Dictionary with count of items cached
     """
     start_time = time.time()
     cached_items = 0
@@ -420,19 +401,18 @@ def cache_warming() -> Dict[str, int]:
                 or_(User.subscription_until > datetime.now(), User.free_until > datetime.now())
             ).distinct().all()
 
-            # Cache city data
+            # Cache city data using BaseCacheManager
             for city_row in active_cities:
                 city_id = city_row[0]  # Extract the city ID from the row
                 city_key = f"city:{city_id}"
-                redis_client.set(city_key, {
+                city_data = {
                     "id": city_id,
                     "name": GEO_ID_MAPPING.get(city_id, "Unknown")
-                }, ex=CacheTTL.LONG)  # City data rarely changes
+                }
+                BaseCacheManager.set(city_key, city_data, CacheTTL.LONG)
                 cached_items += 1
 
             # 2. Warm up cache for most viewed ads
-            # This is a more complex query that might be easier with raw SQL
-            # Here's the ORM equivalent:
             top_ads_subquery = db.query(
                 FavoriteAd.ad_id,
                 func.count(FavoriteAd.ad_id).label('view_count')
@@ -448,9 +428,13 @@ def cache_warming() -> Dict[str, int]:
                 ad_ids = [row[0] for row in top_ads]
 
                 # Batch fetch ad data
-                from common.db.operations import batch_get_full_ad_data
-                batch_get_full_ad_data(ad_ids)
-                cached_items += len(ad_ids)
+                ad_data_dict = batch_get_full_ad_data(ad_ids)
+
+                # Cache individually using AdCacheManager
+                for ad_id, ad_data in ad_data_dict.items():
+                    if ad_data:
+                        AdCacheManager.set_full_ad_data(ad_id, ad_data)
+                        cached_items += 1
 
             # 3. Warm up cache for active users
             active_users = db.query(User.id).filter(
@@ -461,9 +445,12 @@ def cache_warming() -> Dict[str, int]:
                 user_ids = [row[0] for row in active_users]
 
                 # Batch fetch user filters
-                from common.db.operations import batch_get_user_filters
-                batch_get_user_filters(user_ids)
-                cached_items += len(user_ids)
+                user_filters = batch_get_user_filters(user_ids)
+
+                # Cache individually using UserCacheManager
+                for user_id, filters in user_filters.items():
+                    UserCacheManager.set_filters(user_id, filters)
+                    cached_items += 1
 
     except Exception as e:
         logger.error(f"Error during cache warming: {e}")
@@ -660,7 +647,7 @@ def check_subscription_statistics() -> Dict[str, Any]:
                 "subscription_counts": subscription_counts
             }
 
-            redis_client.set("subscription_statistics", statistics, ex=86400)  # Cache for 1 day
+            BaseCacheManager.set("subscription_statistics", statistics, CacheTTL.LONG)
 
             execution_time = time.time() - start_time
 

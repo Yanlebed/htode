@@ -1,6 +1,5 @@
 # common/db/base.py
 from sqlalchemy import MetaData
-from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import registry
 
 # Use a naming convention for constraints for Alembic
