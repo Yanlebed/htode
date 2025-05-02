@@ -18,6 +18,21 @@ x-aws-variables: &aws-variables
   AWS_S3_BUCKET_PREFIX: "${AWS_S3_BUCKET_PREFIX:-ads-images/}"
   CLOUDFRONT_DOMAIN: "${CLOUDFRONT_DOMAIN:-https://d3h86hbbdu2c7h.cloudfront.net}"
 
+# Combined environment variables
+x-combined-env: &combined-env
+  REDIS_URL: "${REDIS_URL:-redis://redis:6379/0}"
+  DB_HOST: "${DB_HOST:-postgres}"
+  DB_PORT: "${DB_PORT:-5432}"
+  DB_NAME: "${DB_NAME:-mydb}"
+  DB_USER: "${DB_USER:-myuser}"
+  DB_PASS: "${DB_PASS:-mypass}"
+  AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID}"
+  AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY}"
+  AWS_DEFAULT_REGION: "${AWS_DEFAULT_REGION:-eu-west-1}"
+  AWS_S3_BUCKET: "${AWS_S3_BUCKET:-htodebucket}"
+  AWS_S3_BUCKET_PREFIX: "${AWS_S3_BUCKET_PREFIX:-ads-images/}"
+  CLOUDFRONT_DOMAIN: "${CLOUDFRONT_DOMAIN:-https://d3h86hbbdu2c7h.cloudfront.net}"
+
 # Define resource limits for services with Playwright
 x-playwright-resource-limits: &playwright-resource-limits
   deploy:
@@ -57,14 +72,55 @@ x-small-resource-limits: &small-resource-limits
         cpus: '0.10'
         memory: 128M
 
+# Define combined settings for reuse
+x-combined-settings: &combined-settings
+  networks:
+    - app_net
+  restart: unless-stopped
+  deploy:
+    resources:
+      limits:
+        cpus: '0.50'
+        memory: 512M
+      reservations:
+        cpus: '0.25'
+        memory: 256M
+
+# Define combined small settings
+x-combined-small-settings: &combined-small-settings
+  networks:
+    - app_net
+  restart: unless-stopped
+  deploy:
+    resources:
+      limits:
+        cpus: '0.30'
+        memory: 256M
+      reservations:
+        cpus: '0.10'
+        memory: 128M
+
+# Define combined playwright settings
+x-combined-playwright-settings: &combined-playwright-settings
+  networks:
+    - app_net
+  restart: unless-stopped
+  deploy:
+    resources:
+      limits:
+        cpus: '1.0'
+        memory: 1G
+      reservations:
+        cpus: '0.5'
+        memory: 512M
+
 services:
   redis:
     image: redis:7
     container_name: my_redis
-    <<: *service-settings
-    <<: *resource-limits
+    <<: *combined-settings
     ports:
-      - "6379:6379"
+      - "6380:6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -77,14 +133,13 @@ services:
   postgres:
     image: postgres:14
     container_name: my_postgres
-    <<: *service-settings
-    <<: *resource-limits
+    <<: *combined-settings
     environment:
       POSTGRES_DB: "${DB_NAME:-mydb}"
       POSTGRES_USER: "${DB_USER:-myuser}"
       POSTGRES_PASSWORD: "${DB_PASS:-mypass}"
     ports:
-      - "5432:5432"
+      - "5434:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
@@ -101,8 +156,7 @@ services:
     env_file:
       - .env
     container_name: telegram_service
-    <<: *service-settings
-    <<: *resource-limits
+    <<: *combined-settings
     build:
       context: .
       dockerfile: services/telegram_service/Dockerfile
@@ -124,8 +178,7 @@ services:
     env_file:
       - .env
     container_name: telegram_worker
-    <<: *service-settings
-    <<: *resource-limits
+    <<: *combined-settings
     build:
       context: .
       dockerfile: services/telegram_service/Dockerfile
@@ -189,8 +242,7 @@ services:
     env_file:
       - .env
     container_name: viber_worker
-    <<: *service-settings
-    <<: *resource-limits
+    <<: *combined-settings
     build:
       context: .
       dockerfile: services/viber_service/Dockerfile
@@ -257,8 +309,7 @@ services:
     env_file:
       - .env
     container_name: whatsapp_worker
-    <<: *service-settings
-    <<: *resource-limits
+    <<: *combined-settings
     build:
       context: .
       dockerfile: services/whatsapp_service/Dockerfile
@@ -282,8 +333,7 @@ services:
 
   scraper_worker_service:
     container_name: scraper_worker_service
-    <<: *service-settings
-    <<: *playwright-resource-limits  # Use the new resource limits
+    <<: *combined-playwright-settings
     build:
       context: .
       dockerfile: services/scraper_service/Dockerfile
@@ -293,8 +343,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      <<: *common-variables
-      <<: *aws-variables
+      <<: *combined-env
     command: celery -A scraper_service.app.celery_app worker --loglevel=info -Q scrape_queue --max-tasks-per-child=50
     healthcheck:
       test: [ "CMD", "celery", "inspect", "ping", "-d", "celery@scraper_worker_service" ]
@@ -304,8 +353,7 @@ services:
 
   scraper_beat_service:
     container_name: scraper_beat_service
-    <<: *service-settings
-    <<: *small-resource-limits
+    <<: *combined-small-settings
     build:
       context: .
       dockerfile: services/scraper_service/Dockerfile
@@ -315,8 +363,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      <<: *common-variables
-      <<: *aws-variables
+      <<: *combined-env
     command: celery -A scraper_service.app.celery_app beat --loglevel=info
 
   scraper_init_service:
@@ -324,7 +371,14 @@ services:
     build:
       context: .
       dockerfile: services/scraper_service/Dockerfile
-    <<: *small-resource-limits
+    deploy:
+      resources:
+        limits:
+          cpus: '0.30'
+          memory: 256M
+        reservations:
+          cpus: '0.10'
+          memory: 128M
     depends_on:
       redis:
         condition: service_healthy
@@ -333,8 +387,7 @@ services:
       scraper_worker_service:
         condition: service_started
     environment:
-      <<: *common-variables
-      <<: *aws-variables
+      <<: *combined-env
     networks:
       - app_net
     command: >
@@ -351,8 +404,7 @@ services:
 
   notifier_service:
     container_name: notifier_service
-    <<: *service-settings
-    <<: *resource-limits
+    <<: *combined-settings
     build:
       context: .
       dockerfile: services/notifier_service/Dockerfile
@@ -362,8 +414,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      <<: *common-variables
-      <<: *aws-variables
+      <<: *combined-env
     command: celery -A app.celery_app.celery_app worker --loglevel=info -Q notify_queue
     healthcheck:
       test: [ "CMD", "celery", "inspect", "ping", "-d", "celery@notifier_service" ]
@@ -373,11 +424,13 @@ services:
 
   mini_webapp_service:
     container_name: mini_webapp
-    <<: *service-settings
-    <<: *small-resource-limits
+    <<: *combined-small-settings
     build:
       context: services/webapps
       dockerfile: Dockerfile
+    volumes:
+      - ./services/webapps:/app
+      - ./common:/app/common
     ports:
       - "8080:8080"
     environment:
@@ -392,8 +445,7 @@ services:
 
   maintenance_worker_service:
     container_name: maintenance_worker
-    <<: *service-settings
-    <<: *resource-limits
+    <<: *combined-settings
     build:
       context: .
       dockerfile: services/scraper_service/Dockerfile  # Reuse scraper Dockerfile as it has similar dependencies
@@ -403,8 +455,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      <<: *common-variables
-      <<: *aws-variables
+      <<: *combined-env
     volumes:
       - ./common:/app/common
       - ./system:/app/system  # Mount the new maintenance module

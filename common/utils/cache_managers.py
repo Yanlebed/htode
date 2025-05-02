@@ -3,13 +3,8 @@ import json
 import logging
 from typing import Dict, Any, List, Optional, Union
 
-from common.utils.cache import redis_client, CacheTTL
-from common.utils.cache_invalidation import (
-    get_entity_cache_key,
-    invalidate_user_caches,
-    invalidate_subscription_caches,
-    invalidate_favorite_caches
-)
+from common.utils.cache import redis_client, CacheTTL, get_entity_cache_key, invalidate_user_caches, \
+    invalidate_subscription_caches, invalidate_favorite_caches
 
 logger = logging.getLogger(__name__)
 

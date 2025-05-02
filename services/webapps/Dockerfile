@@ -5,7 +5,7 @@ FROM python:3.10-slim
 WORKDIR /app
 
 # Install FastAPI and other dependencies
-RUN pip install --no-cache-dir fastapi uvicorn jinja2 pydantic redis psycopg2-binary
+RUN pip install --no-cache-dir fastapi uvicorn jinja2 pydantic redis psycopg2-binary sqlalchemy python-dotenv
 
 # Copy the mini_webapp.py into the container
 COPY mini_webapp.py /app/mini_webapp.py
