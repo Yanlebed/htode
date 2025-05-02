@@ -191,7 +191,7 @@ services:
       <<: *common-variables
       TELEGRAM_TOKEN: "${TELEGRAM_TOKEN}"
       PYTHONPATH: "/app:/app/common"  # Important: set the correct Python path
-    command: celery -A app.celery_app worker -Q telegram_queue --loglevel=info --concurrency=2 --max-tasks-per-child=100
+    command: celery -A app.celery_app.celery_app worker -Q telegram_queue --loglevel=info --concurrency=2 --max-tasks-per-child=100
     healthcheck:
       test: [ "CMD", "celery", "inspect", "ping", "-d", "celery@telegram_worker" ]
       interval: 30s
@@ -256,7 +256,7 @@ services:
       VIBER_TOKEN: "${VIBER_TOKEN}"
       VIBER_WEBHOOK_URL: "${VIBER_WEBHOOK_URL}"
       PYTHONPATH: "/app:/app/common"
-    command: celery -A app.celery_app worker -Q viber_queue --loglevel=info --concurrency=2 --max-tasks-per-child=100
+    command: celery -A app.celery_app.celery_app worker -Q viber_queue --loglevel=info --concurrency=2 --max-tasks-per-child=100
     healthcheck:
       test: [ "CMD", "celery", "inspect", "ping", "-d", "celery@viber_worker" ]
       interval: 30s
@@ -324,7 +324,7 @@ services:
       TWILIO_AUTH_TOKEN: "${TWILIO_AUTH_TOKEN}"
       TWILIO_PHONE_NUMBER: "${TWILIO_PHONE_NUMBER}"
       PYTHONPATH: "/app:/app/common"
-    command: celery -A app.celery_app worker -Q whatsapp_queue --loglevel=info --concurrency=2 --max-tasks-per-child=100
+    command: celery -A app.celery_app.celery_app worker -Q whatsapp_queue --loglevel=info --concurrency=2 --max-tasks-per-child=100
     healthcheck:
       test: [ "CMD", "celery", "inspect", "ping", "-d", "celery@whatsapp_worker" ]
       interval: 30s
