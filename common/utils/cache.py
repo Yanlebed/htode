@@ -1,4 +1,5 @@
 # common/utils/cache.py
+
 import json
 import logging
 import hashlib
@@ -233,3 +234,85 @@ def batch_set_cached(key_values, ttl=CacheTTL.STANDARD, prefix=""):
                 # Try to store as string if serialization fails
                 pipe.set(full_key, str(value), ex=ttl)
         pipe.execute()
+
+# Functions to avoid circular imports
+def invalidate_user_caches(user_id: int) -> int:
+    """
+    Invalidate all caches related to a user.
+
+    Args:
+        user_id: Database user ID
+
+    Returns:
+        Number of invalidated cache keys
+    """
+    patterns = [
+        f"user:{user_id}*",
+        f"user_filters:{user_id}*",
+        f"subscription_status:{user_id}*",
+        f"user_favorites:{user_id}*",
+        f"user_subscriptions_list:{user_id}*"
+    ]
+
+    deleted_count = 0
+    for pattern in patterns:
+        keys = redis_client.keys(pattern)
+        if keys:
+            deleted_count += redis_client.delete(*keys)
+
+    logger.debug(f"Invalidated {deleted_count} cache keys for user {user_id}")
+    return deleted_count
+
+
+def invalidate_subscription_caches(user_id: int, subscription_id: Optional[int] = None) -> int:
+    """
+    Invalidate subscription-related caches for a user.
+
+    Args:
+        user_id: Database user ID
+        subscription_id: Optional specific subscription ID
+
+    Returns:
+        Number of invalidated cache keys
+    """
+    patterns = [
+        f"user_subscriptions_list:{user_id}*",
+        f"user_filters:{user_id}*",
+        f"subscription_status:{user_id}*"
+    ]
+
+    if subscription_id:
+        patterns.append(f"subscription:{subscription_id}*")
+
+    deleted_count = 0
+    for pattern in patterns:
+        keys = redis_client.keys(pattern)
+        if keys:
+            deleted_count += redis_client.delete(*keys)
+
+    logger.debug(f"Invalidated {deleted_count} subscription cache keys for user {user_id}")
+    return deleted_count
+
+
+def invalidate_favorite_caches(user_id: int) -> int:
+    """
+    Invalidate favorite-related caches for a user.
+
+    Args:
+        user_id: Database user ID
+
+    Returns:
+        Number of invalidated cache keys
+    """
+    patterns = [
+        f"user_favorites:{user_id}*"
+    ]
+
+    deleted_count = 0
+    for pattern in patterns:
+        keys = redis_client.keys(pattern)
+        if keys:
+            deleted_count += redis_client.delete(*keys)
+
+    logger.debug(f"Invalidated {deleted_count} favorite cache keys for user {user_id}")
+    return deleted_count

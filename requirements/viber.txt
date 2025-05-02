@@ -9,3 +9,11 @@ psycopg2-binary==2.9.5
 pyyaml
 aiohttp
 nest_asyncio
+jmespath
+beautifulsoup4
+fastapi
+uvicorn
+playwright
+twilio==7.16.4
+lxml
+aiodns

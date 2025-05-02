@@ -2,10 +2,10 @@ celery==5.2.7
 redis==4.5.1
 requests==2.28.2
 
-# Если нужна SQLAlchemy и psycopg2 для чтения БД
+# If SQLAlchemy and psycopg2 are needed for database access
 SQLAlchemy==1.4.46
 
-# Прочие зависимости
+# Other dependencies
 python-dotenv==0.21.1
 loguru==0.6.0
 pyyaml
@@ -14,6 +14,11 @@ nest_asyncio
 lxml
 aiodns
 playwright
+
+# Add dependencies needed for cross-service functionality
+viberbot==1.0.12
+twilio==7.16.4
+jmespath
 
 aiogram==2.25.1
 psycopg2-binary==2.9.5
