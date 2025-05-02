@@ -7,3 +7,12 @@ requests==2.28.2
 python-dotenv==0.21.1
 loguru==0.6.0
 python-multipart
+fastapi
+uvicorn
+SQLAlchemy==1.4.46
+jmespath
+viberbot==1.0.12
+playwright
+lxml
+aiodns
+beautifulsoup4

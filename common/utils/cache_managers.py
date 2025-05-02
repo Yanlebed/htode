@@ -129,7 +129,7 @@ class UserCacheManager(BaseCacheManager):
     @staticmethod
     def invalidate_all(user_id: int) -> int:
         """Invalidate all user-related caches"""
-        from common.utils.cache_invalidation import invalidate_user_caches
+        from common.utils.cache import invalidate_user_caches
         return invalidate_user_caches(user_id)
 
 
@@ -151,7 +151,7 @@ class SubscriptionCacheManager(BaseCacheManager):
     @staticmethod
     def invalidate_all(user_id: int, subscription_id: Optional[int] = None) -> int:
         """Invalidate all subscription-related caches"""
-        from common.utils.cache_invalidation import invalidate_subscription_caches
+        from common.utils.cache import invalidate_subscription_caches
         return invalidate_subscription_caches(user_id, subscription_id)
 
 
@@ -255,5 +255,5 @@ class FavoriteCacheManager(BaseCacheManager):
     @staticmethod
     def invalidate_all(user_id: int) -> int:
         """Invalidate all favorite-related caches"""
-        from common.utils.cache_invalidation import invalidate_favorite_caches
+        from common.utils.cache import invalidate_favorite_caches
         return invalidate_favorite_caches(user_id)
