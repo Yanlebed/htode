@@ -129,6 +129,7 @@ class UserCacheManager(BaseCacheManager):
     @staticmethod
     def invalidate_all(user_id: int) -> int:
         """Invalidate all user-related caches"""
+        from common.utils.cache_invalidation import invalidate_user_caches
         return invalidate_user_caches(user_id)
 
 
@@ -150,6 +151,7 @@ class SubscriptionCacheManager(BaseCacheManager):
     @staticmethod
     def invalidate_all(user_id: int, subscription_id: Optional[int] = None) -> int:
         """Invalidate all subscription-related caches"""
+        from common.utils.cache_invalidation import invalidate_subscription_caches
         return invalidate_subscription_caches(user_id, subscription_id)
 
 
@@ -253,81 +255,5 @@ class FavoriteCacheManager(BaseCacheManager):
     @staticmethod
     def invalidate_all(user_id: int) -> int:
         """Invalidate all favorite-related caches"""
+        from common.utils.cache_invalidation import invalidate_favorite_caches
         return invalidate_favorite_caches(user_id)
-
-
-# Step 3: Add the invalidation functions that were previously in cache.py
-def invalidate_user_caches(user_id: int) -> int:
-    """
-    Invalidate all caches related to a user.
-
-    Args:
-        user_id: Database user ID
-
-    Returns:
-        Number of invalidated cache keys
-    """
-    patterns = [
-        f"user:{user_id}*",
-        f"user_filters:{user_id}*",
-        f"subscription_status:{user_id}*",
-        f"user_favorites:{user_id}*",
-        f"user_subscriptions_list:{user_id}*"
-    ]
-
-    deleted_count = 0
-    for pattern in patterns:
-        deleted_count += BaseCacheManager.delete_pattern(pattern)
-
-    logger.debug(f"Invalidated {deleted_count} cache keys for user {user_id}")
-    return deleted_count
-
-
-def invalidate_subscription_caches(user_id: int, subscription_id: Optional[int] = None) -> int:
-    """
-    Invalidate all subscription-related caches for a user.
-
-    Args:
-        user_id: Database user ID
-        subscription_id: Optional specific subscription ID
-
-    Returns:
-        Number of invalidated cache keys
-    """
-    patterns = [
-        f"user_subscriptions_list:{user_id}*",
-        f"user_filters:{user_id}*",
-        f"subscription_status:{user_id}*"
-    ]
-
-    if subscription_id:
-        patterns.append(f"subscription:{subscription_id}*")
-
-    deleted_count = 0
-    for pattern in patterns:
-        deleted_count += BaseCacheManager.delete_pattern(pattern)
-
-    logger.debug(f"Invalidated {deleted_count} subscription cache keys for user {user_id}")
-    return deleted_count
-
-
-def invalidate_favorite_caches(user_id: int) -> int:
-    """
-    Invalidate favorite-related caches for a user.
-
-    Args:
-        user_id: Database user ID
-
-    Returns:
-        Number of invalidated cache keys
-    """
-    patterns = [
-        f"user_favorites:{user_id}*"
-    ]
-
-    deleted_count = 0
-    for pattern in patterns:
-        deleted_count += BaseCacheManager.delete_pattern(pattern)
-
-    logger.debug(f"Invalidated {deleted_count} favorite cache keys for user {user_id}")
-    return deleted_count

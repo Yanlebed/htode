@@ -4,7 +4,7 @@ import logging
 import os
 from viberbot import Api
 from viberbot.api.bot_configuration import BotConfiguration
-from common.unified_state_management import state_manager as RedisStateManager
+from common.unified_state_management import state_manager
 
 # Configure logging
 logging.basicConfig(
@@ -30,4 +30,4 @@ viber = Api(BotConfiguration(
 ))
 
 # Initialize Redis state manager
-state_manager = RedisStateManager(prefix='viber_state')
+state_manager.register_platform_handler('viber', viber)
