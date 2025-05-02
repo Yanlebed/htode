@@ -45,7 +45,7 @@ RUN playwright install --with-deps chromium
 # e.g.: ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 # 6) Set PYTHONPATH
-ENV PYTHONPATH=/app/common
+ENV PYTHONPATH=/app
 
 # 7) Final command (Celery worker for the Notifier queue)
 CMD ["celery", "-A", "app.tasks", "worker", "--loglevel=info", "--queues=notify_queue"]

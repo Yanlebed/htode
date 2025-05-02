@@ -15,7 +15,7 @@ COPY requirements/telegram.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Устанавливаем PYTHONPATH
-ENV PYTHONPATH=/app/common
+ENV PYTHONPATH=/app
 
 # Запуск бота
 CMD ["python", "-m", "app.main"]

@@ -13,5 +13,7 @@ COPY mini_webapp.py /app/mini_webapp.py
 # Expose port 8080 (the FastAPI port)
 EXPOSE 8080
 
+ENV PYTHONPATH=/app
+
 # Launch the FastAPI server
 CMD ["uvicorn", "mini_webapp:app", "--host", "0.0.0.0", "--port", "8080"]

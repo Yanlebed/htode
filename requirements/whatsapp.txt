@@ -16,3 +16,4 @@ playwright
 lxml
 aiodns
 beautifulsoup4
+aiogram==2.25.1
