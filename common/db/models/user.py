@@ -34,6 +34,7 @@ class User(Base):
     favorites = relationship("FavoriteAd", back_populates="user", cascade="all, delete-orphan")
     payment_orders = relationship("PaymentOrder", back_populates="user", cascade="all, delete-orphan")
     verification_codes = relationship("VerificationCode", back_populates="user", cascade="all, delete-orphan")
+    media_messages = relationship("WhatsAppMedia", back_populates="user")
 
     @property
     def is_subscription_active(self) -> bool:
