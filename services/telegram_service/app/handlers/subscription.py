@@ -9,7 +9,7 @@ from common.db.repositories.subscription_repository import SubscriptionRepositor
 from common.db.repositories.user_repository import UserRepository
 from common.db.models.subscription import UserFilter
 from common.utils.cache_managers import SubscriptionCacheManager, UserCacheManager
-from common.utils.cache_invalidation import get_entity_cache_key
+from common.utils.cache import get_entity_cache_key
 
 from ..bot import dp, bot
 from common.config import GEO_ID_MAPPING

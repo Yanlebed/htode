@@ -22,12 +22,7 @@ from common.db.repositories.favorite_repository import FavoriteRepository
 from common.utils.cache import CacheTTL
 from common.config import GEO_ID_MAPPING, get_key_by_value
 from common.utils.phone_parser import extract_phone_numbers_from_resource
-from common.utils.cache_invalidation import (
-    invalidate_user_caches,
-    invalidate_subscription_caches,
-    invalidate_ad_caches,
-    invalidate_favorite_caches
-)
+from common.utils.cache_managers import invalidate_favorite_caches, invalidate_subscription_caches, invalidate_user_caches
 
 from common.utils.cache_managers import (
     UserCacheManager,
@@ -36,7 +31,7 @@ from common.utils.cache_managers import (
     FavoriteCacheManager,
     BaseCacheManager
 )
-from common.utils.cache_invalidation import get_entity_cache_key
+from common.utils.cache import get_entity_cache_key
 
 logger = logging.getLogger(__name__)
 
