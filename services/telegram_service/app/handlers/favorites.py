@@ -11,7 +11,7 @@ from common.db.repositories.favorite_repository import FavoriteRepository
 from common.db.repositories.user_repository import UserRepository
 from common.utils.ad_utils import get_ad_images
 from common.utils.cache_managers import FavoriteCacheManager, AdCacheManager
-from common.utils.cache_invalidation import get_entity_cache_key
+from common.utils.cache import get_entity_cache_key
 
 from ..bot import dp, bot
 

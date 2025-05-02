@@ -11,7 +11,7 @@ from common.db.models.user import User
 from common.utils.cache import CacheTTL
 from common.config import GEO_ID_MAPPING, get_key_by_value
 from common.utils.cache_managers import SubscriptionCacheManager, UserCacheManager, BaseCacheManager
-from common.utils.cache_invalidation import get_entity_cache_key
+from common.utils.cache import get_entity_cache_key
 
 logger = logging.getLogger(__name__)
 
