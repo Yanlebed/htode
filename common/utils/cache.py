@@ -1,10 +1,13 @@
 # common/utils/cache.py
 import json
+from typing import Union, Optional
+
 import redis
 import hashlib
 import logging
 from functools import wraps
 from common.config import REDIS_URL
+from common.utils.cache_managers import UserCacheManager, SubscriptionCacheManager, FavoriteCacheManager
 
 logger = logging.getLogger(__name__)
 
@@ -41,12 +44,62 @@ def cache_key(prefix, *args, **kwargs):
     return ":".join(key_parts)
 
 
-def get_entity_cache_key(entity_type, entity_id, suffix=None):
-    """Generate a standardized cache key for an entity"""
+def get_entity_cache_key(entity_type: str, entity_id: Union[int, str], suffix: Optional[str] = None) -> str:
+    """
+    Generate a standardized cache key for an entity.
+
+    Args:
+        entity_type: Type of entity (e.g., 'user', 'ad', 'subscription')
+        entity_id: Entity identifier
+        suffix: Optional additional suffix
+
+    Returns:
+        A standardized cache key string
+    """
     key = f"{entity_type}:{entity_id}"
     if suffix:
         key += f":{suffix}"
     return key
+
+
+def invalidate_user_caches(user_id: int) -> int:
+    """
+    Invalidate all caches related to a user.
+
+    Args:
+        user_id: Database user ID
+
+    Returns:
+        Number of invalidated cache keys
+    """
+    return UserCacheManager.invalidate_all(user_id)
+
+
+def invalidate_subscription_caches(user_id: int, subscription_id: Optional[int] = None) -> int:
+    """
+    Invalidate all subscription-related caches for a user.
+
+    Args:
+        user_id: Database user ID
+        subscription_id: Optional specific subscription ID
+
+    Returns:
+        Number of invalidated cache keys
+    """
+    return SubscriptionCacheManager.invalidate_all(user_id, subscription_id)
+
+
+def invalidate_favorite_caches(user_id: int) -> int:
+    """
+    Invalidate favorite-related caches for a user.
+
+    Args:
+        user_id: Database user ID
+
+    Returns:
+        Number of invalidated cache keys
+    """
+    return FavoriteCacheManager.invalidate_all(user_id)
 
 
 def redis_cache(prefix, ttl=CacheTTL.STANDARD):

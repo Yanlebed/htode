@@ -3,9 +3,7 @@
 import logging
 from typing import Optional, List, Union
 
-from common.utils.cache import redis_client
 from common.utils.cache_managers import (
-    BaseCacheManager,
     UserCacheManager,
     AdCacheManager,
     SubscriptionCacheManager,
@@ -13,51 +11,6 @@ from common.utils.cache_managers import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def get_entity_cache_key(entity_type: str, entity_id: Union[int, str], suffix: Optional[str] = None) -> str:
-    """
-    Generate a standardized cache key for an entity.
-
-    Args:
-        entity_type: Type of entity (e.g., 'user', 'ad', 'subscription')
-        entity_id: Entity identifier
-        suffix: Optional additional suffix
-
-    Returns:
-        A standardized cache key string
-    """
-    key = f"{entity_type}:{entity_id}"
-    if suffix:
-        key += f":{suffix}"
-    return key
-
-
-def invalidate_user_caches(user_id: int) -> int:
-    """
-    Invalidate all caches related to a user.
-
-    Args:
-        user_id: Database user ID
-
-    Returns:
-        Number of invalidated cache keys
-    """
-    return UserCacheManager.invalidate_all(user_id)
-
-
-def invalidate_subscription_caches(user_id: int, subscription_id: Optional[int] = None) -> int:
-    """
-    Invalidate all subscription-related caches for a user.
-
-    Args:
-        user_id: Database user ID
-        subscription_id: Optional specific subscription ID
-
-    Returns:
-        Number of invalidated cache keys
-    """
-    return SubscriptionCacheManager.invalidate_all(user_id, subscription_id)
 
 
 def invalidate_ad_caches(ad_id: int, resource_url: Optional[str] = None) -> int:
@@ -72,19 +25,6 @@ def invalidate_ad_caches(ad_id: int, resource_url: Optional[str] = None) -> int:
         Number of invalidated cache keys
     """
     return AdCacheManager.invalidate_all(ad_id, resource_url)
-
-
-def invalidate_favorite_caches(user_id: int) -> int:
-    """
-    Invalidate favorite-related caches for a user.
-
-    Args:
-        user_id: Database user ID
-
-    Returns:
-        Number of invalidated cache keys
-    """
-    return FavoriteCacheManager.invalidate_all(user_id)
 
 
 def invalidate_phone_caches(ad_id: int) -> int:

@@ -82,14 +82,29 @@ def release_lock(lock_name, lock_id):
 
 
 @contextmanager
-def redis_lock(lock_name, expire_time=60):
+def redis_lock(lock_name, expire_time=3600):
+    """
+    Context manager for Redis locks.
+
+    Args:
+        lock_name: Name of the lock
+        expire_time: Lock expiration time in seconds
+
+    Yields:
+        tuple: (acquired, lock_id) where acquired is True if lock was acquired
+    """
     lock_key = f"lock:{lock_name}"
     lock_id = str(uuid.uuid4())
 
     # Try to acquire the lock
     acquired = redis_client.set(lock_key, lock_id, ex=expire_time, nx=True)
+    if acquired:
+        logger.info(f"Acquired lock {lock_name} with ID {lock_id}")
+    else:
+        logger.info(f"Failed to acquire lock {lock_name}")
+
     try:
-        yield acquired
+        yield acquired, lock_id
     finally:
         # Release the lock if we acquired it
         if acquired:
@@ -97,8 +112,11 @@ def redis_lock(lock_name, expire_time=60):
             pipe.get(lock_key)
             pipe.delete(lock_key)
             key_val, _ = pipe.execute()
-            if key_val.decode() != lock_id:
+
+            if key_val and key_val.decode() != lock_id:
                 logger.error(f"Lock {lock_key} was stolen!")
+            else:
+                logger.info(f"Released lock {lock_name} with ID {lock_id}")
 
 
 # Initialize boto3 S3 client (using AWS_CONFIG from common/config.py)
@@ -270,22 +288,18 @@ def initial_30_day_scrape() -> None:
         logger.info("Initial load is already done. Skipping.")
         return
 
-    # Try to acquire the lock
-    lock_id = acquire_lock("initial_scrape", expire_time=3600)  # 1-hour lock
-    if not lock_id:
-        logger.info("Initial scrape is already in progress by another worker. Skipping.")
-        return
+    # Use the enhanced context manager
+    with redis_lock("initial_scrape", expire_time=3600) as (acquired, _):
+        if not acquired:
+            logger.info("Initial scrape is already in progress by another worker. Skipping.")
+            return
 
-    try:
         # Your existing scrape code here
         for city_id, city_name in GEO_ID_MAPPING_FOR_INITIAL_RUN.items():
             logger.info(f">>> Starting initial 30-day scrape for {city_name} <<<")
             scrape_30_days_for_city(city_id)
 
         logger.info("Initial data load completed.")
-    finally:
-        # Always release the lock when done
-        release_lock("initial_scrape", lock_id)
 
 
 def scrape_30_days_for_city(geo_id: int) -> None:
