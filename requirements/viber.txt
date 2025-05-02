@@ -17,3 +17,4 @@ playwright
 twilio==7.16.4
 lxml
 aiodns
+aiogram==2.25.1
