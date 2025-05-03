@@ -157,7 +157,7 @@ services:
 
   telegram_service:
     volumes:
-      - ./services/telegram_service:/app  # Mount directly to /app, not /app/app
+      - ./services:/app/services  # Mount entire services directory
       - ./common:/app/common
     env_file:
       - .env
@@ -175,12 +175,12 @@ services:
       <<: *common-variables
       TELEGRAM_TOKEN: "${TELEGRAM_TOKEN}"
       SERVICE_NAME: "telegram"
-      PYTHONPATH: "/app:/app/common"  # Important: set the correct Python path
-    command: python -m app.main
+      PYTHONPATH: "/app"  # Simplified PYTHONPATH
+    command: python -m services.telegram_service.app.main  # Updated command path
 
   telegram_worker_service:
     volumes:
-      - ./services/telegram_service:/app  # Mount directly to /app, not /app/app
+      - ./services:/app/services  # Mount entire services directory
       - ./common:/app/common
     env_file:
       - .env
@@ -197,8 +197,8 @@ services:
     environment:
       <<: *common-variables
       TELEGRAM_TOKEN: "${TELEGRAM_TOKEN}"
-      PYTHONPATH: "/app:/app/common"  # Important: set the correct Python path
-    command: celery -A app.celery_app worker -Q telegram_queue --loglevel=info --concurrency=2 --max-tasks-per-child=100
+      PYTHONPATH: "/app"  # Simplified PYTHONPATH
+    command: celery -A services.telegram_service.app.celery_app worker -Q telegram_queue --loglevel=info --concurrency=2 --max-tasks-per-child=100
     healthcheck:
       test: [ "CMD", "celery", "inspect", "ping", "-d", "celery@telegram_worker" ]
       interval: 30s
@@ -245,7 +245,7 @@ services:
 
   viber_worker_service:
     volumes:
-      - ./services/viber_service:/app
+      - ./services:/app/services  # Mount entire services directory
       - ./common:/app/common
     env_file:
       - .env
@@ -263,8 +263,8 @@ services:
       <<: *common-variables
       VIBER_TOKEN: "${VIBER_TOKEN}"
       VIBER_WEBHOOK_URL: "${VIBER_WEBHOOK_URL}"
-      PYTHONPATH: "/app:/app/common"
-    command: celery -A app.celery_app.celery_app worker -Q viber_queue --loglevel=info --concurrency=2 --max-tasks-per-child=100
+      PYTHONPATH: "/app"
+    command: celery -A services.viber_service.app.celery_app.celery_app worker -Q viber_queue --loglevel=info --concurrency=2 --max-tasks-per-child=100
     healthcheck:
       test: [ "CMD", "celery", "inspect", "ping", "-d", "celery@viber_worker" ]
       interval: 30s
@@ -313,7 +313,7 @@ services:
 
   whatsapp_worker_service:
     volumes:
-      - ./services/whatsapp_service:/app
+      - ./services:/app/services  # Mount entire services directory
       - ./common:/app/common
     env_file:
       - .env
@@ -332,8 +332,8 @@ services:
       TWILIO_ACCOUNT_SID: "${TWILIO_ACCOUNT_SID}"
       TWILIO_AUTH_TOKEN: "${TWILIO_AUTH_TOKEN}"
       TWILIO_PHONE_NUMBER: "${TWILIO_PHONE_NUMBER}"
-      PYTHONPATH: "/app:/app/common"
-    command: celery -A app.celery_app.celery_app worker -Q whatsapp_queue --loglevel=info --concurrency=2 --max-tasks-per-child=100
+      PYTHONPATH: "/app"
+    command: celery -A services.whatsapp_service.app.celery_app.celery_app worker -Q whatsapp_queue --loglevel=info --concurrency=2 --max-tasks-per-child=100
     healthcheck:
       test: [ "CMD", "celery", "inspect", "ping", "-d", "celery@whatsapp_worker" ]
       interval: 30s
