@@ -28,7 +28,8 @@ class TelegramMessaging(MessagingInterface):
         """
         self.bot = bot
 
-    def get_platform_name(self) -> str:
+    @property
+    def platform_name(self) -> str:
         """Get platform identifier."""
         return "telegram"
 

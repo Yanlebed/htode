@@ -15,7 +15,7 @@ from common.messaging.unified_flow import (
 logger = logging.getLogger(__name__)
 
 
-@dp.message_handler(lambda message: True, state="*", priority=100)
+@dp.message_handler(lambda message: True, state="*")
 async def flow_message_handler(message: types.Message, state: FSMContext = None):
     """
     Message handler that checks for active flows before letting other handlers process.

@@ -38,7 +38,8 @@ class WhatsAppMessaging(MessagingInterface):
         if not self.from_number.startswith("whatsapp:"):
             self.from_number = f"whatsapp:{self.from_number}"
 
-    def get_platform_name(self) -> str:
+    @property
+    def platform_name(self) -> str:
         """Get platform identifier."""
         return "whatsapp"
 

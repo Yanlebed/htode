@@ -16,8 +16,7 @@ def register_platform_tasks(platform_name: str, task_module_path: str):
     """
     from common.messaging.tasks import (
         send_ad_with_extra_buttons as unified_send_ad,
-        send_subscription_notification as unified_send_notification,
-        process_show_more_description as unified_process_show_more
+        send_subscription_notification as unified_send_notification
     )
 
     # Register send_ad_with_extra_buttons

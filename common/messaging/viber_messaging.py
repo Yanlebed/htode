@@ -25,7 +25,8 @@ class ViberMessaging(MessagingInterface):
         """
         self.viber = viber_api
 
-    def get_platform_name(self) -> str:
+    @property
+    def platform_name(self) -> str:
         """Get platform identifier."""
         return "viber"
 

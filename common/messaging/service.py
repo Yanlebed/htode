@@ -1,6 +1,7 @@
 # common/messaging/service.py
 
 import logging
+import os
 from typing import Dict, Any, Optional, List
 
 from .unified_interface import MessagingInterface
@@ -157,31 +158,39 @@ class MessagingService:
             return False
 
     @classmethod
-    def create_default(cls) -> 'MessagingService':
+    def create_for_service(cls, service_name: str) -> 'MessagingService':
         """
-        Create a messaging service with all available messengers registered.
+        Create a messaging service for a specific service only.
+
+        Args:
+            service_name: Name of the service ('telegram', 'viber', 'whatsapp')
 
         Returns:
-            Configured MessagingService instance
+            Configured MessagingService instance with only the specified messenger
         """
-        # Import messenger implementations
-        from .telegram_messaging import TelegramMessaging
-        from .viber_messaging import ViberMessaging
-        from .whatsapp_messaging import WhatsAppMessaging
-
-        # Import bot instances
-        from services.telegram_service.app.bot import bot as telegram_bot
-        from services.viber_service.app.bot import viber as viber_bot
-        from services.whatsapp_service.app.bot import client as twilio_client
-
-        # Create and configure service
         service = cls()
-        service.register_messenger("telegram", TelegramMessaging(telegram_bot))
-        service.register_messenger("viber", ViberMessaging(viber_bot))
-        service.register_messenger("whatsapp", WhatsAppMessaging(twilio_client))
+
+        try:
+            if service_name == "telegram":
+                from .telegram_messaging import TelegramMessaging
+                from app.bot import bot as telegram_bot
+                service.register_messenger("telegram", TelegramMessaging(telegram_bot))
+            elif service_name == "viber":
+                from .viber_messaging import ViberMessaging
+                from app.bot import viber as viber_bot
+                service.register_messenger("viber", ViberMessaging(viber_bot))
+            elif service_name == "whatsapp":
+                from .whatsapp_messaging import WhatsAppMessaging
+                from app.bot import client as twilio_client
+                service.register_messenger("whatsapp", WhatsAppMessaging(twilio_client))
+            else:
+                logger.warning(f"Unknown service name: {service_name}")
+        except ImportError as e:
+            logger.error(f"Failed to import dependencies for {service_name}: {e}")
 
         return service
 
 
 # Create a singleton instance for global use
-messaging_service = MessagingService.create_default()
+# SERVICE_NAME = os.getenv('SERVICE_NAME', 'telegram')  # Set this env var in your docker-compose.yml
+# messaging_service = MessagingService.create_for_service(SERVICE_NAME)
