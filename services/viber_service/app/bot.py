@@ -1,17 +1,12 @@
 # services/viber_service/app/bot.py
 
-import logging
 import os
 from viberbot import Api
 from viberbot.api.bot_configuration import BotConfiguration
 from common.unified_state_management import state_manager
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-)
-logger = logging.getLogger(__name__)
+# Import the service logger
+from .. import logger
 
 # Get Viber token from environment
 VIBER_TOKEN = os.getenv("VIBER_TOKEN")
@@ -22,12 +17,31 @@ if not VIBER_TOKEN:
 # Set your webhook URL - must be HTTPS
 WEBHOOK_URL = os.getenv("VIBER_WEBHOOK_URL", "https://your-domain.com/viber/webhook")
 
+logger.info("Initializing Viber bot", extra={
+    'webhook_url': WEBHOOK_URL,
+    'token_present': bool(VIBER_TOKEN)
+})
+
 # Initialize Viber bot
-viber = Api(BotConfiguration(
-    name='YourBotName',
-    avatar='https://your-domain.com/bot-avatar.jpg',
-    auth_token=VIBER_TOKEN
-))
+try:
+    viber = Api(BotConfiguration(
+        name='YourBotName',
+        avatar='https://your-domain.com/bot-avatar.jpg',
+        auth_token=VIBER_TOKEN
+    ))
+    logger.info("Viber bot initialized successfully")
+except Exception as e:
+    logger.error("Failed to initialize Viber bot", exc_info=True, extra={
+        'error_type': type(e).__name__
+    })
+    raise
 
 # Initialize Redis state manager
-state_manager.register_platform_handler('viber', viber)
+try:
+    state_manager.register_platform_handler('viber', viber)
+    logger.info("Registered Viber platform handler with state manager")
+except Exception as e:
+    logger.error("Failed to register Viber platform handler", exc_info=True, extra={
+        'error_type': type(e).__name__
+    })
+    raise
