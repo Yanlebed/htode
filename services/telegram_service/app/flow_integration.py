@@ -1,6 +1,5 @@
 # services/telegram_service/app/flow_integration.py
 
-import logging
 from aiogram import types
 from aiogram.dispatcher import FSMContext
 
@@ -12,10 +11,13 @@ from common.messaging.unified_flow import (
     show_available_flows
 )
 
-logger = logging.getLogger(__name__)
+# Import service logger and logging utilities
+from .. import logger
+from common.utils.logging_config import log_operation, log_context
 
 
 @dp.message_handler(lambda message: True, state="*")
+@log_operation("flow_message_handler")
 async def flow_message_handler(message: types.Message, state: FSMContext = None):
     """
     Message handler that checks for active flows before letting other handlers process.
@@ -24,25 +26,30 @@ async def flow_message_handler(message: types.Message, state: FSMContext = None)
     user_id = message.from_user.id
     text = message.text or message.caption or ""
 
-    # Get any state data for extra context
-    state_data = {}
-    if state:
-        state_data = await state.get_data()
+    with log_context(logger, user_id=user_id, message_text=text[:100]):  # Limit message length in logs
+        # Get any state data for extra context
+        state_data = {}
+        if state:
+            state_data = await state.get_data()
 
-    # First check if an active flow wants to handle this message
-    handled = await check_and_process_flow(
-        user_id=user_id,
-        platform="telegram",
-        message_text=text,
-        extra_context=state_data
-    )
+        # First check if an active flow wants to handle this message
+        handled = await check_and_process_flow(
+            user_id=user_id,
+            platform="telegram",
+            message_text=text,
+            extra_context=state_data
+        )
 
-    if handled:
-        # Message was handled by a flow, stop processing
-        return
+        if handled:
+            logger.info("Message handled by flow", extra={
+                "user_id": user_id,
+                "flow_handled": True
+            })
+            return
 
 
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith("flow:"), state="*")
+@log_operation("flow_callback_handler")
 async def flow_callback_handler(callback_query: types.CallbackQuery, state: FSMContext = None):
     """
     Handler for flow-specific callbacks.
@@ -50,11 +57,20 @@ async def flow_callback_handler(callback_query: types.CallbackQuery, state: FSMC
     user_id = callback_query.from_user.id
     action_text = callback_query.data
 
-    # Process the flow action
-    if await process_flow_action(user_id, "telegram", action_text):
-        await callback_query.answer("Action processed")
-    else:
-        await callback_query.answer("Invalid flow action")
+    with log_context(logger, user_id=user_id, callback_data=action_text):
+        # Process the flow action
+        if await process_flow_action(user_id, "telegram", action_text):
+            await callback_query.answer("Action processed")
+            logger.info("Flow action processed", extra={
+                "user_id": user_id,
+                "action": action_text
+            })
+        else:
+            await callback_query.answer("Invalid flow action")
+            logger.warning("Invalid flow action", extra={
+                "user_id": user_id,
+                "action": action_text
+            })
 
 
 # Command handler for starting property search

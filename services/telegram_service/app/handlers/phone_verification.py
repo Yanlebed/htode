@@ -1,6 +1,5 @@
 # services/telegram_service/app/handlers/phone_verification.py
 
-import logging
 from aiogram import types
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
@@ -21,7 +20,9 @@ from ..keyboards import (
     main_menu_keyboard
 )
 
-logger = logging.getLogger(__name__)
+# Import service logger and logging utilities
+from ... import logger
+from common.utils.logging_config import log_operation, log_context
 
 
 class PhoneVerificationStates(StatesGroup):
@@ -31,21 +32,26 @@ class PhoneVerificationStates(StatesGroup):
 
 
 @dp.message_handler(lambda msg: msg.text == "📱 Додати номер телефону")
+@log_operation("start_phone_verification")
 async def start_phone_verification(message: types.Message, state: FSMContext):
     """
     Start the phone verification process when user selects the menu option
     """
-    await safe_send_message(
-        chat_id=message.chat.id,
-        text=(
-            "Для додавання номера телефону і єдиного входу з різних пристроїв, "
-            "будь ласка, надайте свій номер телефону.\n\n"
-            "Ви можете скористатися кнопкою 'Поділитися номером телефону' або "
-            "ввести номер вручну в міжнародному форматі (наприклад, +380991234567)."
-        ),
-        reply_markup=phone_request_keyboard()
-    )
-    await PhoneVerificationStates.waiting_for_phone.set()
+    user_id = message.from_user.id
+
+    with log_context(logger, user_id=user_id, action="start_phone_verification"):
+        await safe_send_message(
+            chat_id=message.chat.id,
+            text=(
+                "Для додавання номера телефону і єдиного входу з різних пристроїв, "
+                "будь ласка, надайте свій номер телефону.\n\n"
+                "Ви можете скористатися кнопкою 'Поділитися номером телефону' або "
+                "ввести номер вручну в міжнародному форматі (наприклад, +380991234567)."
+            ),
+            reply_markup=phone_request_keyboard()
+        )
+        await PhoneVerificationStates.waiting_for_phone.set()
+        logger.info("Phone verification started", extra={"user_id": user_id})
 
 
 @dp.message_handler(content_types=types.ContentType.CONTACT, state=PhoneVerificationStates.waiting_for_phone)
