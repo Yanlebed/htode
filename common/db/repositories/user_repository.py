@@ -237,13 +237,7 @@ class UserRepository:
         Returns:
             Admin user or None if not found
         """
-        try:
-            # Assuming you have an is_admin column in your users table
-            # If not, you may need to adjust this query based on your admin identification logic
-            return db.query(User).filter(User.is_admin == True).first()
-        except Exception as e:
-            logger.error(f"Error getting admin user: {e}")
-            return None
+        return None
 
     @staticmethod
     def get_users_with_expired_viber_conversations(db: Session) -> List[User]:
