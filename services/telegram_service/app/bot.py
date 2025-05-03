@@ -11,6 +11,9 @@ from aiogram.utils.exceptions import (
 )
 from common.config import TELEGRAM_TOKEN, REDIS_URL
 
+# Import service logger instead of configuring local logging
+from .. import logger
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,

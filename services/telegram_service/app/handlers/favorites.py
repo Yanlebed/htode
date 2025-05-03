@@ -20,88 +20,96 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from common.config import build_ad_text
 from ..utils.message_utils import safe_send_message, safe_send_photo, safe_answer_callback_query
 
-logger = logging.getLogger(__name__)
+# Import service logger and logging utilities
+from ... import logger
+from common.utils.logging_config import log_operation, log_context
 
 
 @dp.callback_query_handler(lambda c: c.data.startswith("add_fav:"))
+@log_operation("add_favorite")
 async def handle_add_fav(callback_query: types.CallbackQuery):
-    try:
-        # Get the part after "add_fav:"
-        callback_data = callback_query.data.split("add_fav:")[1]
+    telegram_id = callback_query.from_user.id
 
-        # Database user ID
-        telegram_id = callback_query.from_user.id
+    with log_context(logger, telegram_id=telegram_id, callback_data=callback_query.data):
+        try:
+            # Get the part after "add_fav:"
+            callback_data = callback_query.data.split("add_fav:")[1]
 
-        with db_session() as db:
-            db_user = UserRepository.get_by_messenger_id(db, str(telegram_id), "telegram")
+            # Database user ID
+            telegram_id = callback_query.from_user.id
 
-            if not db_user:
-                logger.error(f"User not found for telegram_id: {telegram_id}")
-                await callback_query.answer("Помилка: Користувач не знайдений.", show_alert=True)
-                return
+            with db_session() as db:
+                db_user = UserRepository.get_by_messenger_id(db, str(telegram_id), "telegram")
 
-            db_user_id = db_user.id
-
-            # Parse ad ID
-            if callback_data.startswith("http"):
-                # It's a URL, find ad by resource_url
-                resource_url = callback_data
-                ad = AdRepository.get_by_resource_url(db, resource_url)
-
-                if not ad:
-                    logger.error(f"Ad not found for resource_url: {resource_url}")
-                    await callback_query.answer("Оголошення не знайдено.", show_alert=True)
+                if not db_user:
+                    logger.error(f"User not found for telegram_id: {telegram_id}")
+                    await callback_query.answer("Помилка: Користувач не знайдений.", show_alert=True)
                     return
 
-                ad_id = ad.id
-            else:
-                # It's already an ID
-                ad_id = int(callback_data)
+                db_user_id = db_user.id
 
-            # Add to favorites using a repository
-            try:
-                favorite = FavoriteRepository.add_favorite(db, db_user_id, ad_id)
-            except ValueError as e:
-                # This happens when a user already has 50 favorites
-                await callback_query.answer(str(e), show_alert=True)
-                return
+                # Parse ad ID
+                if callback_data.startswith("http"):
+                    # It's a URL, find ad by resource_url
+                    resource_url = callback_data
+                    ad = AdRepository.get_by_resource_url(db, resource_url)
 
-            if not favorite:
-                await callback_query.answer("Помилка при додаванні до обраних.", show_alert=True)
-                return
+                    if not ad:
+                        logger.error(f"Ad not found for resource_url: {resource_url}")
+                        await callback_query.answer("Оголошення не знайдено.", show_alert=True)
+                        return
 
-            # Invalidate favorite cache for this user
-            FavoriteCacheManager.invalidate_all(db_user_id)
-
-        # Update UI to show the "Added to favorites" button
-        # Get the existing reply markup
-        reply_markup = callback_query.message.reply_markup
-
-        # Find and replace the button
-        new_markup = InlineKeyboardMarkup()
-        for row in reply_markup.inline_keyboard:
-            new_row = []
-            for button in row:
-                if button.callback_data and button.callback_data.startswith("add_fav:"):
-                    # Replace it with the "remove from favorites" button
-                    new_row.append(InlineKeyboardButton(
-                        "💚 Додано до обраних",
-                        callback_data=f"rm_fav_from_ad:{ad_id}"
-                    ))
+                    ad_id = ad.id
                 else:
-                    new_row.append(button)
-            new_markup.row(*new_row)
+                    # It's already an ID
+                    ad_id = int(callback_data)
 
-        # Update the message with a new markup
-        await callback_query.message.edit_reply_markup(reply_markup=new_markup)
-        await callback_query.answer("Додано до обраних!")
+                # Add to favorites using a repository
+                try:
+                    favorite = FavoriteRepository.add_favorite(db, db_user_id, ad_id)
+                except ValueError as e:
+                    # This happens when a user already has 50 favorites
+                    await callback_query.answer(str(e), show_alert=True)
+                    return
 
-    except ValueError as e:
-        logger.error(f"Error parsing callback data: {e}")
-        await callback_query.answer("Помилка при додаванні до обраних.", show_alert=True)
-    except Exception as e:
-        logger.exception(f"Unexpected error in handle_add_fav: {e}")
-        await callback_query.answer("Сталася помилка.", show_alert=True)
+                if not favorite:
+                    await callback_query.answer("Помилка при додаванні до обраних.", show_alert=True)
+                    return
+
+                # Invalidate favorite cache for this user
+                FavoriteCacheManager.invalidate_all(db_user_id)
+
+            # Update UI to show the "Added to favorites" button
+            # Get the existing reply markup
+            reply_markup = callback_query.message.reply_markup
+
+            # Find and replace the button
+            new_markup = InlineKeyboardMarkup()
+            for row in reply_markup.inline_keyboard:
+                new_row = []
+                for button in row:
+                    if button.callback_data and button.callback_data.startswith("add_fav:"):
+                        # Replace it with the "remove from favorites" button
+                        new_row.append(InlineKeyboardButton(
+                            "💚 Додано до обраних",
+                            callback_data=f"rm_fav_from_ad:{ad_id}"
+                        ))
+                    else:
+                        new_row.append(button)
+                new_markup.row(*new_row)
+
+            # Update the message with a new markup
+            await callback_query.message.edit_reply_markup(reply_markup=new_markup)
+            await callback_query.answer("Додано до обраних!")
+
+
+        except ValueError as e:
+            logger.warning(f"Error parsing callback data", exc_info=True, extra={"error": str(e)})
+            await callback_query.answer("Помилка при додаванні до обраних.", show_alert=True)
+
+        except Exception as e:
+            logger.error(f"Unexpected error in handle_add_fav", exc_info=True, extra={"error": str(e)})
+            await callback_query.answer("Сталася помилка.", show_alert=True)
 
 
 @dp.callback_query_handler(lambda c: c.data.startswith("rm_fav_from_ad:"))

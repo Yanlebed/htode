@@ -1,6 +1,5 @@
 # services/telegram_service/app/main.py
 
-import logging
 from aiogram import executor
 from .bot import dp
 from .handlers import menu_handlers, basic_handlers, advanced_handlers, subscription, support, favorites
@@ -9,9 +8,8 @@ from .flow_integration import check_and_process_flow, flow_message_handler
 # Import the error handler
 from . import error_handler
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Import service logger instead of configuring local logging
+from .. import logger
 
 def setup_handlers():
     """

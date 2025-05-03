@@ -21,7 +21,9 @@ from ..utils.message_utils import (
     safe_edit_message
 )
 
-logger = logging.getLogger(__name__)
+# Import service logger and logging utilities
+from ... import logger
+from common.utils.logging_config import log_operation, log_context
 
 # Список доступних міст (можна отримати з бази даних або конфігурації)
 AVAILABLE_CITIES = ['Івано-Франківськ', 'Вінниця', 'Дніпро', 'Житомир', 'Запоріжжя', 'Київ', 'Кропивницький', 'Луцьк',
@@ -30,24 +32,28 @@ AVAILABLE_CITIES = ['Івано-Франківськ', 'Вінниця', 'Дні
 
 
 @dp.message_handler(commands=['start'])
+@log_operation("telegram_start_command")
 async def start_command(message: types.Message, state: FSMContext):
     telegram_id = message.from_user.id
-    user_db_id = get_or_create_user(telegram_id)  # Отримуємо внутрішній id користувача
 
-    # Use safe_send_message instead of message.answer
-    await safe_send_message(
-        chat_id=telegram_id,
-        text="Привіт!👋 Я бот з пошуку оголошень.\n"
-             "Зі мною легко і швидко знайти квартиру, будинок або кімнату для оренди.\n"
-             "У тебе зараз активний безкоштовний період 7 днів.\n"
-             "Давайте налаштуємо твої параметри пошуку.\n"
-             "Обери те, що тебе цікавить:\n",
-        reply_markup=property_type_keyboard()
-    )
-    await FilterStates.waiting_for_property_type.set()
+    with log_context(logger, user_id=telegram_id, operation="start_command"):
+        user_db_id = get_or_create_user(telegram_id)
 
-    # Сохраняем user_db_id в состоянии, чтобы использовать его позже
-    await state.update_data(user_db_id=user_db_id, telegram_id=telegram_id)
+        # Use safe_send_message instead of message.answer
+        await safe_send_message(
+            chat_id=telegram_id,
+            text="Привіт!👋 Я бот з пошуку оголошень.\n"
+                 "Зі мною легко і швидко знайти квартиру, будинок або кімнату для оренди.\n"
+                 "У тебе зараз активний безкоштовний період 7 днів.\n"
+                 "Давайте налаштуємо твої параметри пошуку.\n"
+                 "Обери те, що тебе цікавить:\n",
+            reply_markup=property_type_keyboard()
+        )
+        await FilterStates.waiting_for_property_type.set()
+
+        # Сохраняем user_db_id в состоянии, чтобы использовать его позже
+        await state.update_data(user_db_id=user_db_id, telegram_id=telegram_id)
+        logger.info("User started conversation", extra={"telegram_id": telegram_id, "db_id": user_db_id})
 
 
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith('property_type_'),
