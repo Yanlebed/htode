@@ -11,7 +11,7 @@ from common.messaging.unified_platform_utils import (
 from common.utils.logging_config import log_context, log_operation
 
 # Import the service logger
-from ... import logger
+from .. import logger
 
 
 @log_operation("safe_send_message")

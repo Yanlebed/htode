@@ -18,7 +18,7 @@ from ..keyboards import (
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # Import service logger and logging utilities
-from ... import logger
+from .. import logger
 from common.utils.logging_config import log_operation, log_context
 
 

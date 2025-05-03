@@ -20,7 +20,7 @@ from common.config import build_ad_text
 from ..utils.message_utils import safe_send_message, safe_send_photo, safe_answer_callback_query
 
 # Import service logger and logging utilities
-from ... import logger
+from .. import logger
 from common.utils.logging_config import log_operation, log_context
 
 

@@ -7,7 +7,7 @@ from common.messaging.task_registry import register_platform_tasks
 from common.utils.logging_config import log_context, log_operation, LogAggregator
 
 # Import the service logger
-from .. import logger
+from . import logger
 
 logger.info("Initializing Viber service tasks")
 

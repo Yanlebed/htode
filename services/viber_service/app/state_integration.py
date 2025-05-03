@@ -6,7 +6,7 @@ from common.unified_state_management import state_manager
 from common.utils.logging_config import log_context, log_operation
 
 # Import the service logger
-from .. import logger
+from . import logger
 
 # Constant for the platform name
 PLATFORM_NAME = "viber"

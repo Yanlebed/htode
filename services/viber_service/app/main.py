@@ -15,7 +15,7 @@ from .flow_integration import handle_message_with_flow
 from common.utils.logging_config import log_context, log_operation
 
 # Import the service logger
-from .. import logger
+from . import logger
 
 # Initialize FastAPI app
 app = FastAPI(title="Viber Service API")

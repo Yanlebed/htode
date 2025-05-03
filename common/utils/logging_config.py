@@ -139,7 +139,12 @@ def log_operation(operation_name: str):
         @wraps(func)
         def sync_wrapper(*args, **kwargs):
             # Get logger from first argument if it's a class method
-            logger = getattr(args[0], 'logger', logging.getLogger(__name__))
+            if args and hasattr(args[0], 'logger'):
+                logger = args[0].logger
+            elif hasattr(func, '__module__'):
+                logger = logging.getLogger(func.__module__)
+            else:
+                logger = logging.getLogger(__name__)
 
             with log_context(logger, operation=operation_name):
                 logger.debug(f"Starting {operation_name}", extra={
@@ -158,7 +163,12 @@ def log_operation(operation_name: str):
         @wraps(func)
         async def async_wrapper(*args, **kwargs):
             # Get logger from first argument if it's a class method
-            logger = getattr(args[0], 'logger', logging.getLogger(__name__))
+            if args and hasattr(args[0], 'logger'):
+                logger = args[0].logger
+            elif hasattr(func, '__module__'):
+                logger = logging.getLogger(func.__module__)
+            else:
+                logger = logging.getLogger(__name__)
 
             with log_context(logger, operation=operation_name):
                 logger.debug(f"Starting {operation_name}", extra={

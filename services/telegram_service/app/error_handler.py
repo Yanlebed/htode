@@ -10,7 +10,7 @@ from aiogram.utils.exceptions import (
 from .bot import dp, bot
 
 # Import service logger
-from .. import logger
+from . import logger
 from common.utils.logging_config import log_context
 
 

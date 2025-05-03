@@ -13,7 +13,7 @@ from common.messaging.unified_flow import (
 from common.utils.logging_config import log_context, log_operation
 
 # Import the service logger
-from .. import logger
+from . import logger
 
 
 @log_operation("handle_message_with_flow")

@@ -8,7 +8,7 @@ import hmac
 from typing import Dict, Any, Optional
 
 # Import service logger
-from ... import logger
+from .. import logger
 from common.utils.logging_config import log_operation, log_context
 
 # Replace with your actual merchant credentials from WayForPay

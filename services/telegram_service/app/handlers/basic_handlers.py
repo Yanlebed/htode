@@ -20,7 +20,7 @@ from ..utils.message_utils import (
 )
 
 # Import service logger and logging utilities
-from ... import logger
+from .. import logger
 from common.utils.logging_config import log_operation, log_context
 
 # Список доступних міст (можна отримати з бази даних або конфігурації)
