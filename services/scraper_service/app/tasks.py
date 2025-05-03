@@ -19,12 +19,12 @@ from common.db.repositories.subscription_repository import SubscriptionRepositor
 from common.db.repositories.ad_repository import AdRepository
 from common.db.models import Ad
 from sqlalchemy import func
+from common.utils.logging_config import setup_logging, log_context, log_operation, LogAggregator
 
+logger = setup_logging('scraper_service', log_level='INFO')
 # ---------------------------
 # Configuration & Initialization
 # ---------------------------
-
-logger = logging.getLogger(__name__)
 
 redis_client = Redis.from_url(REDIS_URL)
 
@@ -133,48 +133,72 @@ s3_client = boto3.client(
 # ---------------------------
 
 @celery_app.task(name="scraper_service.app.tasks.fetch_new_ads")
+@log_operation("fetch_new_ads")
 def fetch_new_ads() -> None:
-    try:
-        with db_session() as db:
-            # Get distinct cities from active users' filters using repository
+    with log_context(logger, task="fetch_new_ads"):
+        try:
+            with db_session() as db:
+                active_cities = SubscriptionRepository.get_active_cities(db)
 
-            # Using repository methods for better abstraction
-            active_cities = SubscriptionRepository.get_active_cities(db)
+                if not active_cities:
+                    logger.info("No subscribed cities found")
+                    return
 
-            if not active_cities:
-                logger.info("No subscribed cities found.")
-                return
+                aggregator = LogAggregator(logger, "fetch_new_ads")
 
-            for city in active_cities:
-                logger.info(f"Fetching new ads for city: {city}")
-                _scrape_ads_for_city(city)
-    except Exception as e:
-        logger.error(f"Error fetching new ads: {e}")
+                for city in active_cities:
+                    with log_context(logger, city_id=city):
+                        try:
+                            ads_processed = _scrape_ads_for_city(city)
+                            aggregator.add_item(
+                                {'city_id': city, 'ads_processed': ads_processed},
+                                success=True
+                            )
+                        except Exception as e:
+                            aggregator.add_error(str(e), {'city_id': city})
+
+                aggregator.log_summary()
+
+        except Exception as e:
+            logger.error("Failed to fetch new ads", exc_info=True)
+            raise
 
 
-def _scrape_ads_for_city(geo_id: int) -> None:
+def _scrape_ads_for_city(geo_id: int) -> int:
     """
-    Scrapes ads for a given city (geo_id) and property type.
+    Scrapes ads for a given city (geo_id) and returns the count of processed ads
     """
-    property_types = {'apartment': 2}  # Extend this mapping as needed.
+    total_processed = 0
+    property_types = {'apartment': 2}
     cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=5)
 
-    for property_type, section_id in property_types.items():
-        page = 1
-        while True:
-            ads = _scrape_ads_from_page(geo_id, section_id, page)
-            if not ads:
-                break
+    with log_context(logger, geo_id=geo_id):
+        for property_type, section_id in property_types.items():
+            page = 1
 
-            found_new = False
-            for ad in ads:
-                inserted_id = _insert_ad_if_new(ad, geo_id, property_type, cutoff_time)
-                if inserted_id:
-                    found_new = True
+            with log_context(logger, property_type=property_type):
+                aggregator = LogAggregator(logger, f"scrape_city_{geo_id}_{property_type}")
 
-            if not found_new:
-                break
-            page += 1
+                while True:
+                    ads = _scrape_ads_from_page(geo_id, section_id, page)
+                    if not ads:
+                        break
+
+                    found_new = False
+                    for ad in ads:
+                        inserted_id = _insert_ad_if_new(ad, geo_id, property_type, cutoff_time)
+                        if inserted_id:
+                            found_new = True
+                            total_processed += 1
+                            aggregator.add_item({'ad_id': inserted_id}, success=True)
+
+                    if not found_new:
+                        break
+                    page += 1
+
+                aggregator.log_summary()
+
+    return total_processed
 
 
 def _scrape_ads_from_page(geo_id: int, section_id: int, page: int) -> list:
@@ -282,24 +306,31 @@ def is_initial_load_done() -> bool:
 
 
 @celery_app.task(name="scraper_service.app.tasks.initial_30_day_scrape")
+@log_operation("initial_30_day_scrape")
 def initial_30_day_scrape() -> None:
-    """Celery task for an initial 30-day scrape if no ads are loaded."""
     if is_initial_load_done():
-        logger.info("Initial load is already done. Skipping.")
+        logger.info("Initial load already completed")
         return
 
-    # Use the enhanced context manager
-    with redis_lock("initial_scrape", expire_time=3600) as (acquired, _):
+    with redis_lock("initial_scrape", expire_time=3600) as (acquired, lock_id):
         if not acquired:
-            logger.info("Initial scrape is already in progress by another worker. Skipping.")
+            logger.info("Initial scrape already in progress")
             return
 
-        # Your existing scrape code here
-        for city_id, city_name in GEO_ID_MAPPING_FOR_INITIAL_RUN.items():
-            logger.info(f">>> Starting initial 30-day scrape for {city_name} <<<")
-            scrape_30_days_for_city(city_id)
+        with log_context(logger, lock_id=lock_id):
+            aggregator = LogAggregator(logger, "initial_30_day_scrape")
 
-        logger.info("Initial data load completed.")
+            for city_id, city_name in GEO_ID_MAPPING_FOR_INITIAL_RUN.items():
+                with log_context(logger, city_id=city_id, city_name=city_name):
+                    try:
+                        ads_count = scrape_30_days_for_city(city_id)
+                        aggregator.add_item(
+                            {'city_id': city_id, 'city_name': city_name, 'ads_count': ads_count}
+                        )
+                    except Exception as e:
+                        aggregator.add_error(str(e), {'city_id': city_id})
+
+            aggregator.log_summary()
 
 
 def scrape_30_days_for_city(geo_id: int) -> None:
