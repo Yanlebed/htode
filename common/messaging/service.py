@@ -192,5 +192,5 @@ class MessagingService:
 
 
 # Create a singleton instance for global use
-# SERVICE_NAME = os.getenv('SERVICE_NAME', 'telegram')  # Set this env var in your docker-compose.yml
-# messaging_service = MessagingService.create_for_service(SERVICE_NAME)
+SERVICE_NAME = os.getenv('SERVICE_NAME', 'telegram')  # Set this env var in your docker-compose.yml
+messaging_service = MessagingService.create_for_service(SERVICE_NAME)
