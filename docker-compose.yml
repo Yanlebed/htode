@@ -168,6 +168,7 @@ services:
     environment:
       <<: *common-variables
       TELEGRAM_TOKEN: "${TELEGRAM_TOKEN}"
+      SERVICE_NAME: "telegram"
       PYTHONPATH: "/app:/app/common"  # Important: set the correct Python path
     command: python -m app.main
 
@@ -225,6 +226,7 @@ services:
       <<: *common-variables
       VIBER_TOKEN: "${VIBER_TOKEN}"
       VIBER_WEBHOOK_URL: "${VIBER_WEBHOOK_URL}"
+      SERVICE_NAME: "viber"
     ports:
       - "8001:8000"  # Expose port for webhook
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
@@ -294,6 +296,7 @@ services:
       TWILIO_ACCOUNT_SID: "${TWILIO_ACCOUNT_SID}"
       TWILIO_AUTH_TOKEN: "${TWILIO_AUTH_TOKEN}"
       TWILIO_PHONE_NUMBER: "${TWILIO_PHONE_NUMBER}"
+      SERVICE_NAME: "whatsapp"
     command: uvicorn app.main:app --host 0.0.0.0 --port 8080
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
