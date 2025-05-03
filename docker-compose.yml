@@ -192,7 +192,7 @@ services:
       <<: *common-variables
       TELEGRAM_TOKEN: "${TELEGRAM_TOKEN}"
       PYTHONPATH: "/app:/app/common"  # Important: set the correct Python path
-    command: celery -A app.celery_app.celery_app worker -Q telegram_queue --loglevel=info --concurrency=2 --max-tasks-per-child=100
+    command: celery -A app.celery_app worker -Q telegram_queue --loglevel=info --concurrency=2 --max-tasks-per-child=100
     healthcheck:
       test: [ "CMD", "celery", "inspect", "ping", "-d", "celery@telegram_worker" ]
       interval: 30s

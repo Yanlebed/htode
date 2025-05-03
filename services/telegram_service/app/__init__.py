@@ -1,10 +1,12 @@
 # services/telegram_service/app/__init__.py
 
-from common.messaging.service import MessagingService
-from common.messaging.telegram_messaging import TelegramMessaging
+# Initialize bot first
 from .bot import bot
-from . import tasks
 
-# Create telegram-specific messaging service
-messaging_service = MessagingService()
+# Configure messaging service
+from common.messaging.service import messaging_service
+from common.messaging.telegram_messaging import TelegramMessaging
 messaging_service.register_messenger("telegram", TelegramMessaging(bot))
+
+# Now import tasks after the service is configured
+from . import tasks
