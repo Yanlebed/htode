@@ -1,6 +1,5 @@
 # services/webapps/mini_webapp.py
 
-import logging
 import os
 import json
 import hashlib
@@ -17,16 +16,20 @@ from common.db.repositories.payment_repository import PaymentRepository
 from common.db.repositories.user_repository import UserRepository
 from datetime import datetime, timedelta
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Import logging utilities from common modules
+from common.utils.logging_config import log_context, log_operation, LogAggregator
+
+# Import the service logger
+from . import logger
 
 # Get environment variables
 MERCHANT_ACCOUNT = os.getenv("WAYFORPAY_MERCHANT_LOGIN")
 MERCHANT_SECRET = os.getenv("WAYFORPAY_MERCHANT_SECRET")
+
+logger.info("Initializing webapps service", extra={
+    'merchant_account_present': bool(MERCHANT_ACCOUNT),
+    'merchant_secret_present': bool(MERCHANT_SECRET)
+})
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -37,6 +40,8 @@ app = FastAPI(
 
 # Initialize templates
 templates = Jinja2Templates(directory="templates")
+
+logger.info("FastAPI app initialized for webapps service")
 
 
 # Define Pydantic models for request validation
@@ -237,65 +242,92 @@ PHONE_HTML = """
 """
 
 
+@log_operation("verify_wayforpay_signature")
 def verify_wayforpay_signature(data: dict) -> bool:
     """Verify WayForPay callback signature"""
-    if not MERCHANT_SECRET:
-        logger.error("Missing WAYFORPAY_MERCHANT_SECRET environment variable")
-        return False
+    with log_context(logger, operation="signature_verification"):
+        if not MERCHANT_SECRET:
+            logger.error("Missing WAYFORPAY_MERCHANT_SECRET environment variable")
+            return False
 
-    # Extract the signature from the data
-    received_signature = data.get("merchantSignature")
-    if not received_signature:
-        logger.error("Missing merchantSignature in callback data")
-        return False
+        # Extract the signature from the data
+        received_signature = data.get("merchantSignature")
+        if not received_signature:
+            logger.error("Missing merchantSignature in callback data")
+            return False
 
-    # Remove the signature from the data
-    verification_data = {k: v for k, v in data.items() if k != "merchantSignature"}
+        # Remove the signature from the data
+        verification_data = {k: v for k, v in data.items() if k != "merchantSignature"}
 
-    # Sort parameters by key
-    keys = sorted(verification_data.keys())
-    values = [str(verification_data[key]) for key in keys]
-    string_to_sign = ";".join(values)
+        # Sort parameters by key
+        keys = sorted(verification_data.keys())
+        values = [str(verification_data[key]) for key in keys]
+        string_to_sign = ";".join(values)
 
-    # Generate signature
-    calculated_signature = hmac.new(
-        MERCHANT_SECRET.encode('utf-8'),
-        string_to_sign.encode('utf-8'),
-        hashlib.md5
-    ).hexdigest()
+        # Generate signature
+        calculated_signature = hmac.new(
+            MERCHANT_SECRET.encode('utf-8'),
+            string_to_sign.encode('utf-8'),
+            hashlib.md5
+        ).hexdigest()
 
-    # Compare signatures
-    if calculated_signature != received_signature:
-        logger.error(f"Invalid signature. Expected: {calculated_signature}, Received: {received_signature}")
-        return False
+        # Compare signatures
+        if calculated_signature != received_signature:
+            logger.error(f"Invalid signature", extra={
+                'expected': calculated_signature,
+                'received': received_signature,
+                'string_to_sign': string_to_sign[:100]  # First 100 chars for security
+            })
+            return False
 
-    # Verify merchant account
-    if data.get("merchantAccount") != MERCHANT_ACCOUNT:
-        logger.error(f"Invalid merchant account. Expected: {MERCHANT_ACCOUNT}, Received: {data.get('merchantAccount')}")
-        return False
+        # Verify merchant account
+        if data.get("merchantAccount") != MERCHANT_ACCOUNT:
+            logger.error(f"Invalid merchant account", extra={
+                'expected': MERCHANT_ACCOUNT,
+                'received': data.get("merchantAccount")
+            })
+            return False
 
-    return True
+        logger.info("Signature verified successfully", extra={
+            'merchant_account': MERCHANT_ACCOUNT
+        })
+        return True
 
 
 @app.get("/gallery", response_class=HTMLResponse)
+@log_operation("gallery_route")
 async def gallery_route(images: str = Query(None)):
     """Gallery mini-app for viewing images"""
-    return GALLERY_HTML
+    with log_context(logger, endpoint="gallery"):
+        logger.info("Gallery page requested", extra={
+            'has_images': bool(images),
+            'image_count': len(images.split(',')) if images else 0
+        })
+        return GALLERY_HTML
 
 
 @app.get("/phones", response_class=HTMLResponse)
+@log_operation("phones_route")
 async def phones_route(numbers: str = Query(None)):
     """Phone numbers mini-app for viewing and calling"""
-    return PHONE_HTML
+    with log_context(logger, endpoint="phones"):
+        logger.info("Phones page requested", extra={
+            'has_numbers': bool(numbers),
+            'number_count': len(numbers.split(',')) if numbers else 0
+        })
+        return PHONE_HTML
 
 
 @app.get("/health")
+@log_operation("health_check")
 async def health_check():
     """Simple health check endpoint for monitoring"""
+    logger.debug("Health check requested")
     return {"status": "ok"}
 
 
 @app.post("/payment/callback")
+@log_operation("payment_callback")
 async def payment_callback(payload: PaymentCallback, background_tasks: BackgroundTasks):
     """
     Handle WayForPay payment callbacks with enhanced security and user notifications
@@ -303,211 +335,294 @@ async def payment_callback(payload: PaymentCallback, background_tasks: Backgroun
     try:
         # Convert Pydantic model to dict
         callback_data = payload.dict()
-        logger.info(f"Received payment callback: {json.dumps(callback_data)}")
 
-        # Verify the signature and merchant account
-        if not verify_wayforpay_signature(callback_data):
-            logger.error("Payment signature verification failed")
-            return JSONResponse(
-                status_code=400,
-                content={"status": "error", "message": "Signature verification failed"}
-            )
+        with log_context(logger, order_reference=callback_data.get("orderReference")):
+            logger.info(f"Received payment callback", extra={
+                'order_reference': callback_data.get("orderReference"),
+                'transaction_status': callback_data.get("transactionStatus"),
+                'amount': callback_data.get("amount")
+            })
 
-        # Get order reference
-        order_id = callback_data.get("orderReference")
-        if not order_id:
-            logger.error("Missing orderReference in callback")
-            return JSONResponse(
-                status_code=400,
-                content={"status": "error", "message": "Missing order reference"}
-            )
+            # Verify the signature and merchant account
+            if not verify_wayforpay_signature(callback_data):
+                logger.error("Payment signature verification failed")
+                return JSONResponse(
+                    status_code=400,
+                    content={"status": "error", "message": "Signature verification failed"}
+                )
 
-        # Get transaction status
-        transaction_status = callback_data.get("transactionStatus")
-        if transaction_status != "Approved":
-            logger.info(f"Payment not approved: {transaction_status}")
+            # Get order reference
+            order_id = callback_data.get("orderReference")
+            if not order_id:
+                logger.error("Missing orderReference in callback")
+                return JSONResponse(
+                    status_code=400,
+                    content={"status": "error", "message": "Missing order reference"}
+                )
 
-            # Update payment status in database as a background task
+            # Get transaction status
+            transaction_status = callback_data.get("transactionStatus")
+            if transaction_status != "Approved":
+                logger.info(f"Payment not approved", extra={
+                    'order_id': order_id,
+                    'status': transaction_status
+                })
+
+                # Update payment status in database as a background task
+                background_tasks.add_task(
+                    update_non_approved_payment_status,
+                    order_id,
+                    transaction_status,
+                    callback_data
+                )
+
+                return JSONResponse(
+                    status_code=200,
+                    content={"status": "acknowledged", "message": "Non-approved status noted"}
+                )
+
+            # Process the approved payment in a background task
+            logger.info(f"Processing approved payment", extra={
+                'order_id': order_id
+            })
+
             background_tasks.add_task(
-                update_non_approved_payment_status,
+                process_approved_payment,
                 order_id,
-                transaction_status,
                 callback_data
             )
 
+            # Return success response with expected format for WayForPay
             return JSONResponse(
                 status_code=200,
-                content={"status": "acknowledged", "message": "Non-approved status noted"}
+                content={
+                    "orderReference": order_id,
+                    "status": "accept",
+                    "time": int(datetime.now().timestamp())
+                }
             )
 
-        # Process the approved payment in a background task
-        background_tasks.add_task(
-            process_approved_payment,
-            order_id,
-            callback_data
-        )
-
-        # Return success response with expected format for WayForPay
-        return JSONResponse(
-            status_code=200,
-            content={
-                "orderReference": order_id,
-                "status": "accept",
-                "time": int(datetime.now().timestamp())
-            }
-        )
-
     except Exception as e:
-        logger.exception(f"Error in payment callback: {e}")
+        logger.error(f"Error in payment callback", exc_info=True, extra={
+            'error_type': type(e).__name__,
+            'order_id': callback_data.get("orderReference") if 'callback_data' in locals() else None
+        })
         return JSONResponse(
             status_code=500,
             content={"status": "error", "message": "Internal server error"}
         )
 
 
+@log_operation("update_non_approved_payment_status")
 async def update_non_approved_payment_status(order_id: str, transaction_status: str, callback_data: dict):
     """Update database with non-approved payment status"""
-    try:
-        from common.db.database import execute_query
+    with log_context(logger, order_id=order_id, status=transaction_status):
+        try:
+            from common.db.database import execute_query
 
-        sql_update = """
-                     UPDATE payment_orders
-                     SET status = %s
-                     WHERE order_id = %s \
-                     """
-        execute_query(sql_update, [transaction_status.lower(), order_id])
+            logger.info(f"Updating non-approved payment status", extra={
+                'order_id': order_id,
+                'status': transaction_status
+            })
 
-        # Store in payment history
-        sql_history = """
-                      INSERT INTO payment_history
-                      (user_id, order_id, amount, subscription_period, status, transaction_id, card_mask, \
-                       payment_details)
-                      SELECT user_id, \
-                             order_id, \
-                             amount, \
-                             period, \
-                             %s, \
-                             %s, \
-                             %s, \
-                             %s
-                      FROM payment_orders
-                      WHERE order_id = %s \
-                      """
-        execute_query(sql_history, [
-            transaction_status.lower(),
-            callback_data.get("authCode", ""),
-            callback_data.get("cardPan", ""),
-            json.dumps(callback_data),
-            order_id
-        ])
+            sql_update = """
+                         UPDATE payment_orders
+                         SET status = %s
+                         WHERE order_id = %s \
+                         """
+            execute_query(sql_update, [transaction_status.lower(), order_id])
 
-        logger.info(f"Updated non-approved payment status for order {order_id}")
-    except Exception as e:
-        logger.error(f"Error updating non-approved payment status: {e}")
+            # Store in payment history
+            sql_history = """
+                          INSERT INTO payment_history
+                          (user_id, order_id, amount, subscription_period, status, transaction_id, card_mask, \
+                           payment_details)
+                          SELECT user_id, \
+                                 order_id, \
+                                 amount, \
+                                 period, \
+                                 %s, \
+                                 %s, \
+                                 %s, \
+                                 %s
+                          FROM payment_orders
+                          WHERE order_id = %s \
+                          """
+            execute_query(sql_history, [
+                transaction_status.lower(),
+                callback_data.get("authCode", ""),
+                callback_data.get("cardPan", ""),
+                json.dumps(callback_data),
+                order_id
+            ])
+
+            logger.info(f"Successfully updated non-approved payment status", extra={
+                'order_id': order_id,
+                'status': transaction_status
+            })
+        except Exception as e:
+            logger.error(f"Error updating non-approved payment status", exc_info=True, extra={
+                'order_id': order_id,
+                'status': transaction_status,
+                'error_type': type(e).__name__
+            })
 
 
+@log_operation("process_approved_payment")
 async def process_approved_payment(order_id: str, callback_data: dict):
     """Process approved payment and update subscription"""
-    try:
-        with db_session() as db:
-            # Get order details from database using repository
-            payment_order = PaymentRepository.get_order_by_id(db, order_id)
+    with log_context(logger, order_id=order_id):
+        try:
+            with db_session() as db:
+                # Get order details from database using repository
+                payment_order = PaymentRepository.get_order_by_id(db, order_id)
 
-            if not payment_order:
-                logger.error(f"Order not found: {order_id}")
-                return
+                if not payment_order:
+                    logger.error(f"Order not found", extra={
+                        'order_id': order_id
+                    })
+                    return
 
-            user_id = payment_order.user_id
-            period = payment_order.period
-            amount = payment_order.amount
+                user_id = payment_order.user_id
+                period = payment_order.period
+                amount = payment_order.amount
 
-            # Determine subscription duration in days
-            period_days = 30  # Default to 30 days
-            if period == "3months":
-                period_days = 90
-            elif period == "6months":
-                period_days = 180
-            elif period == "12months":
-                period_days = 365
+                logger.info(f"Processing payment for user", extra={
+                    'order_id': order_id,
+                    'user_id': user_id,
+                    'period': period,
+                    'amount': amount
+                })
 
-            # Update payment status
-            payment_order.status = "completed"
-            payment_order.updated_at = datetime.now()
-            db.commit()
+                # Determine subscription duration in days
+                period_days = 30  # Default to 30 days
+                if period == "3months":
+                    period_days = 90
+                elif period == "6months":
+                    period_days = 180
+                elif period == "12months":
+                    period_days = 365
 
-            # Create payment history entry
-            payment_history_data = {
-                "user_id": user_id,
-                "order_id": order_id,
-                "amount": amount,
-                "subscription_period": period,
-                "status": "completed",
-                "transaction_id": callback_data.get("authCode", ""),
-                "card_mask": callback_data.get("cardPan", ""),
-                "payment_details": str(callback_data)
-            }
+                # Update payment status
+                payment_order.status = "completed"
+                payment_order.updated_at = datetime.now()
+                db.commit()
 
-            PaymentRepository.create_payment_history(db, payment_history_data)
+                logger.info(f"Payment status updated to completed", extra={
+                    'order_id': order_id
+                })
 
-            # Get the user
-            user = UserRepository.get_by_id(db, user_id)
+                # Create payment history entry
+                payment_history_data = {
+                    "user_id": user_id,
+                    "order_id": order_id,
+                    "amount": amount,
+                    "subscription_period": period,
+                    "status": "completed",
+                    "transaction_id": callback_data.get("authCode", ""),
+                    "card_mask": callback_data.get("cardPan", ""),
+                    "payment_details": str(callback_data)
+                }
 
-            # Update subscription end date
-            if user.subscription_until and user.subscription_until > datetime.now():
-                # Extend existing subscription
-                user.subscription_until = user.subscription_until + timedelta(days=period_days)
-            else:
-                # Set new subscription
-                user.subscription_until = datetime.now() + timedelta(days=period_days)
+                PaymentRepository.create_payment_history(db, payment_history_data)
 
-            db.commit()
+                logger.info(f"Payment history created", extra={
+                    'order_id': order_id,
+                    'user_id': user_id
+                })
 
-            logger.info(f"Updated subscription for user {user_id} until {user.subscription_until}")
+                # Get the user
+                user = UserRepository.get_by_id(db, user_id)
 
-            # Format the date for notification
-            sub_date = user.subscription_until.strftime("%d.%m.%Y")
+                # Update subscription end date
+                if user.subscription_until and user.subscription_until > datetime.now():
+                    # Extend existing subscription
+                    user.subscription_until = user.subscription_until + timedelta(days=period_days)
+                else:
+                    # Set new subscription
+                    user.subscription_until = datetime.now() + timedelta(days=period_days)
 
-            # Determine which messenger to use
-            messenger_type = None
-            messenger_id = None
-            task_name = None
+                db.commit()
 
-            if user.telegram_id:
-                messenger_type = "telegram"
-                messenger_id = user.telegram_id
-                task_name = 'telegram_service.app.tasks.send_subscription_notification'
-            elif user.viber_id:
-                messenger_type = "viber"
-                messenger_id = user.viber_id
-                task_name = 'viber_service.app.tasks.send_subscription_notification'
-            elif user.whatsapp_id:
-                messenger_type = "whatsapp"
-                messenger_id = user.whatsapp_id
-                task_name = 'whatsapp_service.app.tasks.send_subscription_notification'
+                logger.info(f"Updated subscription end date", extra={
+                    'user_id': user_id,
+                    'subscription_until': user.subscription_until.isoformat(),
+                    'period_days': period_days
+                })
 
-            if messenger_type and messenger_id and task_name:
-                # Send success notification via Celery task
-                from common.celery_app import celery_app
-                celery_app.send_task(
-                    task_name,
-                    args=[
-                        messenger_id,
-                        "payment_success",
-                        {
-                            "order_id": order_id,
-                            "amount": amount,
-                            "subscription_until": sub_date
-                        }
-                    ]
-                )
-                logger.info(f"Payment notification sent to {messenger_type} user {messenger_id}")
+                # Format the date for notification
+                sub_date = user.subscription_until.strftime("%d.%m.%Y")
 
-    except Exception as e:
-        logger.exception(f"Error processing payment: {e}")
+                # Determine which messenger to use
+                messenger_type = None
+                messenger_id = None
+                task_name = None
+
+                if user.telegram_id:
+                    messenger_type = "telegram"
+                    messenger_id = user.telegram_id
+                    task_name = 'telegram_service.app.tasks.send_subscription_notification'
+                elif user.viber_id:
+                    messenger_type = "viber"
+                    messenger_id = user.viber_id
+                    task_name = 'viber_service.app.tasks.send_subscription_notification'
+                elif user.whatsapp_id:
+                    messenger_type = "whatsapp"
+                    messenger_id = user.whatsapp_id
+                    task_name = 'whatsapp_service.app.tasks.send_subscription_notification'
+
+                if messenger_type and messenger_id and task_name:
+                    # Send success notification via Celery task
+                    from common.celery_app import celery_app
+                    celery_app.send_task(
+                        task_name,
+                        args=[
+                            messenger_id,
+                            "payment_success",
+                            {
+                                "order_id": order_id,
+                                "amount": amount,
+                                "subscription_until": sub_date
+                            }
+                        ]
+                    )
+                    logger.info(f"Payment notification sent", extra={
+                        'messenger_type': messenger_type,
+                        'messenger_id': messenger_id,
+                        'user_id': user_id
+                    })
+                else:
+                    logger.warning(f"No messenger available for payment notification", extra={
+                        'user_id': user_id
+                    })
+
+        except Exception as e:
+            logger.error(f"Error processing payment", exc_info=True, extra={
+                'order_id': order_id,
+                'error_type': type(e).__name__
+            })
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Log startup event"""
+    logger.info("Webapps service starting up", extra={
+        'app_title': app.title,
+        'app_version': app.version
+    })
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Log shutdown event"""
+    logger.info("Webapps service shutting down")
 
 
 if __name__ == "__main__":
     import uvicorn
 
-    logger.info("Starting mini web apps service with FastAPI...")
+    logger.info("Starting mini web apps service with FastAPI...", extra={
+        'host': "0.0.0.0",
+        'port': 8080
+    })
     uvicorn.run("mini_webapp:app", host="0.0.0.0", port=8080, reload=False)
