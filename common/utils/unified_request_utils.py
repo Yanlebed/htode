@@ -1,6 +1,5 @@
 # common/utils/unified_request_utils.py
 
-import logging
 import requests
 import time
 import random
@@ -8,7 +7,11 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from typing import Optional, Dict, Any, Union
 
-logger = logging.getLogger(__name__)
+# Import the logging utilities from the new logging modules
+from common.utils.logging_config import log_operation, log_context
+
+# Import the common utils logger
+from . import logger
 
 # Common constants
 DEFAULT_TIMEOUT = 30
@@ -28,6 +31,7 @@ DEFAULT_HEADERS = {
 BASE_FLATFY_URL = "https://flatfy.ua/api/realties"
 
 
+@log_operation("get_retry_session")
 def get_retry_session(
         retries: int = DEFAULT_RETRIES,
         backoff_factor: float = DEFAULT_BACKOFF_FACTOR,
@@ -36,31 +40,31 @@ def get_retry_session(
 ) -> requests.Session:
     """
     Get requests session with retry configuration.
-
-    Args:
-        retries: Number of retries
-        backoff_factor: Backoff factor for retries
-        status_forcelist: HTTP status codes to retry on
-        session: Existing session to configure (creates new if None)
-
-    Returns:
-        Configured requests session
     """
-    session = session or requests.Session()
-    retry = Retry(
-        total=retries,
-        read=retries,
-        connect=retries,
-        backoff_factor=backoff_factor,
-        status_forcelist=status_forcelist,
-        allowed_methods=["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS"]
-    )
-    adapter = HTTPAdapter(max_retries=retry)
-    session.mount('http://', adapter)
-    session.mount('https://', adapter)
-    return session
+    with log_context(logger, retries=retries, backoff_factor=backoff_factor):
+        session = session or requests.Session()
+        retry = Retry(
+            total=retries,
+            read=retries,
+            connect=retries,
+            backoff_factor=backoff_factor,
+            status_forcelist=status_forcelist,
+            allowed_methods=["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS"]
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        session.mount('http://', adapter)
+        session.mount('https://', adapter)
+
+        logger.debug("Configured session with retry", extra={
+            'retries': retries,
+            'backoff_factor': backoff_factor,
+            'status_forcelist': status_forcelist
+        })
+
+        return session
 
 
+@log_operation("make_request")
 def make_request(
         url: str,
         method: str = 'get',
@@ -76,73 +80,82 @@ def make_request(
 ) -> Optional[requests.Response]:
     """
     Make HTTP request with retries and proper error handling
-
-    Args:
-        url: Request URL
-        method: HTTP method (get, post, put, delete)
-        params: URL parameters
-        data: Form data
-        json: JSON data
-        headers: HTTP headers
-        timeout: Request timeout in seconds
-        retries: Number of retries
-        session: Existing session to use
-        jitter: Whether to add jitter to retry delays
-        raise_for_status: Whether to raise exception on HTTP error
-
-    Returns:
-        Response object or None if error and raise_for_status=False
     """
-    session = get_retry_session(retries=retries, session=session)
+    with log_context(logger, url=url, method=method, retries=retries):
+        session = get_retry_session(retries=retries, session=session)
 
-    # Create default headers if none provided
-    if not headers:
-        headers = DEFAULT_HEADERS.copy()
+        # Create default headers if none provided
+        if not headers:
+            headers = DEFAULT_HEADERS.copy()
 
-    method = method.lower()
+        method = method.lower()
 
-    try:
-        logger.debug(f"Making {method.upper()} request to {url}")
+        try:
+            logger.debug(f"Making {method.upper()} request", extra={
+                'url': url,
+                'method': method,
+                'timeout': timeout
+            })
 
-        if method == 'get':
-            response = session.get(url, params=params, headers=headers, timeout=timeout)
-        elif method == 'post':
-            response = session.post(url, params=params, data=data, json=json, headers=headers, timeout=timeout)
-        elif method == 'put':
-            response = session.put(url, params=params, data=data, json=json, headers=headers, timeout=timeout)
-        elif method == 'delete':
-            response = session.delete(url, params=params, data=data, json=json, headers=headers, timeout=timeout)
-        else:
-            logger.error(f"Unsupported HTTP method: {method}")
-            raise ValueError(f"Unsupported HTTP method: {method}")
+            if method == 'get':
+                response = session.get(url, params=params, headers=headers, timeout=timeout)
+            elif method == 'post':
+                response = session.post(url, params=params, data=data, json=json, headers=headers, timeout=timeout)
+            elif method == 'put':
+                response = session.put(url, params=params, data=data, json=json, headers=headers, timeout=timeout)
+            elif method == 'delete':
+                response = session.delete(url, params=params, data=data, json=json, headers=headers, timeout=timeout)
+            else:
+                logger.error(f"Unsupported HTTP method", extra={'method': method})
+                raise ValueError(f"Unsupported HTTP method: {method}")
 
-        if raise_for_status:
-            response.raise_for_status()
+            if raise_for_status:
+                response.raise_for_status()
 
-        return response
+            logger.debug("Request successful", extra={
+                'url': url,
+                'status_code': response.status_code,
+                'response_time': response.elapsed.total_seconds()
+            })
 
-    except requests.exceptions.HTTPError as e:
-        logger.error(f"HTTP Error: {e} for URL: {url}")
-        if raise_for_status:
-            raise
-        return None
-    except requests.exceptions.ConnectionError as e:
-        logger.error(f"Connection Error: {e} for URL: {url}")
-        if raise_for_status:
-            raise
-        return None
-    except requests.exceptions.Timeout as e:
-        logger.error(f"Timeout Error: {e} for URL: {url}")
-        if raise_for_status:
-            raise
-        return None
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Request Error: {e} for URL: {url}")
-        if raise_for_status:
-            raise
-        return None
+            return response
 
+        except requests.exceptions.HTTPError as e:
+            logger.error("HTTP Error", exc_info=True, extra={
+                'url': url,
+                'error_type': type(e).__name__,
+                'status_code': e.response.status_code if hasattr(e, 'response') else None
+            })
+            if raise_for_status:
+                raise
+            return None
+        except requests.exceptions.ConnectionError as e:
+            logger.error("Connection Error", exc_info=True, extra={
+                'url': url,
+                'error_type': type(e).__name__
+            })
+            if raise_for_status:
+                raise
+            return None
+        except requests.exceptions.Timeout as e:
+            logger.error("Timeout Error", exc_info=True, extra={
+                'url': url,
+                'error_type': type(e).__name__,
+                'timeout': timeout
+            })
+            if raise_for_status:
+                raise
+            return None
+        except requests.exceptions.RequestException as e:
+            logger.error("Request Error", exc_info=True, extra={
+                'url': url,
+                'error_type': type(e).__name__
+            })
+            if raise_for_status:
+                raise
+            return None
 
+@log_operation("fetch_with_retry")
 def fetch_with_retry(
         url: str,
         method: str = 'get',
@@ -153,53 +166,60 @@ def fetch_with_retry(
 ) -> Optional[requests.Response]:
     """
     Fetch with retry logic but simpler interface than make_request.
-
-    Args:
-        url: URL to fetch
-        method: HTTP method (get, post, etc.)
-        max_retries: Maximum number of retries
-        retry_delay: Initial delay between retries
-        retry_status_codes: Status codes to retry on
-        **kwargs: Additional arguments to pass to requests
-
-    Returns:
-        Response object or None if all retries fail
     """
-    for attempt in range(max_retries + 1):
-        try:
-            if method.lower() == 'get':
-                response = requests.get(url, **kwargs)
-            elif method.lower() == 'post':
-                response = requests.post(url, **kwargs)
-            elif method.lower() == 'put':
-                response = requests.put(url, **kwargs)
-            elif method.lower() == 'delete':
-                response = requests.delete(url, **kwargs)
-            else:
-                logger.error(f"Unsupported HTTP method: {method}")
-                return None
+    with log_context(logger, url=url, method=method, max_retries=max_retries):
+        for attempt in range(max_retries + 1):
+            try:
+                if method.lower() == 'get':
+                    response = requests.get(url, **kwargs)
+                elif method.lower() == 'post':
+                    response = requests.post(url, **kwargs)
+                elif method.lower() == 'put':
+                    response = requests.put(url, **kwargs)
+                elif method.lower() == 'delete':
+                    response = requests.delete(url, **kwargs)
+                else:
+                    logger.error("Unsupported HTTP method", extra={'method': method})
+                    return None
 
-            response.raise_for_status()
-            return response
+                response.raise_for_status()
 
-        except (requests.exceptions.RequestException) as e:
-            if attempt < max_retries:
-                # Calculate delay with exponential backoff and jitter
-                delay = retry_delay * (2 ** attempt)
-                delay *= random.uniform(0.8, 1.2)  # Add jitter
+                logger.debug("Request successful", extra={
+                    'url': url,
+                    'attempt': attempt + 1,
+                    'status_code': response.status_code
+                })
 
-                logger.warning(
-                    f"Request failed (attempt {attempt + 1}/{max_retries + 1}): {e}. "
-                    f"Retrying in {delay:.2f}s"
-                )
-                time.sleep(delay)
-            else:
-                logger.error(f"Request failed after {max_retries + 1} attempts: {e}")
-                return None
+                return response
+
+            except (requests.exceptions.RequestException) as e:
+                if attempt < max_retries:
+                    # Calculate delay with exponential backoff and jitter
+                    delay = retry_delay * (2 ** attempt)
+                    delay *= random.uniform(0.8, 1.2)  # Add jitter
+
+                    logger.warning("Request failed, retrying", extra={
+                        'url': url,
+                        'attempt': attempt + 1,
+                        'max_retries': max_retries + 1,
+                        'delay': delay,
+                        'error': str(e)
+                    })
+                    time.sleep(delay)
+                    return None
+                else:
+                    logger.error("Request failed after all retries", exc_info=True, extra={
+                        'url': url,
+                        'attempts': max_retries + 1,
+                        'error_type': type(e).__name__
+                    })
+                    return None
+        return None
 
 
 # ===== API-Specific Utility Functions =====
 
+@log_operation("fetch_ads_flatfy")
 def fetch_ads_flatfy(
         geo_id=None,
         page=1,
@@ -218,131 +238,142 @@ def fetch_ads_flatfy(
 ) -> list:
     """
     Fetch a list of ad dicts from flatfy.ua API with shared logic.
-
-    Args:
-      geo_id (int|None): The city geo_id, e.g. from your GEO_ID_MAPPING.
-      page (int): Page number to fetch.
-      room_count (list|None): e.g. [1,2] or None.
-      price_min (int|None): If set, filter ads with price >= price_min.
-      price_max (int|None): If set, filter ads with price <= price_max.
-      section_id (int): e.g. 2 for apartments, 4 for houses, etc.
-      ...
-
-    Returns:
-      list: A list of ad dictionaries or empty list if error or none.
     """
-    try:
-        params = {
-            "geo_id": geo_id,
-            "page": page,
-            "section_id": section_id,
-            "currency": currency,
-            "group_collapse": group_collapse,
-            "has_eoselia": has_eoselia,
-            "is_without_fee": is_without_fee,
-            "lang": lang,
-            "price_sqm_currency": price_sqm_currency,
-            "sort": sort,
-        }
+    with log_context(logger, geo_id=geo_id, page=page, section_id=section_id):
+        try:
+            params = {
+                "geo_id": geo_id,
+                "page": page,
+                "section_id": section_id,
+                "currency": currency,
+                "group_collapse": group_collapse,
+                "has_eoselia": has_eoselia,
+                "is_without_fee": is_without_fee,
+                "lang": lang,
+                "price_sqm_currency": price_sqm_currency,
+                "sort": sort,
+            }
 
-        if room_count:
-            params["room_count"] = room_count
-        if price_min is not None:
-            params["price_min"] = str(price_min)
-        if price_max is not None:
-            params["price_max"] = str(price_max)
+            if room_count:
+                params["room_count"] = room_count
+            if price_min is not None:
+                params["price_min"] = str(price_min)
+            if price_max is not None:
+                params["price_max"] = str(price_max)
 
-        logger.info(f"Fetching Flatfy ads with params: {params}")
+            logger.info("Fetching Flatfy ads", extra={
+                'url': BASE_FLATFY_URL,
+                'params': params
+            })
 
-        # Use our make_request utility
-        response = make_request(
-            BASE_FLATFY_URL,
-            method='get',
-            params=params,
-            headers=DEFAULT_HEADERS,
-            timeout=15,
-            retries=3
-        )
+            # Use our make_request utility
+            response = make_request(
+                BASE_FLATFY_URL,
+                method='get',
+                params=params,
+                headers=DEFAULT_HEADERS,
+                timeout=15,
+                retries=3
+            )
 
-        if response is None or response.status_code != 200:
-            logger.error(f"Fetch failed with status {response.status_code if response else 'No response'}.")
+            if response is None or response.status_code != 200:
+                logger.error("Failed to fetch ads from Flatfy", extra={
+                    'status_code': response.status_code if response else 'No response',
+                    'params': params
+                })
+                return []
+
+            data = response.json().get("data", [])
+            logger.info("Successfully fetched ads from Flatfy", extra={
+                'ad_count': len(data),
+                'page': page
+            })
+            return data
+        except Exception as e:
+            logger.error("Error fetching ads from Flatfy", exc_info=True, extra={
+                'error_type': type(e).__name__,
+                'params': params
+            })
             return []
-
-        data = response.json().get("data", [])
-        logger.info(f"Received {len(data)} ads from Flatfy.")
-        return data
-    except Exception as e:
-        logger.error(f"Failed to fetch ads from Flatfy: {e}")
-        return []
 
 
 # ===== Convenience Wrappers =====
 
+@log_operation("get_json")
 def get_json(url: str, **kwargs) -> Optional[Dict[str, Any]]:
     """
     Convenience wrapper to make a GET request and return JSON data.
-
-    Args:
-        url: URL to fetch
-        **kwargs: Additional arguments to pass to make_request
-
-    Returns:
-        JSON data as dictionary or None if request failed
     """
-    response = make_request(url, method='get', **kwargs)
-    if response and response.status_code == 200:
-        try:
-            return response.json()
-        except ValueError as e:
-            logger.error(f"Failed to parse JSON response: {e}")
-    return None
+    with log_context(logger, url=url):
+        response = make_request(url, method='get', **kwargs)
+        if response and response.status_code == 200:
+            try:
+                json_data = response.json()
+                logger.debug("Successfully parsed JSON response", extra={
+                    'url': url,
+                    'data_size': len(str(json_data))
+                })
+                return json_data
+            except ValueError as e:
+                logger.error("Failed to parse JSON response", exc_info=True, extra={
+                    'url': url,
+                    'error_type': type(e).__name__
+                })
+        return None
 
 
+@log_operation("post_json")
 def post_json(url: str, data: Dict[str, Any], **kwargs) -> Optional[Dict[str, Any]]:
     """
     Convenience wrapper to make a POST request with JSON data and return JSON response.
-
-    Args:
-        url: URL to post to
-        data: JSON data to send
-        **kwargs: Additional arguments to pass to make_request
-
-    Returns:
-        JSON response as dictionary or None if request failed
     """
-    response = make_request(url, method='post', json=data, **kwargs)
-    if response and response.status_code in (200, 201, 202):
-        try:
-            return response.json()
-        except ValueError as e:
-            logger.error(f"Failed to parse JSON response: {e}")
-    return None
+    with log_context(logger, url=url, data_size=len(str(data))):
+        response = make_request(url, method='post', json=data, **kwargs)
+        if response and response.status_code in (200, 201, 202):
+            try:
+                json_response = response.json()
+                logger.debug("Successfully parsed JSON response", extra={
+                    'url': url,
+                    'status_code': response.status_code,
+                    'response_size': len(str(json_response))
+                })
+                return json_response
+            except ValueError as e:
+                logger.error("Failed to parse JSON response", exc_info=True, extra={
+                    'url': url,
+                    'error_type': type(e).__name__
+                })
+        return None
 
 
+@log_operation("download_file")
 def download_file(url: str, local_path: str, **kwargs) -> bool:
     """
     Download a file from a URL to a local path.
-
-    Args:
-        url: URL of the file to download
-        local_path: Local path to save the file to
-        **kwargs: Additional arguments to pass to make_request
-
-    Returns:
-        True if download was successful, False otherwise
     """
-    # Set stream=True to avoid loading the whole file into memory
-    kwargs['stream'] = True
+    with log_context(logger, url=url, local_path=local_path):
+        # Set stream=True to avoid loading the whole file into memory
+        kwargs['stream'] = True
 
-    response = make_request(url, **kwargs)
-    if not response:
-        return False
+        response = make_request(url, **kwargs)
+        if not response:
+            return False
 
-    try:
-        with open(local_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-        return True
-    except Exception as e:
-        logger.error(f"Failed to save downloaded file to {local_path}: {e}")
-        return False
+        try:
+            with open(local_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+
+            logger.info("Successfully downloaded file", extra={
+                'url': url,
+                'local_path': local_path,
+                'file_size': response.headers.get('content-length', 'unknown')
+            })
+            return True
+        except Exception as e:
+            logger.error("Failed to save downloaded file", exc_info=True, extra={
+                'url': url,
+                'local_path': local_path,
+                'error_type': type(e).__name__
+            })
+            return False

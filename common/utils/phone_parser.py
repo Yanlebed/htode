@@ -3,7 +3,6 @@
 import os
 import re
 import urllib.parse
-import logging
 import random
 import asyncio
 import jmespath
@@ -14,9 +13,10 @@ from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright, Page, Browser
 
 from common.utils.unified_request_utils import make_request
+from common.utils.logging_config import log_operation, log_context, LogAggregator
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+# Import the common utils logger
+from . import logger
 
 # Circuit breaker globals
 CIRCUIT_BREAKER_FAILURES = 0
@@ -54,6 +54,7 @@ ZENROWS_API_KEY = os.getenv("ZENROWS_API_KEY", "YOUR_DEFAULT_KEY")
 ZENROWS_ENDPOINT = "https://api.zenrows.com/v1/"
 
 
+@log_operation("parse_proxy")
 def parse_proxy(proxy_url: str):
     parsed = urllib.parse.urlparse(proxy_url)
     return {
@@ -63,31 +64,34 @@ def parse_proxy(proxy_url: str):
     }
 
 
+@log_operation("fetch_with_zenrows")
 def fetch_with_zenrows(url: str, js_render: bool = True) -> str:
     """
     Synchronous fallback using ZenRows.
     """
-    logger.info(f"[ZenRows fallback] GET {url}, js_render={js_render}")
-    params = {
-        "apikey": ZENROWS_API_KEY,
-        "url": url,
-        "premium_proxy": "false",
-        "js_render": "true" if js_render else "false",
-    }
+    with log_context(logger, url=url, js_render=js_render):
+        logger.info(f"[ZenRows fallback] GET {url}, js_render={js_render}")
+        params = {
+            "apikey": ZENROWS_API_KEY,
+            "url": url,
+            "premium_proxy": "false",
+            "js_render": "true" if js_render else "false",
+        }
 
-    # Use our centralized request utility
-    response = make_request(
-        url=ZENROWS_ENDPOINT,
-        method='get',
-        params=params,
-        timeout=REQUEST_TIMEOUT,
-        retries=3
-    )
+        # Use our centralized request utility
+        response = make_request(
+            url=ZENROWS_ENDPOINT,
+            method='get',
+            params=params,
+            timeout=REQUEST_TIMEOUT,
+            retries=3
+        )
 
-    if not response:
-        raise Exception(f"Failed to get response from ZenRows for URL: {url}")
+        if not response:
+            logger.error("Failed to get response from ZenRows", extra={'url': url})
+            raise Exception(f"Failed to get response from ZenRows for URL: {url}")
 
-    return response.text
+        return response.text
 
 
 # ===========================
@@ -117,26 +121,32 @@ def get_random_desktop_user_agent() -> str:
 # ===========================
 # Domain-Specific fallback parse
 # ===========================
+@log_operation("parse_real_estate_lviv")
 def _parse_real_estate_lviv(ad_link: str) -> ExtractionResult:
-    logger.info("Parsing real-estate.lviv.ua data.")
-    try:
-        # Extract the ID part from the URL
-        ad_id_part = ad_link.split("/")[-1].split("-")[0]
-        link_ = REAL_ESTATE_LVIV_UA_LINK.format(ad_id_part)
+    with log_context(logger, ad_link=ad_link):
+        logger.info("Parsing real-estate.lviv.ua data.")
+        try:
+            # Extract the ID part from the URL
+            ad_id_part = ad_link.split("/")[-1].split("-")[0]
+            link_ = REAL_ESTATE_LVIV_UA_LINK.format(ad_id_part)
 
-        # Use centralized request utility
-        response = make_request(link_, timeout=REQUEST_TIMEOUT, retries=3)
-        if not response:
+            # Use centralized request utility
+            response = make_request(link_, timeout=REQUEST_TIMEOUT, retries=3)
+            if not response:
+                return ExtractionResult([], None)
+
+            matches = TELEPHONE_REGEX_REAL_ESTATE.findall(response.text)
+            if matches:
+                phones = [p.replace('(', '').replace(')', '').replace(' ', '') for p in matches]
+                logger.debug("Extracted phones", extra={'phone_count': len(phones)})
+                return ExtractionResult(phones, None)
             return ExtractionResult([], None)
-
-        matches = TELEPHONE_REGEX_REAL_ESTATE.findall(response.text)
-        if matches:
-            phones = [p.replace('(', '').replace(')', '').replace(' ', '') for p in matches]
-            return ExtractionResult(phones, None)
-        return ExtractionResult([], None)
-    except Exception as e:
-        logger.exception(f"Error fetching real-estate.lviv.ua phone link: {e}")
-        return ExtractionResult([], None)
+        except Exception as e:
+            logger.exception(f"Error fetching real-estate.lviv.ua phone link", extra={
+                'error_type': type(e).__name__,
+                'ad_link': ad_link
+            })
+            return ExtractionResult([], None)
 
 
 def _parse_lun(html: str) -> ExtractionResult:
@@ -330,10 +340,13 @@ async def _domain_parse_final(html: str, original_url: str, page: Page, browser:
 # ===========================
 # Page fetch
 # ===========================
+@log_operation("playwright_fetch_page")
 async def _playwright_fetch_page(url: str, browser: Browser, proxy: Optional[str], attempts: int = 3) -> str:
     """
     Fetch page content with retry logic and proper error handling.
     """
+    aggregator = LogAggregator(logger, f"playwright_fetch_page_{url}")
+
     for i in range(1, attempts + 1):
         ua = get_random_desktop_user_agent()
         proxy_settings = None
@@ -341,25 +354,35 @@ async def _playwright_fetch_page(url: str, browser: Browser, proxy: Optional[str
             logger.info(f"Using proxy => {proxy}")
             proxy_settings = {"server": proxy}
 
-        logger.info(f"[Playwright] Attempt {i}/{attempts} for {url} with UA={ua}, proxy={bool(proxy)}")
-        context = await browser.new_context(
-            user_agent=ua,
-            java_script_enabled=True,
-            proxy=proxy_settings
-        )
-        page = await context.new_page()
+        with log_context(logger, attempt=i, total_attempts=attempts, user_agent=ua[:50], using_proxy=bool(proxy)):
+            logger.info(f"[Playwright] Attempt {i}/{attempts} for {url}")
+            context = await browser.new_context(
+                user_agent=ua,
+                java_script_enabled=True,
+                proxy=proxy_settings
+            )
+            page = await context.new_page()
 
-        try:
-            # Use "domcontentloaded" instead of "networkidle" to reduce timeouts
-            # Also reduce timeout from 30 seconds to 15 seconds
-            await page.goto(url, wait_until="domcontentloaded", timeout=15000)
-            content = await page.content()
-            await context.close()
-            return content
-        except Exception as e:
-            logger.exception(f"Attempt {i} error => {e}")
-            await context.close()
-            await asyncio.sleep(1)
+            try:
+                # Use "domcontentloaded" instead of "networkidle" to reduce timeouts
+                # Also reduce timeout from 30 seconds to 15 seconds
+                await page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                content = await page.content()
+                await context.close()
+                aggregator.add_item({'attempt': i, 'url': url}, success=True)
+                logger.debug("Page fetch successful", extra={'attempt': i})
+                return content
+            except Exception as e:
+                logger.exception(f"Attempt {i} error", extra={
+                    'error_type': type(e).__name__,
+                    'url': url,
+                    'attempt': i
+                })
+                aggregator.add_error(str(e), {'attempt': i, 'url': url})
+                await context.close()
+                await asyncio.sleep(1)
+
+    aggregator.log_summary()
     raise Exception(f"Failed to load {url} after {attempts} attempts, proxy={proxy}")
 
 
@@ -408,67 +431,88 @@ async def create_optimized_browser() -> Browser:
 # ===========================
 # Async main fetch
 # ===========================
+@log_operation("extract_phone_numbers_async")
 async def _extract_phone_numbers_async(resource_url: str) -> ExtractionResult:
     """
     1) 3 attempts no-proxy
     2) 3 attempts random bright data proxies
     3) fallback ZenRows
     """
+    aggregator = LogAggregator(logger, f"extract_phone_numbers_async_{resource_url}")
+
     # Use optimized browser instead of default
     browser = await create_optimized_browser()
     try:
-        # 1) no-proxy (3 attempts)
-        try:
-            html_np = await _playwright_fetch_page(resource_url, browser, None, attempts=5)
-            # parse domain => need page context to do OLX phone
-            ctx_np = await browser.new_context(java_script_enabled=True)
-            page_np = await ctx_np.new_page()
-            # Use domcontentloaded instead of networkidle
-            await page_np.goto(resource_url, wait_until="domcontentloaded", timeout=REQUEST_TIMEOUT * 1000)
-            result_np = await _domain_parse_final(html_np, resource_url, page_np, browser)
-            await ctx_np.close()
-            return result_np
-        except Exception as e:
-            logger.warning(f"No-proxy stage failed for {resource_url}. {e}")
+        with log_context(logger, resource_url=resource_url):
+            # 1) no-proxy (3 attempts)
+            try:
+                html_np = await _playwright_fetch_page(resource_url, browser, None, attempts=5)
+                # parse domain => need page context to do OLX phone
+                ctx_np = await browser.new_context(java_script_enabled=True)
+                page_np = await ctx_np.new_page()
+                # Use domcontentloaded instead of networkidle
+                await page_np.goto(resource_url, wait_until="domcontentloaded", timeout=REQUEST_TIMEOUT * 1000)
+                result_np = await _domain_parse_final(html_np, resource_url, page_np, browser)
+                await ctx_np.close()
+                aggregator.add_item({'method': 'no-proxy'}, success=True)
+                return result_np
+            except Exception as e:
+                logger.warning(f"No-proxy stage failed", extra={
+                    'resource_url': resource_url,
+                    'error_type': type(e).__name__
+                })
+                aggregator.add_error("No-proxy failed", {'error': str(e)})
 
-        # 2) bright data proxies
-        if BRIGHTDATA_PROXIES:
-            logger.info("Trying bright data proxy approach (3 attempts, random from pool).")
-            for att_ in range(1, 4):
-                proxy_ = random.choice(BRIGHTDATA_PROXIES)
-                try:
-                    html_px = await _playwright_fetch_page(resource_url, browser, proxy_,
-                                                           attempts=len(BRIGHTDATA_PROXIES))
-                    ctx_px = await browser.new_context(java_script_enabled=True, proxy={"server": proxy_})
-                    page_px = await ctx_px.new_page()
-                    # Use domcontentloaded instead of networkidle
-                    await page_px.goto(resource_url, wait_until="domcontentloaded", timeout=REQUEST_TIMEOUT * 1000)
-                    res_px = await _domain_parse_final(html_px, resource_url, page_px, browser)
-                    await ctx_px.close()
-                    return res_px
-                except Exception:
-                    logger.warning(f"Bright data attempt {att_} => fail for {proxy_}")
-            logger.warning("All bright data attempts => fail.")
-        else:
-            logger.warning("No BRIGHTDATA_PROXY_POOL => skipping proxy stage.")
+            # 2) bright data proxies
+            if BRIGHTDATA_PROXIES:
+                logger.info("Trying bright data proxy approach")
+                for att_ in range(1, 4):
+                    proxy_ = random.choice(BRIGHTDATA_PROXIES)
+                    with log_context(logger, attempt=att_, proxy=proxy_[:20]):
+                        try:
+                            html_px = await _playwright_fetch_page(resource_url, browser, proxy_,
+                                                                   attempts=len(BRIGHTDATA_PROXIES))
+                            ctx_px = await browser.new_context(java_script_enabled=True, proxy={"server": proxy_})
+                            page_px = await ctx_px.new_page()
+                            # Use domcontentloaded instead of networkidle
+                            await page_px.goto(resource_url, wait_until="domcontentloaded",
+                                               timeout=REQUEST_TIMEOUT * 1000)
+                            res_px = await _domain_parse_final(html_px, resource_url, page_px, browser)
+                            await ctx_px.close()
+                            aggregator.add_item({'method': 'bright-data', 'attempt': att_}, success=True)
+                            return res_px
+                        except Exception as e:
+                            logger.warning(f"Bright data attempt {att_} failed", extra={
+                                'error_type': type(e).__name__
+                            })
+                            aggregator.add_error(f"Bright data attempt {att_} failed", {'error': str(e)})
+                logger.warning("All bright data attempts failed")
+            else:
+                logger.warning("No BRIGHTDATA_PROXY_POOL configured")
 
-        # 3) fallback => ZenRows
-        logger.info("Falling back to ZenRows approach.")
-        try:
-            zen_html = fetch_with_zenrows(resource_url, js_render=False)
-            ctx_z = await browser.new_context(java_script_enabled=False)
-            page_z = await ctx_z.new_page()  # not actually loaded => we'll parse offline
-            res_z = await _domain_parse_final(zen_html, resource_url, page_z, browser)
-            await ctx_z.close()
-            return res_z
-        except Exception:
-            logger.exception("ZenRows fallback => error.")
-            return ExtractionResult([], None)
+            # 3) fallback => ZenRows
+            logger.info("Falling back to ZenRows")
+            try:
+                zen_html = fetch_with_zenrows(resource_url, js_render=False)
+                ctx_z = await browser.new_context(java_script_enabled=False)
+                page_z = await ctx_z.new_page()  # not actually loaded => we'll parse offline
+                res_z = await _domain_parse_final(zen_html, resource_url, page_z, browser)
+                await ctx_z.close()
+                aggregator.add_item({'method': 'zenrows'}, success=True)
+                return res_z
+            except Exception as e:
+                logger.exception("ZenRows fallback failed", extra={
+                    'error_type': type(e).__name__
+                })
+                aggregator.add_error("ZenRows failed", {'error': str(e)})
+                return ExtractionResult([], None)
     finally:
         # Make sure browser is always closed properly
         await browser.close()
+        aggregator.log_summary()
 
 
+@log_operation("extract_phone_numbers_from_resource")
 def extract_phone_numbers_from_resource(resource_url: str) -> ExtractionResult:
     """
     Synchronous function with circuit breaker pattern:
@@ -476,30 +520,46 @@ def extract_phone_numbers_from_resource(resource_url: str) -> ExtractionResult:
     """
     global CIRCUIT_BREAKER_FAILURES, CIRCUIT_BREAKER_LAST_ATTEMPT
 
-    # Check if circuit breaker is open
-    if CIRCUIT_BREAKER_FAILURES >= CIRCUIT_BREAKER_THRESHOLD:
-        time_since_last = datetime.now() - CIRCUIT_BREAKER_LAST_ATTEMPT
-        if time_since_last < CIRCUIT_BREAKER_RESET_TIME:
-            logger.warning(f"Circuit breaker open, skipping phone extraction for {resource_url}")
-            return ExtractionResult([], None)
-        else:
-            # Reset the circuit breaker
-            logger.info("Resetting circuit breaker for phone extraction")
+    with log_context(logger, resource_url=resource_url, circuit_breaker_failures=CIRCUIT_BREAKER_FAILURES):
+        # Check if circuit breaker is open
+        if CIRCUIT_BREAKER_FAILURES >= CIRCUIT_BREAKER_THRESHOLD:
+            time_since_last = datetime.now() - CIRCUIT_BREAKER_LAST_ATTEMPT
+            if time_since_last < CIRCUIT_BREAKER_RESET_TIME:
+                logger.warning(f"Circuit breaker open, skipping phone extraction", extra={
+                    'failures': CIRCUIT_BREAKER_FAILURES,
+                    'threshold': CIRCUIT_BREAKER_THRESHOLD,
+                    'reset_time': CIRCUIT_BREAKER_RESET_TIME.total_seconds()
+                })
+                return ExtractionResult([], None)
+            else:
+                # Reset the circuit breaker
+                logger.info("Resetting circuit breaker for phone extraction", extra={
+                    'failures': CIRCUIT_BREAKER_FAILURES,
+                    'time_since_last': time_since_last.total_seconds()
+                })
+                CIRCUIT_BREAKER_FAILURES = 0
+
+        logger.info(f"Starting phone extraction", extra={'url': resource_url})
+        CIRCUIT_BREAKER_LAST_ATTEMPT = datetime.now()
+
+        try:
+            result = asyncio.run(_extract_phone_numbers_async(resource_url))
+            # Reset failure count on success
             CIRCUIT_BREAKER_FAILURES = 0
-
-    logger.info(f"extract_phone_numbers_from_resource => {resource_url}")
-    CIRCUIT_BREAKER_LAST_ATTEMPT = datetime.now()
-
-    try:
-        result = asyncio.run(_extract_phone_numbers_async(resource_url))
-        # Reset failure count on success
-        CIRCUIT_BREAKER_FAILURES = 0
-        return result
-    except Exception as e:
-        logger.exception("All final attempts => fail.")
-        # Increment failure count
-        CIRCUIT_BREAKER_FAILURES += 1
-        return ExtractionResult([], None)
+            logger.info("Phone extraction successful", extra={
+                'resource_url': resource_url,
+                'phone_count': len(result.phone_numbers),
+                'has_viber': bool(result.viber_link)
+            })
+            return result
+        except Exception as e:
+            logger.exception("All phone extraction attempts failed", extra={
+                'resource_url': resource_url,
+                'error_type': type(e).__name__
+            })
+            # Increment failure count
+            CIRCUIT_BREAKER_FAILURES += 1
+            return ExtractionResult([], None)
 
 
 if __name__ == "__main__":
