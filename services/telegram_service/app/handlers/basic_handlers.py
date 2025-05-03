@@ -1,7 +1,5 @@
 # services/telegram_service/app/handlers/basic_handlers.py
 
-import logging
-
 from aiogram import types
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters import Text

@@ -20,76 +20,84 @@ from ..keyboards import (
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from ..utils.message_utils import safe_send_message
 
-logger = logging.getLogger(__name__)
+# Import service logger and logging utilities
+from ... import logger
+from common.utils.logging_config import log_operation, log_context
 
 
 @dp.callback_query_handler(lambda c: c.data.startswith("sub_open:"))
+@log_operation("handle_sub_open")
 async def handle_sub_open(callback_query: types.CallbackQuery):
-    _, sub_id_str, page_str = callback_query.data.split(":")
-    sub_id = int(sub_id_str)
-    page = int(page_str)
-
     telegram_id = callback_query.from_user.id
 
-    with db_session() as db:
-        # Get database user ID
-        user = UserRepository.get_by_messenger_id(db, str(telegram_id), "telegram")
-        if not user:
-            await callback_query.answer("Користувач не знайдений.")
-            return
+    with log_context(logger, telegram_id=telegram_id, callback_data=callback_query.data):
+        _, sub_id_str, page_str = callback_query.data.split(":")
+        sub_id = int(sub_id_str)
+        page = int(page_str)
 
-        db_user_id = user.id
+        with db_session() as db:
+            # Get database user ID
+            user = UserRepository.get_by_messenger_id(db, str(telegram_id), "telegram")
+            if not user:
+                logger.warning("User not found", extra={"telegram_id": telegram_id})
+                await callback_query.answer("Користувач не знайдений.")
+                return
 
-        # Get subscription details
-        sub = db.query(UserFilter).filter(
-            UserFilter.id == sub_id,
-            UserFilter.user_id == db_user_id
-        ).first()
+            db_user_id = user.id
 
-        if not sub:
-            # subscription not found or belongs to another user
-            await callback_query.answer("Підписка не знайдена.")
-            return
+            # Get subscription details
+            sub = db.query(UserFilter).filter(
+                UserFilter.id == sub_id,
+                UserFilter.user_id == db_user_id
+            ).first()
 
-        # Convert to dict for consistency with rest of function
-        sub_dict = {
-            'id': sub.id,
-            'user_id': sub.user_id,
-            'property_type': sub.property_type,
-            'city': sub.city,
-            'rooms_count': sub.rooms_count,
-            'price_min': sub.price_min,
-            'price_max': sub.price_max,
-            'is_paused': sub.is_paused
-        }
+            if not sub:
+                logger.warning("Subscription not found", extra={
+                    "telegram_id": telegram_id,
+                    "sub_id": sub_id
+                })
+                await callback_query.answer("Підписка не знайдена.")
+                return
 
-        mapping_property = {"apartment": "квартира", "house": "будинок"}
-        ua_lang_property_type = mapping_property.get(sub_dict['property_type'], "")
-        city = GEO_ID_MAPPING.get(sub_dict['city'])
-        active = '✅ Активна' if not sub_dict['is_paused'] else '⏸️ Зупинена'
-        # Build text
-        text = f"Підписка #{sub_id}\n" \
-               f"🏷 Тип нерухомості: {ua_lang_property_type}\n" \
-               f"🏙️ Місто: {city}\n" \
-               f"💰 Ціна: {sub_dict['price_min']} - {sub_dict['price_max']} грн.\n" \
-               f"{active}"
+            # Convert to dict for consistency with rest of function
+            sub_dict = {
+                'id': sub.id,
+                'user_id': sub.user_id,
+                'property_type': sub.property_type,
+                'city': sub.city,
+                'rooms_count': sub.rooms_count,
+                'price_min': sub.price_min,
+                'price_max': sub.price_max,
+                'is_paused': sub.is_paused
+            }
 
-        # Build an inline keyboard with Pause/Resume, Delete, Edit, Back
-        kb = InlineKeyboardMarkup()
-        if sub_dict["is_paused"]:
-            kb.add(InlineKeyboardButton("Відновити", callback_data=f"sub_resume:{sub_id}:{page}"))
-        else:
-            kb.add(InlineKeyboardButton("Зупинити", callback_data=f"sub_pause:{sub_id}:{page}"))
+            mapping_property = {"apartment": "квартира", "house": "будинок"}
+            ua_lang_property_type = mapping_property.get(sub_dict['property_type'], "")
+            city = GEO_ID_MAPPING.get(sub_dict['city'])
+            active = '✅ Активна' if not sub_dict['is_paused'] else '⏸️ Зупинена'
+            # Build text
+            text = f"Підписка #{sub_id}\n" \
+                   f"🏷 Тип нерухомості: {ua_lang_property_type}\n" \
+                   f"🏙️ Місто: {city}\n" \
+                   f"💰 Ціна: {sub_dict['price_min']} - {sub_dict['price_max']} грн.\n" \
+                   f"{active}"
 
-        kb.add(
-            InlineKeyboardButton("Видалити", callback_data=f"sub_delete:{sub_id}:{page}"),
-            InlineKeyboardButton("Редагувати", callback_data=f"sub_edit:{sub_id}:{page}"),
-        )
-        # "Back to list"
-        kb.add(InlineKeyboardButton("<< Назад", callback_data=f"subs_page:{page}"))
+            # Build an inline keyboard with Pause/Resume, Delete, Edit, Back
+            kb = InlineKeyboardMarkup()
+            if sub_dict["is_paused"]:
+                kb.add(InlineKeyboardButton("Відновити", callback_data=f"sub_resume:{sub_id}:{page}"))
+            else:
+                kb.add(InlineKeyboardButton("Зупинити", callback_data=f"sub_pause:{sub_id}:{page}"))
 
-        await callback_query.message.edit_text(text, reply_markup=kb)
-        await callback_query.answer()
+            kb.add(
+                InlineKeyboardButton("Видалити", callback_data=f"sub_delete:{sub_id}:{page}"),
+                InlineKeyboardButton("Редагувати", callback_data=f"sub_edit:{sub_id}:{page}"),
+            )
+            # "Back to list"
+            kb.add(InlineKeyboardButton("<< Назад", callback_data=f"subs_page:{page}"))
+
+            await callback_query.message.edit_text(text, reply_markup=kb)
+            await callback_query.answer()
 
 
 @dp.callback_query_handler(lambda c: c.data.startswith("sub_pause:"))

@@ -10,7 +10,10 @@ from . import error_handler
 
 # Import service logger instead of configuring local logging
 from .. import logger
+from common.utils.logging_config import log_operation
 
+
+@log_operation("setup_handlers")
 def setup_handlers():
     """
     Make sure all handlers are registered properly.
@@ -23,15 +26,27 @@ def setup_handlers():
     logger.info("All handlers and error handler registered")
     logger.info("Flow integration initialized")
 
+
+@log_operation("main")
 def main():
     """
     Start the Telegram bot (using long polling)
     """
     logger.info("Starting Telegram bot...")
-    # Make sure handlers are set up before starting
-    setup_handlers()
-    executor.start_polling(dp, skip_updates=True)
-    logger.info("Bot stopped")
+    try:
+        # Make sure handlers are set up before starting
+        setup_handlers()
+
+        # Start polling
+        executor.start_polling(dp, skip_updates=True)
+    except Exception as e:
+        logger.error("Bot startup failed", exc_info=True, extra={
+            "error": str(e)
+        })
+        raise
+    finally:
+        logger.info("Bot stopped")
+
 
 if __name__ == "__main__":
     main()

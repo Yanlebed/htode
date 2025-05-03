@@ -1,6 +1,5 @@
 # services/telegram_service/app/handlers/menu_handlers.py
 import decimal
-import logging
 
 from aiogram import types
 from aiogram.dispatcher import FSMContext
@@ -26,32 +25,40 @@ from ..keyboards import (
     edit_parameters_keyboard
 )
 
-logger = logging.getLogger(__name__)
+# Import service logger and logging utilities
+from ... import logger
+from common.utils.logging_config import log_operation, log_context
 
 
 @dp.message_handler(commands=['menu'])
+@log_operation("show_main_menu")
 async def show_main_menu(message: types.Message):
     """
     Sends the main menu keyboard when the user uses /menu.
     """
-    await safe_send_message(
-        chat_id=message.chat.id,
-        text="Головне меню:",
-        reply_markup=main_menu_keyboard()
-    )
+    user_id = message.from_user.id
+    with log_context(logger, user_id=user_id, command="menu"):
+        await safe_send_message(
+            chat_id=message.chat.id,
+            text="Головне меню:",
+            reply_markup=main_menu_keyboard()
+        )
 
 
 @dp.callback_query_handler(lambda c: c.data == 'edit_parameters')
+@log_operation("edit_parameters")
 async def edit_parameters(callback_query: types.CallbackQuery, state: FSMContext):
     """
     Handles 'edit_parameters' callback - shows parameter editing menu
     """
-    await safe_send_message(
-        chat_id=callback_query.from_user.id,
-        text="Оберіть параметр для редагування:",
-        reply_markup=edit_parameters_keyboard()
-    )
-    await safe_answer_callback_query(callback_query.id)
+    user_id = callback_query.from_user.id
+    with log_context(logger, user_id=user_id, callback_data=callback_query.data):
+        await safe_send_message(
+            chat_id=callback_query.from_user.id,
+            text="Оберіть параметр для редагування:",
+            reply_markup=edit_parameters_keyboard()
+        )
+        await safe_answer_callback_query(callback_query.id)
 
 
 @dp.message_handler(lambda msg: msg.text == "✏️ Редагувати")
