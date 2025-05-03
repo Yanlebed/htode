@@ -9,7 +9,7 @@ from .flow_integration import check_and_process_flow, flow_message_handler
 from . import error_handler
 
 # Import service logger instead of configuring local logging
-from .. import logger
+from . import logger
 from common.utils.logging_config import log_operation
 
 

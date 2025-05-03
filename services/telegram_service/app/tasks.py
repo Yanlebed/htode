@@ -3,7 +3,7 @@ from common.messaging.task_registry import register_platform_tasks
 from aiogram.types import CallbackQuery
 
 # Import service logger and logging utilities
-from .. import logger
+from . import logger
 from common.utils.logging_config import log_operation, log_context
 
 # Register standard messaging tasks for Telegram

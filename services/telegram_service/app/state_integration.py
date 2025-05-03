@@ -5,7 +5,7 @@ from aiogram.dispatcher import FSMContext
 from common.unified_state_management import state_manager
 
 # Import service logger and logging utilities
-from .. import logger
+from . import logger
 from common.utils.logging_config import log_operation, log_context
 
 

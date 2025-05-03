@@ -15,7 +15,7 @@ from common.db.operations import get_or_create_user
 from common.utils.logging_config import log_context, log_operation
 
 # Import the service logger
-from ... import logger
+from .. import logger
 
 # Define state constants
 STATE_WAITING_FOR_PHONE = "waiting_for_phone"

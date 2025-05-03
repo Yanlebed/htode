@@ -14,7 +14,7 @@ from common.celery_app import celery_app
 from common.utils.logging_config import log_context, log_operation
 
 # Import the service logger
-from ... import logger
+from .. import logger
 
 # Define states
 STATE_START = "start"

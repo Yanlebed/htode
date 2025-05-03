@@ -10,7 +10,7 @@ from ..keyboards import floor_keyboard
 from common.db.operations import get_extra_images
 
 # Import service logger and logging utilities
-from ... import logger
+from .. import logger
 from common.utils.logging_config import log_operation, log_context
 
 

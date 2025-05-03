@@ -11,7 +11,7 @@ from aiogram.utils.exceptions import (
 from common.config import TELEGRAM_TOKEN, REDIS_URL
 
 # Import service logger instead of configuring local logging
-from .. import logger
+from . import logger
 
 # Parse Redis URL for host and port
 # REDIS_URL format: redis://localhost:6379/0

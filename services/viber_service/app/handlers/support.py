@@ -9,7 +9,7 @@ from common.messaging.handlers.support_handler import handle_support_command, ha
 from common.utils.logging_config import log_context, log_operation
 
 # Import the service logger
-from ... import logger
+from .. import logger
 
 
 @log_operation("handle_support_command_viber")

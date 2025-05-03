@@ -7,7 +7,7 @@ from ..states.support_states import SupportStates
 from common.messaging.handlers.support_handler import handle_support_command, handle_support_category
 
 # Import service logger and logging utilities
-from ... import logger
+from .. import logger
 from common.utils.logging_config import log_operation, log_context
 
 

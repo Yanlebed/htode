@@ -7,7 +7,7 @@ from common.db.operations import get_db_user_id_by_telegram_id
 from ..payment.wayforpay import create_payment_form_url
 
 # Import service logger and logging utilities
-from ... import logger
+from .. import logger
 from common.utils.logging_config import log_operation, log_context
 
 
