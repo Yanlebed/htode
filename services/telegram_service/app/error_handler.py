@@ -1,6 +1,5 @@
 # services/telegram_service/app/error_handler.py
 
-import logging
 import asyncio
 from aiogram.utils.exceptions import (
     MessageNotModified, CantParseEntities, NetworkError, RetryAfter,
