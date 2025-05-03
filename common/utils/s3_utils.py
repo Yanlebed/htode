@@ -7,7 +7,7 @@ import redis
 from botocore.exceptions import ClientError
 from common.config import AWS_CONFIG, REDIS_URL
 from common.utils.unified_request_utils import make_request
-from common.utils.logging_config import log_operation, log_context
+from common.utils.logging_config import log_operation, log_context, LogAggregator
 
 # Import the common utils logger
 from . import logger
@@ -28,7 +28,7 @@ def detect_content_type(image_url, file_extension):
     """
     Detect the content type based on the file extension.
     """
-    with log_context(logger, file_extension=file_extension):
+    with log_context(logger, file_extension=file_extension, image_url=image_url[:50]):
         # Try to guess from URL first
         content_type = mimetypes.guess_type(image_url)[0]
 
@@ -59,7 +59,7 @@ def _upload_image_to_s3(image_url, ad_unique_id, max_retries=3, retry_delay=1):
     """
     Downloads the image from `image_url` and uploads to S3.
     """
-    with log_context(logger, image_url=image_url, ad_id=ad_unique_id):
+    with log_context(logger, image_url=image_url[:50], ad_id=ad_unique_id):
         if not image_url:
             logger.warning("Empty image URL provided")
             return None
@@ -69,9 +69,11 @@ def _upload_image_to_s3(image_url, ad_unique_id, max_retries=3, retry_delay=1):
             return None
 
         logger.info("Starting image upload to S3", extra={
-            'image_url': image_url,
+            'image_url': image_url[:50],
             'ad_id': ad_unique_id
         })
+
+        aggregator = LogAggregator(logger, f"upload_image_to_s3_{ad_unique_id}")
 
         try:
             # 1) Download image with our retry utility
@@ -85,9 +87,10 @@ def _upload_image_to_s3(image_url, ad_unique_id, max_retries=3, retry_delay=1):
 
             if not response or response.status_code != 200:
                 logger.error("Failed to download image", extra={
-                    'image_url': image_url,
+                    'image_url': image_url[:50],
                     'status_code': response.status_code if response else 'No response'
                 })
+                aggregator.add_error("Download failed", {'url': image_url[:50]})
                 return None
 
             image_data = response.content
@@ -116,7 +119,7 @@ def _upload_image_to_s3(image_url, ad_unique_id, max_retries=3, retry_delay=1):
 
             except Exception as e:
                 logger.error("Error creating S3 key", exc_info=True, extra={
-                    'image_url': image_url,
+                    'image_url': image_url[:50],
                     'error_type': type(e).__name__
                 })
                 s3_key = f"{AWS_CONFIG['s3_prefix']}{ad_unique_id}_{hash(image_url)}.jpg"
@@ -127,7 +130,7 @@ def _upload_image_to_s3(image_url, ad_unique_id, max_retries=3, retry_delay=1):
             # 4) Upload to S3 with retries
             for attempt in range(max_retries):
                 try:
-                    with log_context(logger, attempt=attempt + 1):
+                    with log_context(logger, attempt=attempt + 1, s3_key=s3_key):
                         s3_client.put_object(
                             Bucket=AWS_CONFIG['s3_bucket'],
                             Key=s3_key,
@@ -135,6 +138,7 @@ def _upload_image_to_s3(image_url, ad_unique_id, max_retries=3, retry_delay=1):
                             ContentType=content_type,
                         )
                         logger.debug("Successfully uploaded to S3", extra={'s3_key': s3_key})
+                        aggregator.add_item({'s3_key': s3_key}, success=True)
                         break  # Success
 
                 except ClientError as e:
@@ -144,7 +148,8 @@ def _upload_image_to_s3(image_url, ad_unique_id, max_retries=3, retry_delay=1):
                             'attempt': attempt + 1,
                             'max_retries': max_retries,
                             'delay': current_delay,
-                            'error': str(e)
+                            'error': str(e),
+                            'error_type': type(e).__name__
                         })
                         time.sleep(current_delay)
                     else:
@@ -152,6 +157,7 @@ def _upload_image_to_s3(image_url, ad_unique_id, max_retries=3, retry_delay=1):
                             'attempts': max_retries,
                             'error_type': type(e).__name__
                         })
+                        aggregator.add_error("S3 upload failed", {'error': str(e)})
                         return None
 
             # 5) Build final URL
@@ -161,14 +167,18 @@ def _upload_image_to_s3(image_url, ad_unique_id, max_retries=3, retry_delay=1):
                 final_url = f"https://{AWS_CONFIG['s3_bucket']}.s3.amazonaws.com/{s3_key}"
 
             logger.info("Successfully uploaded image", extra={
-                'final_url': final_url,
+                'final_url': final_url[:50],
                 's3_key': s3_key
             })
+
+            aggregator.log_summary()
             return final_url
 
         except Exception as e:
             logger.error("Unexpected error uploading image", exc_info=True, extra={
-                'image_url': image_url,
+                'image_url': image_url[:50],
                 'error_type': type(e).__name__
             })
+            aggregator.add_error("Unexpected error", {'error': str(e)})
+            aggregator.log_summary()
             return None
