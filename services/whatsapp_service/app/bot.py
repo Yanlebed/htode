@@ -1,16 +1,12 @@
 # services/whatsapp_service/app/bot.py
 
-import logging
 import os
 from twilio.rest import Client
 from common.unified_state_management import state_manager
+from common.utils.logging_config import log_context, log_operation
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-)
-logger = logging.getLogger(__name__)
+# Import the service logger
+from . import logger
 
 # Get Twilio credentials from environment
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
@@ -28,6 +24,7 @@ client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 # Define platform constant
 PLATFORM_NAME = "whatsapp"
 
+@log_operation("sanitize_phone_number")
 def sanitize_phone_number(phone_number):
     """
     Sanitize phone number to standard format
@@ -38,40 +35,52 @@ def sanitize_phone_number(phone_number):
     Returns:
         Sanitized phone number starting with + and only containing digits
     """
-    # Remove "whatsapp:" prefix if present
-    if phone_number.startswith("whatsapp:"):
-        phone_number = phone_number[9:]
+    with log_context(logger, phone_number=phone_number):
+        # Remove "whatsapp:" prefix if present
+        if phone_number.startswith("whatsapp:"):
+            phone_number = phone_number[9:]
 
-    # Remove all non-digit characters except '+'
-    clean_number = ''.join(c for c in phone_number if c.isdigit() or c == '+')
+        # Remove all non-digit characters except '+'
+        clean_number = ''.join(c for c in phone_number if c.isdigit() or c == '+')
 
-    # Ensure it starts with '+'
-    if not clean_number.startswith('+'):
-        clean_number = '+' + clean_number
+        # Ensure it starts with '+'
+        if not clean_number.startswith('+'):
+            clean_number = '+' + clean_number
 
-    return clean_number
+        logger.debug(f"Sanitized phone number", extra={
+            'original': phone_number,
+            'sanitized': clean_number
+        })
+
+        return clean_number
+
 
 # State management wrapper functions to provide cleaner API
+@log_operation("get_user_state")
 async def get_user_state(user_id: str) -> dict:
     """Get user state with sanitized phone number"""
     clean_user_id = sanitize_phone_number(user_id)
     return await state_manager.get_state(PLATFORM_NAME, clean_user_id) or {}
 
+@log_operation("set_user_state")
 async def set_user_state(user_id: str, state_data: dict) -> bool:
     """Set user state with sanitized phone number"""
     clean_user_id = sanitize_phone_number(user_id)
     return await state_manager.set_state(PLATFORM_NAME, clean_user_id, state_data)
 
+@log_operation("update_user_state")
 async def update_user_state(user_id: str, updates: dict) -> bool:
     """Update user state with sanitized phone number"""
     clean_user_id = sanitize_phone_number(user_id)
     return await state_manager.update_state(PLATFORM_NAME, clean_user_id, updates)
 
+@log_operation("clear_user_state")
 async def clear_user_state(user_id: str) -> bool:
     """Clear user state with sanitized phone number"""
     clean_user_id = sanitize_phone_number(user_id)
     return await state_manager.clear_state(PLATFORM_NAME, clean_user_id)
 
+@log_operation("get_current_state_name")
 async def get_current_state_name(user_id: str) -> str:
     """Get current state name with sanitized phone number"""
     clean_user_id = sanitize_phone_number(user_id)
