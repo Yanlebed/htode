@@ -20,5 +20,5 @@ if os.getenv('ENVIRONMENT', 'development') == 'production':
 # Export logger for use in other modules
 __all__ = ['logger']
 
-# Import logging configuration
+# Import logging configuration AFTER logger is defined
 from . import logging_config

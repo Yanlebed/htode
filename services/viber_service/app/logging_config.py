@@ -1,4 +1,4 @@
-# services/telegram_service/app/logging_config.py
+# services/viber_service/app/logging_config.py
 import os
 from common.utils.log_management import setup_log_aggregation
 from . import logger
@@ -6,7 +6,7 @@ from . import logger
 
 # Configure log aggregation if needed
 def configure_logging():
-    """Configure additional logging features for the telegram service"""
+    """Configure additional logging features for the viber service"""
 
     # Set up log aggregation if configured
     aggregation_backend = os.getenv('LOG_AGGREGATION_BACKEND')
@@ -14,7 +14,7 @@ def configure_logging():
         setup_log_aggregation(logger, aggregation_backend)
 
     # Add any service-specific logging configuration here
-    logger.info("Telegram service logging configured", extra={
+    logger.info("Viber service logging configured", extra={
         'log_level': logger.level,
         'aggregation_backend': aggregation_backend,
         'environment': os.getenv('ENVIRONMENT', 'development')
