@@ -1,9 +1,11 @@
 # common/messaging/task_registry.py
-
+import logging
 from common.celery_app import celery_app
 
 # Dictionary to store registered task mappings
 task_mappings = {}
+
+logger = logging.getLogger(__name__)
 
 
 def register_platform_tasks(platform_name: str, task_module_path: str):
@@ -14,39 +16,46 @@ def register_platform_tasks(platform_name: str, task_module_path: str):
         platform_name: Name of the platform (telegram, viber, whatsapp)
         task_module_path: Base module path for the platform's tasks (e.g., 'telegram_service.app.tasks')
     """
-    from common.messaging.tasks import (
-        send_ad_with_extra_buttons as unified_send_ad,
-        send_subscription_notification as unified_send_notification
-    )
-
-    # Register send_ad_with_extra_buttons
-    @celery_app.task(name=f'{task_module_path}.send_ad_with_extra_buttons')
-    def platform_send_ad_with_extra_buttons(user_id, text, s3_image_url, resource_url, ad_id, ad_external_id):
-        return unified_send_ad.delay(
-            user_id=user_id,
-            text=text,
-            s3_image_url=s3_image_url,
-            resource_url=resource_url,
-            ad_id=ad_id,
-            ad_external_id=ad_external_id,
-            platform=platform_name
+    try:
+        from common.messaging.tasks import (
+            send_ad_with_extra_buttons as unified_send_ad,
+            send_subscription_notification as unified_send_notification
         )
 
-    # Register send_subscription_notification
-    @celery_app.task(name=f'{task_module_path}.send_subscription_notification')
-    def platform_send_subscription_notification(user_id, notification_type, data):
-        return unified_send_notification.delay(
-            user_id=user_id,
-            notification_type=notification_type,
-            data=data
-        )
+        # Register send_ad_with_extra_buttons
+        @celery_app.task(name=f'{task_module_path}.send_ad_with_extra_buttons')
+        def platform_send_ad_with_extra_buttons(user_id, text, s3_image_url, resource_url, ad_id, ad_external_id):
+            return unified_send_ad.delay(
+                user_id=user_id,
+                text=text,
+                s3_image_url=s3_image_url,
+                resource_url=resource_url,
+                ad_id=ad_id,
+                ad_external_id=ad_external_id,
+                platform=platform_name
+            )
 
-    # Store mappings for future reference
-    task_mappings[f'{task_module_path}.send_ad_with_extra_buttons'] = platform_send_ad_with_extra_buttons
-    task_mappings[f'{task_module_path}.send_subscription_notification'] = platform_send_subscription_notification
+        # Register send_subscription_notification
+        @celery_app.task(name=f'{task_module_path}.send_subscription_notification')
+        def platform_send_subscription_notification(user_id, notification_type, data):
+            return unified_send_notification.delay(
+                user_id=user_id,
+                notification_type=notification_type,
+                data=data
+            )
 
-    # Return the registered tasks for reference
-    return {
-        'send_ad_with_extra_buttons': platform_send_ad_with_extra_buttons,
-        'send_subscription_notification': platform_send_subscription_notification
-    }
+        # Store mappings for future reference
+        task_mappings[f'{task_module_path}.send_ad_with_extra_buttons'] = platform_send_ad_with_extra_buttons
+        task_mappings[f'{task_module_path}.send_subscription_notification'] = platform_send_subscription_notification
+
+        # Return the registered tasks for reference
+        return {
+            'send_ad_with_extra_buttons': platform_send_ad_with_extra_buttons,
+            'send_subscription_notification': platform_send_subscription_notification
+        }
+    except ImportError as e:
+        logger.error(f"Failed to import common messaging tasks: {e}")
+        return {}
+    except Exception as e:
+        logger.error(f"Failed to register tasks for platform {platform_name}: {e}")
+        return {}
