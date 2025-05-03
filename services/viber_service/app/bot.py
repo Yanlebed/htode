@@ -6,7 +6,7 @@ from viberbot.api.bot_configuration import BotConfiguration
 from common.unified_state_management import state_manager
 
 # Import the service logger
-from .. import logger
+from . import logger
 
 # Get Viber token from environment
 VIBER_TOKEN = os.getenv("VIBER_TOKEN")

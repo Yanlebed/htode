@@ -6,7 +6,7 @@ from common.celery_app import celery_app
 from common.utils.logging_config import log_context
 
 # Import the service logger
-from .. import logger
+from . import logger
 
 # Import tasks after initializing celery_app to avoid circular imports
 from . import tasks

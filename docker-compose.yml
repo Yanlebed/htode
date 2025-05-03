@@ -425,7 +425,7 @@ services:
         condition: service_healthy
     environment:
       <<: *combined-env
-    command: celery -A app.celery_app.celery_app worker --loglevel=info -Q notify_queue
+    command: celery -A app.celery_app worker --loglevel=info -Q notify_queue
     healthcheck:
       test: [ "CMD", "celery", "inspect", "ping", "-d", "celery@notifier_service" ]
       interval: 30s

@@ -19,17 +19,27 @@ from datetime import datetime, timedelta
 # Import logging utilities from common modules
 from common.utils.logging_config import log_context, log_operation, LogAggregator
 
-# Import the service logger
-from . import logger
-
 # Get environment variables
 MERCHANT_ACCOUNT = os.getenv("WAYFORPAY_MERCHANT_LOGIN")
 MERCHANT_SECRET = os.getenv("WAYFORPAY_MERCHANT_SECRET")
 
-logger.info("Initializing webapps service", extra={
-    'merchant_account_present': bool(MERCHANT_ACCOUNT),
-    'merchant_secret_present': bool(MERCHANT_SECRET)
-})
+import os
+from common.utils.logging_config import setup_logging
+from common.utils.log_management import setup_file_logging
+
+# Initialize service-wide logger
+logger = setup_logging('webapps_service', log_level='INFO', log_format='json')
+
+# Add file logging if we're in production
+if os.getenv('ENVIRONMENT', 'development') == 'production':
+    setup_file_logging(
+        logger,
+        log_dir="/app/logs/webapps_service",
+        max_bytes=10 * 1024 * 1024,  # 10MB
+        backup_count=5,
+        when='d',
+        interval=1
+    )
 
 # Initialize FastAPI app
 app = FastAPI(
