@@ -172,21 +172,47 @@ class MessagingService:
 
         try:
             if service_name == "telegram":
-                from .telegram_messaging import TelegramMessaging
-                from app.bot import bot as telegram_bot
-                service.register_messenger("telegram", TelegramMessaging(telegram_bot))
+                try:
+                    from .telegram_messaging import TelegramMessaging
+                    from services.telegram_service.app.bot import bot as telegram_bot
+                    if telegram_bot:  # Check if bot was created successfully
+                        service.register_messenger("telegram", TelegramMessaging(telegram_bot))
+                    else:
+                        logger.error("Telegram bot is None, check TELEGRAM_TOKEN environment variable")
+                except ImportError as e:
+                    logger.error(f"Failed to import telegram dependencies: {e}")
+                except Exception as e:
+                    logger.error(f"Failed to initialize telegram messaging: {e}")
+
             elif service_name == "viber":
-                from .viber_messaging import ViberMessaging
-                from app.bot import viber as viber_bot
-                service.register_messenger("viber", ViberMessaging(viber_bot))
+                try:
+                    from .viber_messaging import ViberMessaging
+                    from services.viber_service.app.bot import viber as viber_bot
+                    if viber_bot:
+                        service.register_messenger("viber", ViberMessaging(viber_bot))
+                    else:
+                        logger.error("Viber bot is None, check VIBER_AUTH_TOKEN environment variable")
+                except ImportError as e:
+                    logger.error(f"Failed to import viber dependencies: {e}")
+                except Exception as e:
+                    logger.error(f"Failed to initialize viber messaging: {e}")
+
             elif service_name == "whatsapp":
-                from .whatsapp_messaging import WhatsAppMessaging
-                from app.bot import client as twilio_client
-                service.register_messenger("whatsapp", WhatsAppMessaging(twilio_client))
+                try:
+                    from .whatsapp_messaging import WhatsAppMessaging
+                    from services.whatsapp_service.app.bot import client as twilio_client
+                    if twilio_client:
+                        service.register_messenger("whatsapp", WhatsAppMessaging(twilio_client))
+                    else:
+                        logger.error("WhatsApp client is None, check Twilio environment variables")
+                except ImportError as e:
+                    logger.error(f"Failed to import whatsapp dependencies: {e}")
+                except Exception as e:
+                    logger.error(f"Failed to initialize whatsapp messaging: {e}")
             else:
                 logger.warning(f"Unknown service name: {service_name}")
-        except ImportError as e:
-            logger.error(f"Failed to import dependencies for {service_name}: {e}")
+        except Exception as e:
+            logger.error(f"Error creating messaging service for {service_name}: {e}")
 
         return service
 

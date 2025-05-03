@@ -31,24 +31,48 @@ class PlatformRouter:
             messenger_class: MessagingInterface implementation class
         """
         try:
+            messenger = None
+
             # Get the messenger instance
             if platform == "telegram":
-                from services.telegram_service.app.bot import bot
-                messenger = messenger_class(bot)
+                try:
+                    from services.telegram_service.app.bot import bot
+                    if bot:
+                        messenger = messenger_class(bot)
+                    else:
+                        logger.error(f"Bot instance is None for platform: {platform}")
+                except ImportError as e:
+                    logger.error(f"Failed to import bot for platform {platform}: {e}")
+
             elif platform == "viber":
-                from services.viber_service.app.bot import viber
-                messenger = messenger_class(viber)
+                try:
+                    from services.viber_service.app.bot import viber
+                    if viber:
+                        messenger = messenger_class(viber)
+                    else:
+                        logger.error(f"Viber instance is None for platform: {platform}")
+                except ImportError as e:
+                    logger.error(f"Failed to import viber for platform {platform}: {e}")
+
             elif platform == "whatsapp":
-                from services.whatsapp_service.app.bot import client
-                messenger = messenger_class(client)
+                try:
+                    from services.whatsapp_service.app.bot import client
+                    if client:
+                        messenger = messenger_class(client)
+                    else:
+                        logger.error(f"Client instance is None for platform: {platform}")
+                except ImportError as e:
+                    logger.error(f"Failed to import client for platform {platform}: {e}")
             else:
                 logger.error(f"Unknown platform: {platform}")
-                return
 
-            self.messengers[platform] = messenger
-            logger.info(f"Registered messenger for platform: {platform}")
-        except ImportError as e:
-            logger.error(f"Failed to import dependencies for platform {platform}: {e}")
+            # Now the else clause can actually be reached
+            if messenger:
+                self.messengers[platform] = messenger
+                logger.info(f"Registered messenger for platform: {platform}")
+            else:
+                logger.error(f"Failed to create messenger instance for platform: {platform}")
+
         except Exception as e:
             logger.error(f"Failed to register messenger for platform {platform}: {e}")
 
