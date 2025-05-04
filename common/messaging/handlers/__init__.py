@@ -5,7 +5,7 @@ from common.utils.logging_config import setup_logging
 from common.utils.log_management import setup_file_logging
 
 # Initialize messaging handlers logger
-logger = setup_logging('messaging_handlers', log_level='INFO', log_format='json')
+logger = setup_logging('messaging_handlers', log_level='INFO', log_format='text')
 
 # Add file logging if we're in production
 if os.getenv('ENVIRONMENT', 'development') == 'production':

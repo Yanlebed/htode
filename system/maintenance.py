@@ -23,7 +23,7 @@ from common.utils.logging_config import setup_logging, log_operation, log_contex
 from common.utils.log_management import setup_file_logging
 
 # Initialize system logger
-logger = setup_logging('system_maintenance', log_level='INFO', log_format='json')
+logger = setup_logging('system_maintenance', log_level='INFO', log_format='text')
 
 # Add file logging if we're in production
 if os.getenv('ENVIRONMENT', 'development') == 'production':
