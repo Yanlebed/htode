@@ -1,6 +1,8 @@
 # common/utils/s3_utils.py
 import time
 import mimetypes
+from typing import List, Dict
+
 import boto3
 import redis
 
@@ -22,6 +24,106 @@ s3_client = boto3.client(
 
 redis_client = redis.from_url(REDIS_URL)
 
+
+@log_operation("delete_s3_image")
+def delete_s3_image(image_url: str) -> bool:
+    """
+    Delete an image from S3 bucket using its URL.
+
+    Args:
+        image_url: Full URL of the image to delete (can be CloudFront or S3 URL)
+
+    Returns:
+        True if successfully deleted, False otherwise
+    """
+    with log_context(logger, image_url=image_url[:50]):
+        if not image_url:
+            logger.warning("Empty image URL provided for deletion")
+            return False
+
+        try:
+            # Extract S3 key from URL
+            if AWS_CONFIG['cloudfront_domain'] and AWS_CONFIG['cloudfront_domain'] in image_url:
+                # Extract key from CloudFront URL
+                s3_key = image_url.replace(f"{AWS_CONFIG['cloudfront_domain']}/", "")
+            elif AWS_CONFIG['s3_bucket'] in image_url:
+                # Extract key from S3 URL
+                s3_key = image_url.split(f"{AWS_CONFIG['s3_bucket']}.s3.amazonaws.com/")[-1]
+            else:
+                logger.warning("URL doesn't match expected CloudFront or S3 pattern", extra={
+                    'image_url': image_url[:50],
+                    'cloudfront_domain': AWS_CONFIG['cloudfront_domain'],
+                    's3_bucket': AWS_CONFIG['s3_bucket']
+                })
+                return False
+
+            # Delete the object from S3
+            try:
+                s3_client.delete_object(
+                    Bucket=AWS_CONFIG['s3_bucket'],
+                    Key=s3_key
+                )
+                logger.info("Successfully deleted image from S3", extra={
+                    's3_key': s3_key,
+                    'bucket': AWS_CONFIG['s3_bucket']
+                })
+                return True
+
+            except ClientError as e:
+                logger.error("Failed to delete image from S3", exc_info=True, extra={
+                    's3_key': s3_key,
+                    'bucket': AWS_CONFIG['s3_bucket'],
+                    'error_type': type(e).__name__,
+                    'error_code': e.response.get('Error', {}).get('Code') if hasattr(e, 'response') else None
+                })
+                return False
+
+        except Exception as e:
+            logger.error("Unexpected error deleting image from S3", exc_info=True, extra={
+                'image_url': image_url[:50],
+                'error_type': type(e).__name__
+            })
+            return False
+
+
+@log_operation("delete_s3_image_batch")
+def delete_s3_image_batch(image_urls: List[str]) -> Dict[str, bool]:
+    """
+    Delete multiple images from S3 bucket in a batch operation.
+
+    Args:
+        image_urls: List of image URLs to delete
+
+    Returns:
+        Dictionary mapping URL to deletion success status
+    """
+    if not image_urls:
+        return {}
+
+    with log_context(logger, image_count=len(image_urls)):
+        aggregator = LogAggregator(logger, "delete_s3_image_batch")
+        results = {}
+
+        for image_url in image_urls:
+            try:
+                success = delete_s3_image(image_url)
+                results[image_url] = success
+
+                if success:
+                    aggregator.add_item({'url': image_url[:50]}, success=True)
+                else:
+                    aggregator.add_item({'url': image_url[:50]}, success=False)
+
+            except Exception as e:
+                logger.error("Error processing batch delete item", exc_info=True, extra={
+                    'image_url': image_url[:50],
+                    'error_type': type(e).__name__
+                })
+                results[image_url] = False
+                aggregator.add_error(str(e), {'url': image_url[:50]})
+
+        aggregator.log_summary()
+        return results
 
 @log_operation("detect_content_type")
 def detect_content_type(image_url, file_extension):
