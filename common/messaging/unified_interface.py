@@ -2,6 +2,10 @@
 
 from abc import ABC, abstractmethod
 from typing import Optional, List, Dict, Any, Union
+from common.utils.logging_config import log_operation, log_context
+
+# Import the messaging logger
+from . import logger
 
 
 class MessagingInterface(ABC):
@@ -166,7 +170,8 @@ class MessagingInterface(ABC):
         Returns:
             Platform-specific response or None if failed
         """
-        return await self.send_media(user_id, document_url, caption, **kwargs)
+        with log_context(logger, user_id=user_id, platform=self.platform_name):
+            return await self.send_media(user_id, document_url, caption, **kwargs)
 
     async def send_location(
             self,
@@ -190,10 +195,11 @@ class MessagingInterface(ABC):
         Returns:
             Platform-specific response or None if failed
         """
-        location_text = f"📍 Location: {latitude}, {longitude}"
-        if title:
-            location_text = f"{title}\n{location_text}"
-        return await self.send_text(user_id, location_text, **kwargs)
+        with log_context(logger, user_id=user_id, platform=self.platform_name):
+            location_text = f"📍 Location: {latitude}, {longitude}"
+            if title:
+                location_text = f"{title}\n{location_text}"
+            return await self.send_text(user_id, location_text, **kwargs)
 
     async def get_user_info(
             self,
@@ -211,7 +217,8 @@ class MessagingInterface(ABC):
         Returns:
             Dictionary with user information or None
         """
-        return None
+        with log_context(logger, user_id=user_id, platform=self.platform_name):
+            return None
 
 
 class MessengerFactory:
@@ -222,6 +229,7 @@ class MessengerFactory:
     _messengers = {}
 
     @classmethod
+    @log_operation("register_messenger")
     def register_messenger(cls, platform: str, messenger_class) -> None:
         """
         Register a messenger implementation for a platform.
@@ -230,9 +238,12 @@ class MessengerFactory:
             platform: Platform name (telegram, viber, whatsapp)
             messenger_class: MessagingInterface implementation class
         """
-        cls._messengers[platform] = messenger_class
+        with log_context(logger, platform=platform):
+            cls._messengers[platform] = messenger_class
+            logger.info("Registered messenger", extra={'platform': platform})
 
     @classmethod
+    @log_operation("get_messenger")
     def get_messenger(cls, platform: str) -> Optional[MessagingInterface]:
         """
         Get a messenger instance for a platform.
@@ -243,27 +254,34 @@ class MessengerFactory:
         Returns:
             MessagingInterface instance or None if not found
         """
-        messenger_class = cls._messengers.get(platform)
-        if not messenger_class:
-            return None
-
-        try:
-            if platform == "telegram":
-                from services.telegram_service.app.bot import bot
-                return messenger_class(bot)
-            elif platform == "viber":
-                from services.viber_service.app.bot import viber
-                return messenger_class(viber)
-            elif platform == "whatsapp":
-                from services.whatsapp_service.app.bot import client
-                return messenger_class(client)
-            else:
+        with log_context(logger, platform=platform):
+            messenger_class = cls._messengers.get(platform)
+            if not messenger_class:
+                logger.warning("Messenger class not found", extra={'platform': platform})
                 return None
-        except ImportError as e:
-            import logging
-            logging.getLogger(__name__).error(f"Error importing dependencies for platform {platform}: {e}")
-            return None
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).error(f"Error creating messenger for platform {platform}: {e}")
-            return None
+
+            try:
+                if platform == "telegram":
+                    from services.telegram_service.app.bot import bot
+                    return messenger_class(bot)
+                elif platform == "viber":
+                    from services.viber_service.app.bot import viber
+                    return messenger_class(viber)
+                elif platform == "whatsapp":
+                    from services.whatsapp_service.app.bot import client
+                    return messenger_class(client)
+                else:
+                    logger.error("Unknown platform", extra={'platform': platform})
+                    return None
+            except ImportError as e:
+                logger.error("Error importing dependencies", exc_info=True, extra={
+                    'platform': platform,
+                    'error_type': type(e).__name__
+                })
+                return None
+            except Exception as e:
+                logger.error("Error creating messenger", exc_info=True, extra={
+                    'platform': platform,
+                    'error_type': type(e).__name__
+                })
+                return None

@@ -1,6 +1,5 @@
 # common/messaging/viber_messaging.py
 
-import logging
 import asyncio
 from typing import Optional, List, Dict, Any, Union
 
@@ -9,8 +8,10 @@ from viberbot.api.messages import TextMessage, PictureMessage, KeyboardMessage
 
 from .unified_interface import MessagingInterface
 from common.utils.retry_utils import retry_with_exponential_backoff, NETWORK_EXCEPTIONS
+from common.utils.logging_config import log_operation, log_context
 
-logger = logging.getLogger(__name__)
+# Import the messaging logger
+from . import logger
 
 
 class ViberMessaging(MessagingInterface):
@@ -35,6 +36,7 @@ class ViberMessaging(MessagingInterface):
         return user_id
 
     @retry_with_exponential_backoff(max_retries=3, initial_delay=1, retryable_exceptions=NETWORK_EXCEPTIONS)
+    @log_operation("send_text")
     async def send_text(
             self,
             user_id: str,
@@ -43,24 +45,34 @@ class ViberMessaging(MessagingInterface):
             **kwargs
     ) -> Union[Dict[str, Any], None]:
         """Send a text message via Viber."""
-        try:
-            messages = [TextMessage(text=text)]
+        with log_context(logger, user_id=user_id, platform="viber", text_length=len(text)):
+            try:
+                messages = [TextMessage(text=text)]
 
-            if keyboard:
-                messages.append(KeyboardMessage(keyboard=keyboard))
+                if keyboard:
+                    messages.append(KeyboardMessage(keyboard=keyboard))
 
-            # Execute in thread pool since Viber API is synchronous
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: self.viber.send_messages(user_id, messages)
-            )
-            return response
-        except Exception as e:
-            logger.error(f"Error sending Viber message to {user_id}: {e}")
-            raise  # Let the retry decorator handle this
+                # Execute in thread pool since Viber API is synchronous
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self.viber.send_messages(user_id, messages)
+                )
+
+                logger.debug("Text message sent successfully", extra={
+                    'user_id': user_id,
+                    'has_keyboard': bool(keyboard)
+                })
+                return response
+            except Exception as e:
+                logger.error(f"Error sending Viber message", exc_info=True, extra={
+                    'user_id': user_id,
+                    'error_type': type(e).__name__
+                })
+                raise  # Let the retry decorator handle this
 
     @retry_with_exponential_backoff(max_retries=3, initial_delay=1, retryable_exceptions=NETWORK_EXCEPTIONS)
+    @log_operation("send_media")
     async def send_media(
             self,
             user_id: str,
@@ -70,44 +82,55 @@ class ViberMessaging(MessagingInterface):
             **kwargs
     ) -> Union[Dict[str, Any], None]:
         """Send a media message via Viber."""
-        try:
-            messages = []
+        with log_context(logger, user_id=user_id, platform="viber", media_url=media_url[:50]):
+            try:
+                messages = []
 
-            # Add caption as a separate message if provided
-            if caption:
-                messages.append(TextMessage(text=caption))
+                # Add caption as a separate message if provided
+                if caption:
+                    messages.append(TextMessage(text=caption))
 
-            # Add the image
-            messages.append(PictureMessage(
-                media=media_url,
-                text=caption or ""
-            ))
+                # Add the image
+                messages.append(PictureMessage(
+                    media=media_url,
+                    text=caption or ""
+                ))
 
-            # Add keyboard if provided
-            if keyboard:
-                messages.append(KeyboardMessage(keyboard=keyboard))
+                # Add keyboard if provided
+                if keyboard:
+                    messages.append(KeyboardMessage(keyboard=keyboard))
 
-            # Execute in thread pool since Viber API is synchronous
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: self.viber.send_messages(user_id, messages)
-            )
-            return response
-        except Exception as e:
-            logger.error(f"Error sending Viber media to {user_id}: {e}")
-            # Fallback to text if media fails but don't raise to retry
-            if caption:
-                try:
-                    return await self.send_text(
-                        user_id=user_id,
-                        text=f"{caption}\n\n[Image URL: {media_url}]",
-                        keyboard=keyboard
-                    )
-                except Exception:
-                    pass
-            raise  # Let the retry decorator handle the original error
+                # Execute in thread pool since Viber API is synchronous
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self.viber.send_messages(user_id, messages)
+                )
 
+                logger.debug("Media message sent successfully", extra={
+                    'user_id': user_id,
+                    'has_caption': bool(caption),
+                    'has_keyboard': bool(keyboard)
+                })
+                return response
+            except Exception as e:
+                logger.error(f"Error sending Viber media", exc_info=True, extra={
+                    'user_id': user_id,
+                    'error_type': type(e).__name__
+                })
+                # Fallback to text if media fails but don't raise to retry
+                if caption:
+                    try:
+                        return await self.send_text(
+                            user_id=user_id,
+                            text=f"{caption}\n\n[Image URL: {media_url}]",
+                            keyboard=keyboard
+                        )
+                    except Exception:
+                        pass
+                raise  # Let the retry decorator handle the original error
+
+    @log_operation("send_menu")
     async def send_menu(
             self,
             user_id: str,
@@ -116,14 +139,16 @@ class ViberMessaging(MessagingInterface):
             **kwargs
     ) -> Union[Dict[str, Any], None]:
         """Send a menu with options via Viber."""
-        keyboard = self.create_keyboard(options, **kwargs)
-        return await self.send_text(
-            user_id=user_id,
-            text=text,
-            keyboard=keyboard,
-            **kwargs
-        )
+        with log_context(logger, user_id=user_id, platform="viber", options_count=len(options)):
+            keyboard = self.create_keyboard(options, **kwargs)
+            return await self.send_text(
+                user_id=user_id,
+                text=text,
+                keyboard=keyboard,
+                **kwargs
+            )
 
+    @log_operation("send_ad")
     async def send_ad(
             self,
             user_id: str,
@@ -134,64 +159,65 @@ class ViberMessaging(MessagingInterface):
         """Send a real estate ad via Viber with appropriate formatting."""
         from common.config import build_ad_text
 
-        # Build the ad text
-        text = build_ad_text(ad_data)
+        with log_context(logger, user_id=user_id, platform="viber", ad_id=ad_data.get("id")):
+            # Build the ad text
+            text = build_ad_text(ad_data)
 
-        # Create buttons for the ad
-        ad_id = ad_data.get("id")
-        resource_url = ad_data.get("resource_url")
+            # Create buttons for the ad
+            ad_id = ad_data.get("id")
+            resource_url = ad_data.get("resource_url")
 
-        # Create Viber keyboard
-        keyboard = {
-            "Type": "keyboard",
-            "Buttons": [
-                {
-                    "Columns": 3,
-                    "Rows": 1,
-                    "Text": "🖼 Більше фото",
-                    "ActionType": "reply",
-                    "ActionBody": f"more_photos:{ad_id}"
-                },
-                {
-                    "Columns": 3,
-                    "Rows": 1,
-                    "Text": "📲 Подзвонити",
-                    "ActionType": "reply",
-                    "ActionBody": f"call_contact:{ad_id}"
-                },
-                {
-                    "Columns": 3,
-                    "Rows": 1,
-                    "Text": "❤️ Додати в обрані",
-                    "ActionType": "reply",
-                    "ActionBody": f"add_fav:{ad_id}"
-                },
-                {
-                    "Columns": 3,
-                    "Rows": 1,
-                    "Text": "ℹ️ Повний опис",
-                    "ActionType": "reply",
-                    "ActionBody": f"show_more:{resource_url}"
-                }
-            ]
-        }
+            # Create Viber keyboard
+            keyboard = {
+                "Type": "keyboard",
+                "Buttons": [
+                    {
+                        "Columns": 3,
+                        "Rows": 1,
+                        "Text": "🖼 Більше фото",
+                        "ActionType": "reply",
+                        "ActionBody": f"more_photos:{ad_id}"
+                    },
+                    {
+                        "Columns": 3,
+                        "Rows": 1,
+                        "Text": "📲 Подзвонити",
+                        "ActionType": "reply",
+                        "ActionBody": f"call_contact:{ad_id}"
+                    },
+                    {
+                        "Columns": 3,
+                        "Rows": 1,
+                        "Text": "❤️ Додати в обрані",
+                        "ActionType": "reply",
+                        "ActionBody": f"add_fav:{ad_id}"
+                    },
+                    {
+                        "Columns": 3,
+                        "Rows": 1,
+                        "Text": "ℹ️ Повний опис",
+                        "ActionType": "reply",
+                        "ActionBody": f"show_more:{resource_url}"
+                    }
+                ]
+            }
 
-        # Send the ad
-        if image_url:
-            return await self.send_media(
-                user_id=user_id,
-                media_url=image_url,
-                caption=text,
-                keyboard=keyboard,
-                **kwargs
-            )
-        else:
-            return await self.send_text(
-                user_id=user_id,
-                text=text,
-                keyboard=keyboard,
-                **kwargs
-            )
+            # Send the ad
+            if image_url:
+                return await self.send_media(
+                    user_id=user_id,
+                    media_url=image_url,
+                    caption=text,
+                    keyboard=keyboard,
+                    **kwargs
+                )
+            else:
+                return await self.send_text(
+                    user_id=user_id,
+                    text=text,
+                    keyboard=keyboard,
+                    **kwargs
+                )
 
     @classmethod
     def create_keyboard(

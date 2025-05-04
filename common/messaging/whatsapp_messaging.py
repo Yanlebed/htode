@@ -1,6 +1,5 @@
 # common/messaging/whatsapp_messaging.py
 
-import logging
 import asyncio
 import os
 from typing import Optional, List, Dict, Any, Union
@@ -10,12 +9,15 @@ from twilio.base.exceptions import TwilioRestException
 
 from .unified_interface import MessagingInterface
 from common.utils.retry_utils import retry_with_exponential_backoff, NETWORK_EXCEPTIONS
+from common.utils.logging_config import log_operation, log_context
 
-logger = logging.getLogger(__name__)
+# Import the messaging logger
+from . import logger
 
 TWILIO_EXCEPTIONS = [
     TwilioRestException,  # Base exception for Twilio API errors
 ]
+
 
 class WhatsAppMessaging(MessagingInterface):
     """WhatsApp implementation of the messaging interface via Twilio."""
@@ -55,6 +57,7 @@ class WhatsAppMessaging(MessagingInterface):
         initial_delay=1,
         retryable_exceptions=TWILIO_EXCEPTIONS + NETWORK_EXCEPTIONS
     )
+    @log_operation("send_text")
     async def send_text(
             self,
             user_id: str,
@@ -62,31 +65,41 @@ class WhatsAppMessaging(MessagingInterface):
             **kwargs
     ) -> Union[str, None]:
         """Send a text message via WhatsApp."""
-        try:
-            # Ensure user_id has whatsapp: prefix
-            to_number = await self.format_user_id(user_id)
+        with log_context(logger, user_id=user_id, platform="whatsapp", text_length=len(text)):
+            try:
+                # Ensure user_id has whatsapp: prefix
+                to_number = await self.format_user_id(user_id)
 
-            # Execute in thread pool since Twilio API is synchronous
-            loop = asyncio.get_event_loop()
-            message = await loop.run_in_executor(
-                None,
-                lambda: self.client.messages.create(
-                    from_=self.from_number,
-                    body=text,
-                    to=to_number,
-                    **kwargs
+                # Execute in thread pool since Twilio API is synchronous
+                loop = asyncio.get_event_loop()
+                message = await loop.run_in_executor(
+                    None,
+                    lambda: self.client.messages.create(
+                        from_=self.from_number,
+                        body=text,
+                        to=to_number,
+                        **kwargs
+                    )
                 )
-            )
-            return message.sid
-        except Exception as e:
-            logger.error(f"Error sending WhatsApp message to {user_id}: {e}")
-            raise  # Let the retry decorator handle this
+
+                logger.debug("Text message sent successfully", extra={
+                    'user_id': user_id,
+                    'message_sid': message.sid
+                })
+                return message.sid
+            except Exception as e:
+                logger.error(f"Error sending WhatsApp message", exc_info=True, extra={
+                    'user_id': user_id,
+                    'error_type': type(e).__name__
+                })
+                raise  # Let the retry decorator handle this
 
     @retry_with_exponential_backoff(
         max_retries=3,
         initial_delay=1,
         retryable_exceptions=TWILIO_EXCEPTIONS + NETWORK_EXCEPTIONS
     )
+    @log_operation("send_media")
     async def send_media(
             self,
             user_id: str,
@@ -95,36 +108,47 @@ class WhatsAppMessaging(MessagingInterface):
             **kwargs
     ) -> Union[str, None]:
         """Send a media message via WhatsApp."""
-        try:
-            # Ensure user_id has whatsapp: prefix
-            to_number = await self.format_user_id(user_id)
+        with log_context(logger, user_id=user_id, platform="whatsapp", media_url=media_url[:50]):
+            try:
+                # Ensure user_id has whatsapp: prefix
+                to_number = await self.format_user_id(user_id)
 
-            # Execute in thread pool since Twilio API is synchronous
-            loop = asyncio.get_event_loop()
-            message = await loop.run_in_executor(
-                None,
-                lambda: self.client.messages.create(
-                    from_=self.from_number,
-                    body=caption or "",
-                    media_url=[media_url],
-                    to=to_number,
-                    **kwargs
-                )
-            )
-            return message.sid
-        except Exception as e:
-            logger.error(f"Error sending WhatsApp media to {user_id}: {e}")
-            # Fall back to text if media fails but don't raise to retry
-            if caption:
-                try:
-                    return await self.send_text(
-                        user_id=user_id,
-                        text=f"{caption}\n\n[Media URL: {media_url}]"
+                # Execute in thread pool since Twilio API is synchronous
+                loop = asyncio.get_event_loop()
+                message = await loop.run_in_executor(
+                    None,
+                    lambda: self.client.messages.create(
+                        from_=self.from_number,
+                        body=caption or "",
+                        media_url=[media_url],
+                        to=to_number,
+                        **kwargs
                     )
-                except Exception:
-                    pass
-            raise  # Let the retry decorator handle the original error
+                )
 
+                logger.debug("Media message sent successfully", extra={
+                    'user_id': user_id,
+                    'message_sid': message.sid,
+                    'has_caption': bool(caption)
+                })
+                return message.sid
+            except Exception as e:
+                logger.error(f"Error sending WhatsApp media", exc_info=True, extra={
+                    'user_id': user_id,
+                    'error_type': type(e).__name__
+                })
+                # Fall back to text if media fails but don't raise to retry
+                if caption:
+                    try:
+                        return await self.send_text(
+                            user_id=user_id,
+                            text=f"{caption}\n\n[Media URL: {media_url}]"
+                        )
+                    except Exception:
+                        pass
+                raise  # Let the retry decorator handle the original error
+
+    @log_operation("send_menu")
     async def send_menu(
             self,
             user_id: str,
@@ -138,10 +162,12 @@ class WhatsAppMessaging(MessagingInterface):
         Note: WhatsApp via Twilio doesn't support rich keyboards,
         so we format options as a text-based menu with instructions.
         """
-        # Convert options to a text-based menu
-        menu_text = self.create_keyboard(options, text_header=text)
-        return await self.send_text(user_id, menu_text, **kwargs)
+        with log_context(logger, user_id=user_id, platform="whatsapp", options_count=len(options)):
+            # Convert options to a text-based menu
+            menu_text = self.create_keyboard(options, text_header=text)
+            return await self.send_text(user_id, menu_text, **kwargs)
 
+    @log_operation("send_ad")
     async def send_ad(
             self,
             user_id: str,
@@ -152,35 +178,36 @@ class WhatsAppMessaging(MessagingInterface):
         """Send a real estate ad via WhatsApp with appropriate formatting."""
         from common.config import build_ad_text
 
-        # Build the ad text
-        text = build_ad_text(ad_data)
+        with log_context(logger, user_id=user_id, platform="whatsapp", ad_id=ad_data.get("id")):
+            # Build the ad text
+            text = build_ad_text(ad_data)
 
-        # Create instruction text for WhatsApp (no buttons support)
-        ad_id = ad_data.get("id")
+            # Create instruction text for WhatsApp (no buttons support)
+            ad_id = ad_data.get("id")
 
-        text_with_instructions = (
-            f"{text}\n\n"
-            "Доступні дії:\n"
-            f"- Відповідь 'фото {ad_id}' для більше фото\n"
-            f"- Відповідь 'тел {ad_id}' для номерів телефону\n"
-            f"- Відповідь 'обр {ad_id}' щоб додати в обрані\n"
-            f"- Відповідь 'опис {ad_id}' для повного опису"
-        )
-
-        # Send the ad
-        if image_url:
-            return await self.send_media(
-                user_id=user_id,
-                media_url=image_url,
-                caption=text_with_instructions,
-                **kwargs
+            text_with_instructions = (
+                f"{text}\n\n"
+                "Доступні дії:\n"
+                f"- Відповідь 'фото {ad_id}' для більше фото\n"
+                f"- Відповідь 'тел {ad_id}' для номерів телефону\n"
+                f"- Відповідь 'обр {ad_id}' щоб додати в обрані\n"
+                f"- Відповідь 'опис {ad_id}' для повного опису"
             )
-        else:
-            return await self.send_text(
-                user_id=user_id,
-                text=text_with_instructions,
-                **kwargs
-            )
+
+            # Send the ad
+            if image_url:
+                return await self.send_media(
+                    user_id=user_id,
+                    media_url=image_url,
+                    caption=text_with_instructions,
+                    **kwargs
+                )
+            else:
+                return await self.send_text(
+                    user_id=user_id,
+                    text=text_with_instructions,
+                    **kwargs
+                )
 
     @classmethod
     def create_keyboard(

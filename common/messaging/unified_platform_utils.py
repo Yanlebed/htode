@@ -1,17 +1,20 @@
 # common/messaging/unified_platform_utils.py
 
-import logging
 import asyncio
 import random
 from typing import Dict, Any, Optional, Tuple, Union, List, TypeVar
+from common.utils.logging_config import log_operation, log_context
 
-logger = logging.getLogger(__name__)
+# Import the messaging logger
+from . import logger
 
 # Type variable for return value
 T = TypeVar('T')
 
+
 # ===== Platform Detection and Resolution =====
 
+@log_operation("detect_platform_from_id")
 def detect_platform_from_id(user_id: str) -> Tuple[str, str]:
     """
     Detect messaging platform from user ID format.
@@ -22,15 +25,22 @@ def detect_platform_from_id(user_id: str) -> Tuple[str, str]:
     Returns:
         Tuple of (platform_name, clean_user_id)
     """
-    user_id_str = str(user_id)
+    with log_context(logger, user_id=user_id[:20]):
+        user_id_str = str(user_id)
 
-    if user_id_str.startswith("whatsapp:"):
-        return "whatsapp", user_id_str
-    elif len(user_id_str) > 20:  # Viber IDs are typically long UUIDs
-        return "viber", user_id_str
-    else:
-        # Default to Telegram for numeric IDs and other formats
-        return "telegram", user_id_str
+        if user_id_str.startswith("whatsapp:"):
+            result = ("whatsapp", user_id_str)
+        elif len(user_id_str) > 20:  # Viber IDs are typically long UUIDs
+            result = ("viber", user_id_str)
+        else:
+            # Default to Telegram for numeric IDs and other formats
+            result = ("telegram", user_id_str)
+
+        logger.debug("Detected platform from ID", extra={
+            'platform': result[0],
+            'id_length': len(user_id_str)
+        })
+        return result
 
 
 def format_user_id_for_platform(user_id: str, platform: str) -> str:
@@ -52,6 +62,7 @@ def format_user_id_for_platform(user_id: str, platform: str) -> str:
     return user_id
 
 
+@log_operation("resolve_user_id")
 def resolve_user_id(user_id: Union[int, str], platform: Optional[str] = None) -> Tuple[
     Optional[int], Optional[str], Optional[str]]:
     """
@@ -66,39 +77,52 @@ def resolve_user_id(user_id: Union[int, str], platform: Optional[str] = None) ->
     """
     from common.db.operations import get_db_user_id_by_telegram_id, get_platform_ids_for_user
 
-    # Case 1: Database user ID
-    if isinstance(user_id, int) or (isinstance(user_id, str) and user_id.isdigit()):
-        db_user_id = int(user_id)
+    with log_context(logger, user_id=str(user_id)[:20], platform=platform):
+        # Case 1: Database user ID
+        if isinstance(user_id, int) or (isinstance(user_id, str) and user_id.isdigit()):
+            db_user_id = int(user_id)
 
-        # Get platform IDs for this user
-        platform_ids = get_platform_ids_for_user(db_user_id)
+            # Get platform IDs for this user
+            platform_ids = get_platform_ids_for_user(db_user_id)
 
-        # Determine which platform to use (priority order)
-        if platform_ids.get("telegram_id"):
-            return db_user_id, "telegram", str(platform_ids["telegram_id"])
-        elif platform_ids.get("viber_id"):
-            return db_user_id, "viber", platform_ids["viber_id"]
-        elif platform_ids.get("whatsapp_id"):
-            return db_user_id, "whatsapp", platform_ids["whatsapp_id"]
+            # Determine which platform to use (priority order)
+            if platform_ids.get("telegram_id"):
+                result = (db_user_id, "telegram", str(platform_ids["telegram_id"]))
+            elif platform_ids.get("viber_id"):
+                result = (db_user_id, "viber", platform_ids["viber_id"])
+            elif platform_ids.get("whatsapp_id"):
+                result = (db_user_id, "whatsapp", platform_ids["whatsapp_id"])
+            else:
+                result = (db_user_id, None, None)
+
+            logger.debug("Resolved database user ID", extra={
+                'db_user_id': db_user_id,
+                'platform': result[1]
+            })
+            return result
+
+        # Case 2: Platform-specific ID
+
+        # If platform is provided, use it
+        if platform:
+            platform_name = platform
+            platform_id = user_id
         else:
-            return db_user_id, None, None
+            # Detect platform from ID format
+            platform_name, platform_id = detect_platform_from_id(user_id)
 
-    # Case 2: Platform-specific ID
+        # Get database user ID
+        db_user_id = get_db_user_id_by_telegram_id(platform_id, messenger_type=platform_name)
 
-    # If platform is provided, use it
-    if platform:
-        platform_name = platform
-        platform_id = user_id
-    else:
-        # Detect platform from ID format
-        platform_name, platform_id = detect_platform_from_id(user_id)
-
-    # Get database user ID
-    db_user_id = get_db_user_id_by_telegram_id(platform_id, messenger_type=platform_name)
-
-    return db_user_id, platform_name, platform_id
+        logger.debug("Resolved platform user ID", extra={
+            'platform': platform_name,
+            'db_user_id': db_user_id,
+            'platform_id': platform_id[:20] if platform_id else None
+        })
+        return (db_user_id, platform_name, platform_id)
 
 
+@log_operation("get_messenger_for_user")
 async def get_messenger_for_user(user_id: Union[int, str]) -> Tuple[Optional[str], Optional[str], Optional[Any]]:
     """
     Determine the messenger type and platform-specific ID for a user.
@@ -110,15 +134,24 @@ async def get_messenger_for_user(user_id: Union[int, str]) -> Tuple[Optional[str
     Returns:
         Tuple of (platform_name, platform_id, messenger_instance)
     """
-    db_user_id, platform_name, platform_id = resolve_user_id(user_id)
+    with log_context(logger, user_id=str(user_id)[:20]):
+        db_user_id, platform_name, platform_id = resolve_user_id(user_id)
 
-    if platform_name and platform_id:
-        messenger = get_messenger_instance(platform_name)
-        return platform_name, platform_id, messenger
+        if platform_name and platform_id:
+            messenger = get_messenger_instance(platform_name)
+            logger.debug("Found messenger for user", extra={
+                'platform': platform_name,
+                'has_messenger': bool(messenger)
+            })
+            return platform_name, platform_id, messenger
 
-    return None, None, None
+        logger.warning("Could not determine messenger for user", extra={
+            'user_id': str(user_id)[:20]
+        })
+        return None, None, None
 
 
+@log_operation("get_messenger_instance")
 def get_messenger_instance(platform: str):
     """
     Get the appropriate messenger instance for a platform.
@@ -129,28 +162,35 @@ def get_messenger_instance(platform: str):
     Returns:
         Messenger instance or None if not found
     """
-    try:
-        if platform == "telegram":
-            from common.messaging.telegram_messaging import TelegramMessaging
-            from services.telegram_service.app.bot import bot
-            return TelegramMessaging(bot)
-        elif platform == "viber":
-            from common.messaging.viber_messaging import ViberMessaging
-            from services.viber_service.app.bot import viber
-            return ViberMessaging(viber)
-        elif platform == "whatsapp":
-            from common.messaging.whatsapp_messaging import WhatsAppMessaging
-            from services.whatsapp_service.app.bot import client
-            return WhatsAppMessaging(client)
-        else:
-            logger.warning(f"Unknown platform: {platform}")
+    with log_context(logger, platform=platform):
+        try:
+            if platform == "telegram":
+                from common.messaging.telegram_messaging import TelegramMessaging
+                from services.telegram_service.app.bot import bot
+                return TelegramMessaging(bot)
+            elif platform == "viber":
+                from common.messaging.viber_messaging import ViberMessaging
+                from services.viber_service.app.bot import viber
+                return ViberMessaging(viber)
+            elif platform == "whatsapp":
+                from common.messaging.whatsapp_messaging import WhatsAppMessaging
+                from services.whatsapp_service.app.bot import client
+                return WhatsAppMessaging(client)
+            else:
+                logger.warning(f"Unknown platform", extra={'platform': platform})
+                return None
+        except ImportError as e:
+            logger.error(f"Error importing messenger", exc_info=True, extra={
+                'platform': platform,
+                'error_type': type(e).__name__
+            })
             return None
-    except ImportError as e:
-        logger.error(f"Error importing messenger for {platform}: {e}")
-        return None
-    except Exception as e:
-        logger.error(f"Error getting messenger instance for {platform}: {e}")
-        return None
+        except Exception as e:
+            logger.error(f"Error getting messenger instance", exc_info=True, extra={
+                'platform': platform,
+                'error_type': type(e).__name__
+            })
+            return None
 
 
 # ===== Messaging Utilities =====
@@ -162,6 +202,7 @@ class MessageFormatter:
     """
 
     @staticmethod
+    @log_operation("format_ad_text")
     def format_ad_text(ad_data: Dict[str, Any], platform: str = "default") -> str:
         """
         Format ad text based on platform-specific requirements.
@@ -175,53 +216,59 @@ class MessageFormatter:
         """
         from common.config import GEO_ID_MAPPING
 
-        # Extract ad data with defaults
-        city_id = ad_data.get('city')
-        city_name = GEO_ID_MAPPING.get(city_id, "Невідомо")
-        price = ad_data.get('price', 0)
-        address = ad_data.get('address', "Невідомо")
-        rooms_count = ad_data.get('rooms_count', "Невідомо")
-        square_feet = ad_data.get('square_feet', "Невідомо")
-        floor = ad_data.get('floor', "Невідомо")
-        total_floors = ad_data.get('total_floors', "Невідомо")
+        with log_context(logger, platform=platform, ad_id=ad_data.get('id')):
+            # Extract ad data with defaults
+            city_id = ad_data.get('city')
+            city_name = GEO_ID_MAPPING.get(city_id, "Невідомо")
+            price = ad_data.get('price', 0)
+            address = ad_data.get('address', "Невідомо")
+            rooms_count = ad_data.get('rooms_count', "Невідомо")
+            square_feet = ad_data.get('square_feet', "Невідомо")
+            floor = ad_data.get('floor', "Невідомо")
+            total_floors = ad_data.get('total_floors', "Невідомо")
 
-        # Apply platform-specific formatting
-        if platform == "telegram":
-            # Telegram supports markdown
-            text = (
-                f"💰 Ціна: *{int(price)}* грн.\n"
-                f"🏙️ Місто: *{city_name}*\n"
-                f"📍 Адреса: *{address}*\n"
-                f"🛏️ Кіл-сть кімнат: *{rooms_count}*\n"
-                f"📐 Площа: *{square_feet}* кв.м.\n"
-                f"🏢 Поверх: *{floor}* з *{total_floors}*\n"
-            )
-        elif platform in ["viber", "whatsapp"]:
-            # Standard text formatting for platforms without markdown
-            text = (
-                f"💰 Ціна: {int(price)} грн.\n"
-                f"🏙️ Місто: {city_name}\n"
-                f"📍 Адреса: {address}\n"
-                f"🛏️ Кіл-сть кімнат: {rooms_count}\n"
-                f"📐 Площа: {square_feet} кв.м.\n"
-                f"🏢 Поверх: {floor} з {total_floors}\n"
-            )
-        else:
-            # Default format for unknown platforms
-            text = (
-                f"💰 Ціна: {int(price)} грн.\n"
-                f"🏙️ Місто: {city_name}\n"
-                f"📍 Адреса: {address}\n"
-                f"🛏️ Кіл-сть кімнат: {rooms_count}\n"
-                f"📐 Площа: {square_feet} кв.м.\n"
-                f"🏢 Поверх: {floor} з {total_floors}\n"
-            )
+            # Apply platform-specific formatting
+            if platform == "telegram":
+                # Telegram supports markdown
+                text = (
+                    f"💰 Ціна: *{int(price)}* грн.\n"
+                    f"🏙️ Місто: *{city_name}*\n"
+                    f"📍 Адреса: *{address}*\n"
+                    f"🛏️ Кіл-сть кімнат: *{rooms_count}*\n"
+                    f"📐 Площа: *{square_feet}* кв.м.\n"
+                    f"🏢 Поверх: *{floor}* з *{total_floors}*\n"
+                )
+            elif platform in ["viber", "whatsapp"]:
+                # Standard text formatting for platforms without markdown
+                text = (
+                    f"💰 Ціна: {int(price)} грн.\n"
+                    f"🏙️ Місто: {city_name}\n"
+                    f"📍 Адреса: {address}\n"
+                    f"🛏️ Кіл-сть кімнат: {rooms_count}\n"
+                    f"📐 Площа: {square_feet} кв.м.\n"
+                    f"🏢 Поверх: {floor} з {total_floors}\n"
+                )
+            else:
+                # Default format for unknown platforms
+                text = (
+                    f"💰 Ціна: {int(price)} грн.\n"
+                    f"🏙️ Місто: {city_name}\n"
+                    f"📍 Адреса: {address}\n"
+                    f"🛏️ Кіл-сть кімнат: {rooms_count}\n"
+                    f"📐 Площа: {square_feet} кв.м.\n"
+                    f"🏢 Поверх: {floor} з {total_floors}\n"
+                )
 
-        return text
+            logger.debug("Formatted ad text", extra={
+                'platform': platform,
+                'text_length': len(text)
+            })
+            return text
 
 
 # ===== Unified Message Sending Functions =====
 
+@log_operation("safe_send_message")
 async def safe_send_message(
         user_id: Union[str, int],
         text: str,
@@ -246,55 +293,79 @@ async def safe_send_message(
     """
     from common.messaging.service import messaging_service
 
-    try:
-        # Get database user ID, platform and messenger
-        db_user_id, platform_name, platform_id = resolve_user_id(user_id, platform)
+    with log_context(logger, user_id=str(user_id)[:20], platform=platform, retry_count=retry_count):
+        try:
+            # Get database user ID, platform and messenger
+            db_user_id, platform_name, platform_id = resolve_user_id(user_id, platform)
 
-        # If we have a database user ID, try to use the unified messaging service
-        if db_user_id:
-            try:
-                success = await messaging_service.send_notification(
-                    user_id=db_user_id,
-                    text=text,
-                    **kwargs
-                )
-                if success:
-                    return True
-            except Exception as e:
-                logger.warning(f"Error using messaging service: {e}, falling back to direct send")
+            # If we have a database user ID, try to use the unified messaging service
+            if db_user_id:
+                try:
+                    success = await messaging_service.send_notification(
+                        user_id=db_user_id,
+                        text=text,
+                        **kwargs
+                    )
+                    if success:
+                        logger.debug("Message sent via messaging service", extra={
+                            'user_id': db_user_id,
+                            'platform': platform_name
+                        })
+                        return True
+                except Exception as e:
+                    logger.warning("Error using messaging service", exc_info=True, extra={
+                        'error_type': type(e).__name__
+                    })
 
-        # If we have platform info, try direct send
-        if platform_name and platform_id:
-            messenger = get_messenger_instance(platform_name)
-            if messenger:
-                # Format user ID for this platform
-                formatted_id = format_user_id_for_platform(platform_id, platform_name)
+            # If we have platform info, try direct send
+            if platform_name and platform_id:
+                messenger = get_messenger_instance(platform_name)
+                if messenger:
+                    # Format user ID for this platform
+                    formatted_id = format_user_id_for_platform(platform_id, platform_name)
 
-                # Send the message with retry logic
-                for attempt in range(retry_count):
-                    try:
-                        return await messenger.send_text(formatted_id, text, **kwargs)
-                    except Exception as e:
-                        if attempt < retry_count - 1:
-                            current_delay = retry_delay * (2 ** attempt)
-                            jitter = random.uniform(0.8, 1.2)
-                            final_delay = current_delay * jitter
-                            logger.warning(
-                                f"Failed to send message (attempt {attempt + 1}/{retry_count}): {e}. "
-                                f"Retrying in {final_delay:.2f}s"
-                            )
-                            await asyncio.sleep(final_delay)
-                        else:
-                            logger.error(f"Failed to send message after {retry_count} attempts: {e}")
-                            return None
+                    # Send the message with retry logic
+                    for attempt in range(retry_count):
+                        try:
+                            result = await messenger.send_text(formatted_id, text, **kwargs)
+                            logger.debug("Message sent directly", extra={
+                                'platform': platform_name,
+                                'attempt': attempt + 1
+                            })
+                            return result
+                        except Exception as e:
+                            if attempt < retry_count - 1:
+                                current_delay = retry_delay * (2 ** attempt)
+                                jitter = random.uniform(0.8, 1.2)
+                                final_delay = current_delay * jitter
+                                logger.warning(
+                                    f"Failed to send message, retrying", extra={
+                                        'attempt': attempt + 1,
+                                        'retry_count': retry_count,
+                                        'delay': final_delay,
+                                        'error_type': type(e).__name__
+                                    }
+                                )
+                                await asyncio.sleep(final_delay)
+                            else:
+                                logger.error(f"Failed to send message after retries", exc_info=True, extra={
+                                    'attempts': retry_count,
+                                    'error_type': type(e).__name__
+                                })
+                                return None
 
-        logger.error(f"Could not send message - unable to resolve user ID or platform: {user_id}")
-        return None
-    except Exception as e:
-        logger.error(f"Error in unified safe_send_message: {e}")
-        return None
+            logger.error(f"Could not send message - unable to resolve user ID or platform", extra={
+                'user_id': str(user_id)[:20]
+            })
+            return None
+        except Exception as e:
+            logger.error(f"Error in safe_send_message", exc_info=True, extra={
+                'error_type': type(e).__name__
+            })
+            return None
 
 
+@log_operation("safe_send_media")
 async def safe_send_media(
         user_id: Union[str, int],
         media_url: str,
@@ -321,67 +392,91 @@ async def safe_send_media(
     """
     from common.messaging.service import messaging_service
 
-    try:
-        # Get database user ID, platform and messenger
-        db_user_id, platform_name, platform_id = resolve_user_id(user_id, platform)
+    with log_context(logger, user_id=str(user_id)[:20], platform=platform, media_url=media_url[:50]):
+        try:
+            # Get database user ID, platform and messenger
+            db_user_id, platform_name, platform_id = resolve_user_id(user_id, platform)
 
-        # If we have a database user ID, try to use the unified messaging service
-        if db_user_id:
-            try:
-                success = await messaging_service.send_notification(
-                    user_id=db_user_id,
-                    text=caption,
-                    image_url=media_url,
-                    **kwargs
-                )
-                if success:
-                    return True
-            except Exception as e:
-                logger.warning(f"Error using messaging service: {e}, falling back to direct send")
+            # If we have a database user ID, try to use the unified messaging service
+            if db_user_id:
+                try:
+                    success = await messaging_service.send_notification(
+                        user_id=db_user_id,
+                        text=caption,
+                        image_url=media_url,
+                        **kwargs
+                    )
+                    if success:
+                        logger.debug("Media sent via messaging service", extra={
+                            'user_id': db_user_id,
+                            'platform': platform_name
+                        })
+                        return True
+                except Exception as e:
+                    logger.warning("Error using messaging service", exc_info=True, extra={
+                        'error_type': type(e).__name__
+                    })
 
-        # If we have platform info, try direct send
-        if platform_name and platform_id:
-            messenger = get_messenger_instance(platform_name)
-            if messenger:
-                # Format user ID for this platform
-                formatted_id = format_user_id_for_platform(platform_id, platform_name)
+            # If we have platform info, try direct send
+            if platform_name and platform_id:
+                messenger = get_messenger_instance(platform_name)
+                if messenger:
+                    # Format user ID for this platform
+                    formatted_id = format_user_id_for_platform(platform_id, platform_name)
 
-                # Send the media with retry logic
-                for attempt in range(retry_count):
-                    try:
-                        return await messenger.send_media(formatted_id, media_url, caption=caption, **kwargs)
-                    except Exception as e:
-                        if attempt < retry_count - 1:
-                            current_delay = retry_delay * (2 ** attempt)
-                            jitter = random.uniform(0.8, 1.2)
-                            final_delay = current_delay * jitter
-                            logger.warning(
-                                f"Failed to send media (attempt {attempt + 1}/{retry_count}): {e}. "
-                                f"Retrying in {final_delay:.2f}s"
-                            )
-                            await asyncio.sleep(final_delay)
-                        else:
-                            logger.error(f"Failed to send media after {retry_count} attempts: {e}")
-                            # Try sending just text if media fails
-                            if caption:
-                                try:
-                                    return await safe_send_message(
-                                        user_id=user_id,
-                                        text=f"{caption}\n\n[Media URL: {media_url}]",
-                                        platform=platform_name,
-                                        **kwargs
-                                    )
-                                except Exception:
-                                    pass
-                            return None
+                    # Send the media with retry logic
+                    for attempt in range(retry_count):
+                        try:
+                            result = await messenger.send_media(formatted_id, media_url, caption=caption, **kwargs)
+                            logger.debug("Media sent directly", extra={
+                                'platform': platform_name,
+                                'attempt': attempt + 1
+                            })
+                            return result
+                        except Exception as e:
+                            if attempt < retry_count - 1:
+                                current_delay = retry_delay * (2 ** attempt)
+                                jitter = random.uniform(0.8, 1.2)
+                                final_delay = current_delay * jitter
+                                logger.warning(
+                                    f"Failed to send media, retrying", extra={
+                                        'attempt': attempt + 1,
+                                        'retry_count': retry_count,
+                                        'delay': final_delay,
+                                        'error_type': type(e).__name__
+                                    }
+                                )
+                                await asyncio.sleep(final_delay)
+                            else:
+                                logger.error(f"Failed to send media after retries", exc_info=True, extra={
+                                    'attempts': retry_count,
+                                    'error_type': type(e).__name__
+                                })
+                                # Try sending just text if media fails
+                                if caption:
+                                    try:
+                                        return await safe_send_message(
+                                            user_id=user_id,
+                                            text=f"{caption}\n\n[Media URL: {media_url}]",
+                                            platform=platform_name,
+                                            **kwargs
+                                        )
+                                    except Exception:
+                                        pass
+                                return None
 
-        logger.error(f"Could not send media - unable to resolve user ID or platform: {user_id}")
-        return None
-    except Exception as e:
-        logger.error(f"Error in unified safe_send_media: {e}")
-        return None
+            logger.error(f"Could not send media - unable to resolve user ID or platform", extra={
+                'user_id': str(user_id)[:20]
+            })
+            return None
+        except Exception as e:
+            logger.error(f"Error in safe_send_media", exc_info=True, extra={
+                'error_type': type(e).__name__
+            })
+            return None
 
 
+@log_operation("safe_send_menu")
 async def safe_send_menu(
         user_id: Union[str, int],
         text: str,
@@ -402,31 +497,42 @@ async def safe_send_menu(
     Returns:
         Response from the messaging platform or boolean success status
     """
-    try:
-        # Get database user ID, platform and messenger
-        db_user_id, platform_name, platform_id = resolve_user_id(user_id, platform)
+    with log_context(logger, user_id=str(user_id)[:20], platform=platform, options_count=len(options)):
+        try:
+            # Get database user ID, platform and messenger
+            db_user_id, platform_name, platform_id = resolve_user_id(user_id, platform)
 
-        # If we have platform info, send the menu
-        if platform_name and platform_id:
-            messenger = get_messenger_instance(platform_name)
-            if messenger:
-                # Format user ID for this platform
-                formatted_id = format_user_id_for_platform(platform_id, platform_name)
+            # If we have platform info, send the menu
+            if platform_name and platform_id:
+                messenger = get_messenger_instance(platform_name)
+                if messenger:
+                    # Format user ID for this platform
+                    formatted_id = format_user_id_for_platform(platform_id, platform_name)
 
-                # Send the menu
-                return await messenger.send_menu(formatted_id, text, options, **kwargs)
+                    # Send the menu
+                    result = await messenger.send_menu(formatted_id, text, options, **kwargs)
+                    logger.debug("Menu sent", extra={
+                        'platform': platform_name,
+                        'options_count': len(options)
+                    })
+                    return result
 
-        logger.error(f"Could not send menu - unable to resolve user ID or platform: {user_id}")
-        return None
-    except Exception as e:
-        logger.error(f"Error in unified safe_send_menu: {e}")
-        return None
+            logger.error(f"Could not send menu - unable to resolve user ID or platform", extra={
+                'user_id': str(user_id)[:20]
+            })
+            return None
+        except Exception as e:
+            logger.error(f"Error in safe_send_menu", exc_info=True, extra={
+                'error_type': type(e).__name__
+            })
+            return None
 
 
 # ===== Platform-Specific Helper Functions =====
 
 # Telegram-specific helpers
 
+@log_operation("safe_edit_message_telegram")
 async def safe_edit_message_telegram(
         chat_id: Union[int, str],
         message_id: int,
@@ -449,30 +555,38 @@ async def safe_edit_message_telegram(
     Returns:
         Response from Telegram or None if failed
     """
-    try:
-        from services.telegram_service.app.bot import bot
-        from aiogram.utils.exceptions import MessageNotModified, TelegramAPIError
-
+    with log_context(logger, chat_id=chat_id, message_id=message_id):
         try:
-            return await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=text,
-                parse_mode=parse_mode,
-                reply_markup=reply_markup,
-                disable_web_page_preview=disable_web_page_preview
-            )
-        except MessageNotModified:
-            logger.debug("Message not modified (content is the same)")
+            from services.telegram_service.app.bot import bot
+            from aiogram.utils.exceptions import MessageNotModified, TelegramAPIError
+
+            try:
+                result = await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=text,
+                    parse_mode=parse_mode,
+                    reply_markup=reply_markup,
+                    disable_web_page_preview=disable_web_page_preview
+                )
+                logger.debug("Message edited successfully")
+                return result
+            except MessageNotModified:
+                logger.debug("Message not modified (content is the same)")
+                return None
+            except TelegramAPIError as e:
+                logger.error(f"Failed to edit message", exc_info=True, extra={
+                    'error_type': type(e).__name__
+                })
+                return None
+        except ImportError as e:
+            logger.error(f"Telegram dependencies not available", exc_info=True, extra={
+                'error_type': type(e).__name__
+            })
             return None
-        except TelegramAPIError as e:
-            logger.error(f"Failed to edit message: {e}")
-            return None
-    except ImportError as e:
-        logger.error(f"Telegram dependencies not available: {e}")
-        return None
 
 
+@log_operation("safe_answer_callback_query_telegram")
 async def safe_answer_callback_query_telegram(
         callback_query_id: str,
         text: Optional[str] = None,
@@ -489,28 +603,35 @@ async def safe_answer_callback_query_telegram(
     Returns:
         True if succeeded, False otherwise
     """
-    try:
-        from services.telegram_service.app.bot import bot
-        from aiogram.utils.exceptions import InvalidQueryID, TelegramAPIError
-
+    with log_context(logger, callback_query_id=callback_query_id):
         try:
-            await bot.answer_callback_query(
-                callback_query_id=callback_query_id,
-                text=text,
-                show_alert=show_alert
-            )
-            return True
-        except InvalidQueryID:
-            logger.warning("Invalid query ID (callback is too old)")
+            from services.telegram_service.app.bot import bot
+            from aiogram.utils.exceptions import InvalidQueryID, TelegramAPIError
+
+            try:
+                await bot.answer_callback_query(
+                    callback_query_id=callback_query_id,
+                    text=text,
+                    show_alert=show_alert
+                )
+                logger.debug("Callback query answered successfully")
+                return True
+            except InvalidQueryID:
+                logger.warning("Invalid query ID (callback is too old)")
+                return False
+            except TelegramAPIError as e:
+                logger.error(f"Failed to answer callback query", exc_info=True, extra={
+                    'error_type': type(e).__name__
+                })
+                return False
+        except ImportError as e:
+            logger.error(f"Telegram dependencies not available", exc_info=True, extra={
+                'error_type': type(e).__name__
+            })
             return False
-        except TelegramAPIError as e:
-            logger.error(f"Failed to answer callback query: {e}")
-            return False
-    except ImportError as e:
-        logger.error(f"Telegram dependencies not available: {e}")
-        return False
 
 
+@log_operation("delete_message_safe_telegram")
 async def delete_message_safe_telegram(
         chat_id: Union[int, str],
         message_id: int
@@ -525,19 +646,25 @@ async def delete_message_safe_telegram(
     Returns:
         True if succeeded or already deleted, False otherwise
     """
-    try:
-        from services.telegram_service.app.bot import bot
-        from aiogram.utils.exceptions import MessageToDeleteNotFound, TelegramAPIError
-
+    with log_context(logger, chat_id=chat_id, message_id=message_id):
         try:
-            await bot.delete_message(chat_id=chat_id, message_id=message_id)
-            return True
-        except MessageToDeleteNotFound:
-            logger.debug("Message to delete not found (already deleted)")
-            return True
-        except TelegramAPIError as e:
-            logger.error(f"Failed to delete message: {e}")
+            from services.telegram_service.app.bot import bot
+            from aiogram.utils.exceptions import MessageToDeleteNotFound, TelegramAPIError
+
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=message_id)
+                logger.debug("Message deleted successfully")
+                return True
+            except MessageToDeleteNotFound:
+                logger.debug("Message to delete not found (already deleted)")
+                return True
+            except TelegramAPIError as e:
+                logger.error(f"Failed to delete message", exc_info=True, extra={
+                    'error_type': type(e).__name__
+                })
+                return False
+        except ImportError as e:
+            logger.error(f"Telegram dependencies not available", exc_info=True, extra={
+                'error_type': type(e).__name__
+            })
             return False
-    except ImportError as e:
-        logger.error(f"Telegram dependencies not available: {e}")
-        return False
