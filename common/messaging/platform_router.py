@@ -1,14 +1,15 @@
 # common/messaging/platform_router.py
 
-import logging
 import importlib
 import inspect
 from typing import Dict, Any, Optional, Union, Callable, Type
 
 from common.messaging.unified_interface import MessagingInterface
 from common.messaging.unified_platform_utils import resolve_user_id
+from common.utils.logging_config import log_operation, log_context
 
-logger = logging.getLogger(__name__)
+# Import the logger from the parent module
+from . import logger
 
 
 class PlatformRouter:
@@ -22,6 +23,7 @@ class PlatformRouter:
         self.handlers = {}
         self.flows = {}
 
+    @log_operation("register_messenger")
     def register_messenger(self, platform: str, messenger_class: Type[MessagingInterface]) -> None:
         """
         Register a messenger implementation for a platform.
@@ -30,52 +32,66 @@ class PlatformRouter:
             platform: Platform name (telegram, viber, whatsapp)
             messenger_class: MessagingInterface implementation class
         """
-        try:
-            messenger = None
+        with log_context(logger, platform=platform):
+            try:
+                messenger = None
 
-            # Get the messenger instance
-            if platform == "telegram":
-                try:
-                    from services.telegram_service.app.bot import bot
-                    if bot:
-                        messenger = messenger_class(bot)
-                    else:
-                        logger.error(f"Bot instance is None for platform: {platform}")
-                except ImportError as e:
-                    logger.error(f"Failed to import bot for platform {platform}: {e}")
+                # Get the messenger instance
+                if platform == "telegram":
+                    try:
+                        from services.telegram_service.app.bot import bot
+                        if bot:
+                            messenger = messenger_class(bot)
+                        else:
+                            logger.error(f"Bot instance is None for platform", extra={'platform': platform})
+                    except ImportError as e:
+                        logger.error(f"Failed to import bot for platform", exc_info=True, extra={
+                            'platform': platform,
+                            'error_type': type(e).__name__
+                        })
 
-            elif platform == "viber":
-                try:
-                    from services.viber_service.app.bot import viber
-                    if viber:
-                        messenger = messenger_class(viber)
-                    else:
-                        logger.error(f"Viber instance is None for platform: {platform}")
-                except ImportError as e:
-                    logger.error(f"Failed to import viber for platform {platform}: {e}")
+                elif platform == "viber":
+                    try:
+                        from services.viber_service.app.bot import viber
+                        if viber:
+                            messenger = messenger_class(viber)
+                        else:
+                            logger.error(f"Viber instance is None for platform", extra={'platform': platform})
+                    except ImportError as e:
+                        logger.error(f"Failed to import viber for platform", exc_info=True, extra={
+                            'platform': platform,
+                            'error_type': type(e).__name__
+                        })
 
-            elif platform == "whatsapp":
-                try:
-                    from services.whatsapp_service.app.bot import client
-                    if client:
-                        messenger = messenger_class(client)
-                    else:
-                        logger.error(f"Client instance is None for platform: {platform}")
-                except ImportError as e:
-                    logger.error(f"Failed to import client for platform {platform}: {e}")
-            else:
-                logger.error(f"Unknown platform: {platform}")
+                elif platform == "whatsapp":
+                    try:
+                        from services.whatsapp_service.app.bot import client
+                        if client:
+                            messenger = messenger_class(client)
+                        else:
+                            logger.error(f"Client instance is None for platform", extra={'platform': platform})
+                    except ImportError as e:
+                        logger.error(f"Failed to import client for platform", exc_info=True, extra={
+                            'platform': platform,
+                            'error_type': type(e).__name__
+                        })
+                else:
+                    logger.error(f"Unknown platform", extra={'platform': platform})
 
-            # Now the else clause can actually be reached
-            if messenger:
-                self.messengers[platform] = messenger
-                logger.info(f"Registered messenger for platform: {platform}")
-            else:
-                logger.error(f"Failed to create messenger instance for platform: {platform}")
+                # Now the else clause can actually be reached
+                if messenger:
+                    self.messengers[platform] = messenger
+                    logger.info(f"Registered messenger for platform", extra={'platform': platform})
+                else:
+                    logger.error(f"Failed to create messenger instance for platform", extra={'platform': platform})
 
-        except Exception as e:
-            logger.error(f"Failed to register messenger for platform {platform}: {e}")
+            except Exception as e:
+                logger.error(f"Failed to register messenger for platform", exc_info=True, extra={
+                    'platform': platform,
+                    'error_type': type(e).__name__
+                })
 
+    @log_operation("register_handler")
     def register_handler(self, platform: str, handler_name: str, handler_func: Callable) -> None:
         """
         Register a handler function for a specific platform.
@@ -85,12 +101,17 @@ class PlatformRouter:
             handler_name: Name of the handler
             handler_func: Handler function
         """
-        if platform not in self.handlers:
-            self.handlers[platform] = {}
+        with log_context(logger, platform=platform, handler_name=handler_name):
+            if platform not in self.handlers:
+                self.handlers[platform] = {}
 
-        self.handlers[platform][handler_name] = handler_func
-        logger.info(f"Registered handler '{handler_name}' for platform: {platform}")
+            self.handlers[platform][handler_name] = handler_func
+            logger.info(f"Registered handler", extra={
+                'handler_name': handler_name,
+                'platform': platform
+            })
 
+    @log_operation("register_flow")
     def register_flow(self, flow_name: str, flow_handlers: Dict[str, Dict[str, Callable]]) -> None:
         """
         Register a message flow that can work across platforms.
@@ -100,9 +121,11 @@ class PlatformRouter:
             flow_handlers: Dictionary mapping states to handlers for each platform
                            Format: {state_name: {platform_name: handler_func}}
         """
-        self.flows[flow_name] = flow_handlers
-        logger.info(f"Registered flow '{flow_name}'")
+        with log_context(logger, flow_name=flow_name):
+            self.flows[flow_name] = flow_handlers
+            logger.info(f"Registered flow", extra={'flow_name': flow_name})
 
+    @log_operation("get_messenger")
     def get_messenger(self, platform: str) -> Optional[MessagingInterface]:
         """
         Get the messenger for a specific platform.
@@ -113,8 +136,14 @@ class PlatformRouter:
         Returns:
             MessagingInterface implementation or None
         """
-        return self.messengers.get(platform)
+        messenger = self.messengers.get(platform)
+        logger.debug("Retrieved messenger", extra={
+            'platform': platform,
+            'found': bool(messenger)
+        })
+        return messenger
 
+    @log_operation("get_handler")
     def get_handler(self, platform: str, handler_name: str) -> Optional[Callable]:
         """
         Get a handler function for a specific platform.
@@ -126,8 +155,15 @@ class PlatformRouter:
         Returns:
             Handler function or None
         """
-        return self.handlers.get(platform, {}).get(handler_name)
+        handler = self.handlers.get(platform, {}).get(handler_name)
+        logger.debug("Retrieved handler", extra={
+            'platform': platform,
+            'handler_name': handler_name,
+            'found': bool(handler)
+        })
+        return handler
 
+    @log_operation("get_flow_handler")
     def get_flow_handler(self, flow_name: str, state_name: str, platform: str) -> Optional[Callable]:
         """
         Get a handler function for a specific state in a flow.
@@ -140,16 +176,22 @@ class PlatformRouter:
         Returns:
             Handler function or None
         """
-        flow = self.flows.get(flow_name)
-        if not flow:
-            return None
+        with log_context(logger, flow_name=flow_name, state_name=state_name, platform=platform):
+            flow = self.flows.get(flow_name)
+            if not flow:
+                logger.debug("Flow not found")
+                return None
 
-        state_handlers = flow.get(state_name)
-        if not state_handlers:
-            return None
+            state_handlers = flow.get(state_name)
+            if not state_handlers:
+                logger.debug("State handlers not found")
+                return None
 
-        return state_handlers.get(platform)
+            handler = state_handlers.get(platform)
+            logger.debug("Retrieved flow handler", extra={'found': bool(handler)})
+            return handler
 
+    @log_operation("route_message")
     async def route_message(self, user_id: Union[str, int], message: str,
                             platform: str = None, context: Dict[str, Any] = None) -> Any:
         """
@@ -164,45 +206,74 @@ class PlatformRouter:
         Returns:
             Result from the handler
         """
-        try:
-            # Resolve user ID and platform
-            db_user_id, platform_name, platform_id = resolve_user_id(user_id, platform)
-            platform = platform_name or platform or "telegram"  # Default to telegram
+        with log_context(logger, user_id=str(user_id)[:10], platform=platform, has_context=bool(context)):
+            try:
+                # Resolve user ID and platform
+                db_user_id, platform_name, platform_id = resolve_user_id(user_id, platform)
+                platform = platform_name or platform or "telegram"  # Default to telegram
 
-            # Get the user's current state
-            from common.unified_state_management import state_manager
-            state_data = await state_manager.get_state(user_id, platform) or {}
-            current_state = state_data.get("state", "start")
+                logger.debug("Resolved user ID", extra={
+                    'db_user_id': db_user_id,
+                    'platform_name': platform_name,
+                    'platform_id': str(platform_id)[:10] if platform_id else None
+                })
 
-            # Check for global commands (like /start, /help, etc.)
-            command_handler = self._get_command_handler(message, platform)
-            if command_handler:
-                return await command_handler(platform_id or user_id, message, context or {})
+                # Get the user's current state
+                from common.unified_state_management import state_manager
+                state_data = await state_manager.get_state(user_id, platform) or {}
+                current_state = state_data.get("state", "start")
 
-            # Check for active flow
-            active_flow = state_data.get("active_flow")
-            if active_flow:
-                flow_handler = self.get_flow_handler(active_flow, current_state, platform)
-                if flow_handler:
-                    return await flow_handler(platform_id or user_id, message, state_data)
+                logger.debug("User state retrieved", extra={
+                    'current_state': current_state,
+                    'has_active_flow': 'active_flow' in state_data
+                })
 
-            # Check for state-specific handler
-            state_handler_name = f"handle_state_{current_state}"
-            state_handler = self.get_handler(platform, state_handler_name)
-            if state_handler:
-                return await state_handler(platform_id or user_id, message, state_data)
+                # Check for global commands (like /start, /help, etc.)
+                command_handler = self._get_command_handler(message, platform)
+                if command_handler:
+                    logger.info("Routing to command handler", extra={
+                        'command': message.split()[0] if message else None
+                    })
+                    return await command_handler(platform_id or user_id, message, context or {})
 
-            # Fall back to default handler
-            default_handler = self.get_handler(platform, "handle_default")
-            if default_handler:
-                return await default_handler(platform_id or user_id, message, state_data)
+                # Check for active flow
+                active_flow = state_data.get("active_flow")
+                if active_flow:
+                    flow_handler = self.get_flow_handler(active_flow, current_state, platform)
+                    if flow_handler:
+                        logger.info("Routing to flow handler", extra={
+                            'active_flow': active_flow,
+                            'current_state': current_state
+                        })
+                        return await flow_handler(platform_id or user_id, message, state_data)
 
-            logger.warning(f"No handler found for message in platform {platform}, state {current_state}")
-            return None
-        except Exception as e:
-            logger.error(f"Error routing message: {e}")
-            return None
+                # Check for state-specific handler
+                state_handler_name = f"handle_state_{current_state}"
+                state_handler = self.get_handler(platform, state_handler_name)
+                if state_handler:
+                    logger.info("Routing to state handler", extra={
+                        'state_handler_name': state_handler_name
+                    })
+                    return await state_handler(platform_id or user_id, message, state_data)
 
+                # Fall back to default handler
+                default_handler = self.get_handler(platform, "handle_default")
+                if default_handler:
+                    logger.info("Routing to default handler")
+                    return await default_handler(platform_id or user_id, message, state_data)
+
+                logger.warning(f"No handler found for message", extra={
+                    'platform': platform,
+                    'state': current_state
+                })
+                return None
+            except Exception as e:
+                logger.error(f"Error routing message", exc_info=True, extra={
+                    'error_type': type(e).__name__
+                })
+                return None
+
+    @log_operation("get_command_handler")
     def _get_command_handler(self, message: str, platform: str) -> Optional[Callable]:
         """
         Check if a message is a command and get the appropriate handler.
@@ -217,15 +288,24 @@ class PlatformRouter:
         if not message:
             return None
 
-        # Check for commands
-        if message.startswith('/'):
-            command = message[1:].split()[0].lower()
-            handler_name = f"handle_command_{command}"
-            return self.get_handler(platform, handler_name)
+        with log_context(logger, platform=platform, message_preview=message[:20]):
+            # Check for commands
+            if message.startswith('/'):
+                command = message[1:].split()[0].lower()
+                handler_name = f"handle_command_{command}"
 
-        return None
+                handler = self.get_handler(platform, handler_name)
+                logger.debug("Command handler check", extra={
+                    'command': command,
+                    'handler_name': handler_name,
+                    'found': bool(handler)
+                })
+                return handler
+
+            return None
 
     @classmethod
+    @log_operation("create_and_configure")
     def create_and_configure(cls) -> 'PlatformRouter':
         """
         Create and configure a PlatformRouter with all available platforms and handlers.
@@ -233,6 +313,7 @@ class PlatformRouter:
         Returns:
             Configured PlatformRouter instance
         """
+        logger.info("Creating and configuring platform router")
         router = cls()
 
         # Register messengers
@@ -266,6 +347,9 @@ class PlatformRouter:
             "services.{}_service.app.handlers.phone_verification"
         ]
 
+        from common.utils.logging_config import LogAggregator
+        aggregator = LogAggregator(logger, "create_and_configure")
+
         for platform in platforms:
             for module_template in handler_modules:
                 module_name = module_template.format(platform)
@@ -276,12 +360,20 @@ class PlatformRouter:
                     for name, obj in inspect.getmembers(module):
                         if (name.startswith("handle_") and inspect.iscoroutinefunction(obj)):
                             router.register_handler(platform, name, obj)
+                            aggregator.add_item({'platform': platform, 'module': module_name, 'handler': name},
+                                                success=True)
                 except ImportError:
                     # Module doesn't exist for this platform, skip
+                    aggregator.add_item({'platform': platform, 'module': module_name}, success=False)
                     pass
                 except Exception as e:
-                    logger.error(f"Error loading handlers from {module_name}: {e}")
+                    logger.error(f"Error loading handlers", exc_info=True, extra={
+                        'module_name': module_name,
+                        'error_type': type(e).__name__
+                    })
+                    aggregator.add_error(str(e), {'platform': platform, 'module': module_name})
 
+        aggregator.log_summary()
         return router
 
 

@@ -1,9 +1,10 @@
 # common/messaging/keyboard_utils.py
 
-import logging
 from typing import List, Dict, Any
+from common.utils.logging_config import log_operation, log_context
 
-logger = logging.getLogger(__name__)
+# Import the logger from the parent module
+from . import logger
 
 # City data for reference
 AVAILABLE_CITIES = ['Івано-Франківськ', 'Вінниця', 'Дніпро', 'Житомир', 'Запоріжжя', 'Київ', 'Кропивницький', 'Луцьк',
@@ -17,6 +18,7 @@ CITY_GROUPS = {
 }
 
 
+@log_operation("get_price_ranges")
 def get_price_ranges(city: str) -> List[tuple]:
     """
     Returns price ranges for the given city.
@@ -27,16 +29,26 @@ def get_price_ranges(city: str) -> List[tuple]:
     Returns:
         List of (min_price, max_price) tuples
     """
-    if city in CITY_GROUPS['big_cities']:
-        # up to 15000, 15000–20000, 20000–30000, more than 30000
-        return [(0, 15000), (15000, 20000), (20000, 30000), (30000, None)]
-    elif city in CITY_GROUPS['medium_cities']:
-        # up to 7000, 7000–10000, 10000–15000, more than 15000
-        return [(0, 7000), (7000, 10000), (10000, 15000), (15000, None)]
-    else:
-        # Default to "smaller" city intervals
-        # up to 5000, 5000–7000, 7000–10000, more than 10000
-        return [(0, 5000), (5000, 7000), (7000, 10000), (10000, None)]
+    with log_context(logger, city=city):
+        if city in CITY_GROUPS['big_cities']:
+            # up to 15000, 15000–20000, 20000–30000, more than 30000
+            ranges = [(0, 15000), (15000, 20000), (20000, 30000), (30000, None)]
+        elif city in CITY_GROUPS['medium_cities']:
+            # up to 7000, 7000–10000, 10000–15000, more than 15000
+            ranges = [(0, 7000), (7000, 10000), (10000, 15000), (15000, None)]
+        else:
+            # Default to "smaller" city intervals
+            # up to 5000, 5000–7000, 7000–10000, more than 10000
+            ranges = [(0, 5000), (5000, 7000), (7000, 10000), (10000, None)]
+
+        logger.debug("Got price ranges", extra={
+            'city': city,
+            'ranges_count': len(ranges),
+            'city_group': 'big' if city in CITY_GROUPS['big_cities'] else
+            'medium' if city in CITY_GROUPS['medium_cities'] else 'small'
+        })
+
+        return ranges
 
 
 class KeyboardFactory:
@@ -54,6 +66,7 @@ class KeyboardFactory:
     """
 
     @staticmethod
+    @log_operation("create_keyboard")
     def create_keyboard(platform: str, keyboard_type: str, **kwargs) -> Any:
         """
         Create a platform-specific keyboard.
@@ -66,50 +79,70 @@ class KeyboardFactory:
         Returns:
             Platform-specific keyboard object
         """
-        if platform == "telegram":
-            return TelegramKeyboardFactory.create_keyboard(keyboard_type, **kwargs)
-        elif platform == "viber":
-            return ViberKeyboardFactory.create_keyboard(keyboard_type, **kwargs)
-        elif platform == "whatsapp":
-            return WhatsAppKeyboardFactory.create_keyboard(keyboard_type, **kwargs)
-        else:
-            logger.warning(f"Unsupported platform: {platform}")
-            return None
+        with log_context(logger, platform=platform, keyboard_type=keyboard_type):
+            try:
+                if platform == "telegram":
+                    result = TelegramKeyboardFactory.create_keyboard(keyboard_type, **kwargs)
+                elif platform == "viber":
+                    result = ViberKeyboardFactory.create_keyboard(keyboard_type, **kwargs)
+                elif platform == "whatsapp":
+                    result = WhatsAppKeyboardFactory.create_keyboard(keyboard_type, **kwargs)
+                else:
+                    logger.warning(f"Unsupported platform", extra={'platform': platform})
+                    return None
+
+                logger.debug("Keyboard created successfully", extra={
+                    'platform': platform,
+                    'keyboard_type': keyboard_type,
+                    'has_result': bool(result)
+                })
+
+                return result
+            except Exception as e:
+                logger.error("Error creating keyboard", exc_info=True, extra={
+                    'platform': platform,
+                    'keyboard_type': keyboard_type,
+                    'error_type': type(e).__name__
+                })
+                return None
 
 
 class TelegramKeyboardFactory:
     """Factory for Telegram-specific keyboards"""
 
     @classmethod
+    @log_operation("create_telegram_keyboard")
     def create_keyboard(cls, keyboard_type: str, **kwargs) -> Any:
         """Create a Telegram keyboard based on type"""
         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 
-        if keyboard_type == "main_menu":
-            return cls.create_main_menu_keyboard()
-        elif keyboard_type == "property_type":
-            return cls.create_property_type_keyboard()
-        elif keyboard_type == "city":
-            cities = kwargs.get('cities', AVAILABLE_CITIES)
-            return cls.create_city_keyboard(cities)
-        elif keyboard_type == "rooms":
-            selected_rooms = kwargs.get('selected_rooms', [])
-            return cls.create_rooms_keyboard(selected_rooms)
-        elif keyboard_type == "price":
-            city = kwargs.get('city', 'Київ')
-            return cls.create_price_keyboard(city)
-        elif keyboard_type == "confirmation":
-            return cls.create_confirmation_keyboard()
-        elif keyboard_type == "edit_parameters":
-            return cls.create_edit_parameters_keyboard()
-        elif keyboard_type == "floor":
-            floor_opts = kwargs.get('floor_opts', None)
-            return cls.create_floor_keyboard(floor_opts)
-        else:
-            logger.warning(f"Unknown keyboard type for Telegram: {keyboard_type}")
-            return None
+        with log_context(logger, keyboard_type=keyboard_type):
+            if keyboard_type == "main_menu":
+                return cls.create_main_menu_keyboard()
+            elif keyboard_type == "property_type":
+                return cls.create_property_type_keyboard()
+            elif keyboard_type == "city":
+                cities = kwargs.get('cities', AVAILABLE_CITIES)
+                return cls.create_city_keyboard(cities)
+            elif keyboard_type == "rooms":
+                selected_rooms = kwargs.get('selected_rooms', [])
+                return cls.create_rooms_keyboard(selected_rooms)
+            elif keyboard_type == "price":
+                city = kwargs.get('city', 'Київ')
+                return cls.create_price_keyboard(city)
+            elif keyboard_type == "confirmation":
+                return cls.create_confirmation_keyboard()
+            elif keyboard_type == "edit_parameters":
+                return cls.create_edit_parameters_keyboard()
+            elif keyboard_type == "floor":
+                floor_opts = kwargs.get('floor_opts', None)
+                return cls.create_floor_keyboard(floor_opts)
+            else:
+                logger.warning(f"Unknown keyboard type for Telegram", extra={'keyboard_type': keyboard_type})
+                return None
 
     @staticmethod
+    @log_operation("create_main_menu_keyboard")
     def create_main_menu_keyboard():
         """Create the main menu keyboard for Telegram"""
         from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
@@ -127,9 +160,12 @@ class TelegramKeyboardFactory:
             KeyboardButton("🧑‍💻 Техпідтримка"),
             KeyboardButton("📱 Додати номер телефону")
         )
+
+        logger.debug("Created Telegram main menu keyboard")
         return keyboard
 
     @staticmethod
+    @log_operation("create_property_type_keyboard")
     def create_property_type_keyboard():
         """Create keyboard for property type selection"""
         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -139,21 +175,28 @@ class TelegramKeyboardFactory:
             InlineKeyboardButton("Квартира", callback_data="property_type_apartment"),
             InlineKeyboardButton("Будинок", callback_data="property_type_house")
         )
+
+        logger.debug("Created Telegram property type keyboard")
         return keyboard
 
     @staticmethod
+    @log_operation("create_city_keyboard")
     def create_city_keyboard(cities):
         """Create keyboard for city selection"""
         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-        keyboard = InlineKeyboardMarkup(row_width=2)
-        for city in cities:
-            keyboard.add(
-                InlineKeyboardButton(city, callback_data=f"city_{city.lower()}")
-            )
-        return keyboard
+        with log_context(logger, cities_count=len(cities)):
+            keyboard = InlineKeyboardMarkup(row_width=2)
+            for city in cities:
+                keyboard.add(
+                    InlineKeyboardButton(city, callback_data=f"city_{city.lower()}")
+                )
+
+            logger.debug("Created Telegram city keyboard", extra={'cities_count': len(cities)})
+            return keyboard
 
     @staticmethod
+    @log_operation("create_rooms_keyboard")
     def create_rooms_keyboard(selected_rooms=None):
         """Create keyboard for room selection"""
         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -161,47 +204,57 @@ class TelegramKeyboardFactory:
         if selected_rooms is None:
             selected_rooms = []
 
-        keyboard = InlineKeyboardMarkup(row_width=3)
-        for rooms in range(1, 6):
-            if rooms in selected_rooms:
-                button_text = f"✅ {rooms}"
-            else:
-                button_text = str(rooms)
-            keyboard.insert(
-                InlineKeyboardButton(button_text, callback_data=f"rooms_{rooms}")
+        with log_context(logger, selected_rooms=selected_rooms):
+            keyboard = InlineKeyboardMarkup(row_width=3)
+            for rooms in range(1, 6):
+                if rooms in selected_rooms:
+                    button_text = f"✅ {rooms}"
+                else:
+                    button_text = str(rooms)
+                keyboard.insert(
+                    InlineKeyboardButton(button_text, callback_data=f"rooms_{rooms}")
+                )
+            keyboard.add(
+                InlineKeyboardButton("Далі", callback_data="rooms_done"),
+                InlineKeyboardButton("Пропустити", callback_data="rooms_any")
             )
-        keyboard.add(
-            InlineKeyboardButton("Далі", callback_data="rooms_done"),
-            InlineKeyboardButton("Пропустити", callback_data="rooms_any")
-        )
-        return keyboard
+
+            logger.debug("Created Telegram rooms keyboard", extra={'selected_count': len(selected_rooms)})
+            return keyboard
 
     @staticmethod
+    @log_operation("create_price_keyboard")
     def create_price_keyboard(city):
         """Create keyboard for price range selection"""
         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-        intervals = get_price_ranges(city)
-        keyboard = InlineKeyboardMarkup(row_width=2)
-        for (low, high) in intervals:
-            if high is None:
-                label = f"Більше {low}"
-                callback_data = f"price_{low}_any"
-            else:
-                # E.g. "0-5000 UAH", "5000-7000 UAH"
-                if low == 0:
-                    label = f"До {high}"  # "up to X"
+        with log_context(logger, city=city):
+            intervals = get_price_ranges(city)
+            keyboard = InlineKeyboardMarkup(row_width=2)
+            for (low, high) in intervals:
+                if high is None:
+                    label = f"Більше {low}"
+                    callback_data = f"price_{low}_any"
                 else:
-                    label = f"{low}-{high}"
-                callback_data = f"price_{low}_{high}"
+                    # E.g. "0-5000 UAH", "5000-7000 UAH"
+                    if low == 0:
+                        label = f"До {high}"  # "up to X"
+                    else:
+                        label = f"{low}-{high}"
+                    callback_data = f"price_{low}_{high}"
 
-            keyboard.insert(
-                InlineKeyboardButton(label, callback_data=callback_data)
-            )
+                keyboard.insert(
+                    InlineKeyboardButton(label, callback_data=callback_data)
+                )
 
-        return keyboard
+            logger.debug("Created Telegram price keyboard", extra={
+                'city': city,
+                'intervals_count': len(intervals)
+            })
+            return keyboard
 
     @staticmethod
+    @log_operation("create_confirmation_keyboard")
     def create_confirmation_keyboard():
         """Create keyboard for subscription confirmation"""
         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -212,9 +265,12 @@ class TelegramKeyboardFactory:
             InlineKeyboardButton("Редагувати", callback_data="edit_parameters"),
             InlineKeyboardButton("Підписатися", callback_data="subscribe")
         )
+
+        logger.debug("Created Telegram confirmation keyboard")
         return keyboard
 
     @staticmethod
+    @log_operation("create_edit_parameters_keyboard")
     def create_edit_parameters_keyboard():
         """Create keyboard for parameter editing"""
         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -230,9 +286,12 @@ class TelegramKeyboardFactory:
             InlineKeyboardButton("Від власника?", callback_data="without_broker"),
             InlineKeyboardButton("Відмінити", callback_data="cancel_edit"),
         )
+
+        logger.debug("Created Telegram edit parameters keyboard")
         return keyboard
 
     @staticmethod
+    @log_operation("create_floor_keyboard")
     def create_floor_keyboard(floor_opts=None):
         """Create keyboard for floor selection"""
         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -247,74 +306,79 @@ class TelegramKeyboardFactory:
                 "only_last": False
             }
 
-        def mark(label, active):
-            return f"{'✅ ' if active else ''}{label}"
+        with log_context(logger, floor_opts=floor_opts):
+            def mark(label, active):
+                return f"{'✅ ' if active else ''}{label}"
 
-        kb = InlineKeyboardMarkup(row_width=2)
-        kb.insert(InlineKeyboardButton(
-            mark("Не перший", floor_opts["not_first"]),
-            callback_data="toggle_floor_not_first"
-        ))
-        kb.insert(InlineKeyboardButton(
-            mark("Не останній", floor_opts["not_last"]),
-            callback_data="toggle_floor_not_last"
-        ))
+            kb = InlineKeyboardMarkup(row_width=2)
+            kb.insert(InlineKeyboardButton(
+                mark("Не перший", floor_opts["not_first"]),
+                callback_data="toggle_floor_not_first"
+            ))
+            kb.insert(InlineKeyboardButton(
+                mark("Не останній", floor_opts["not_last"]),
+                callback_data="toggle_floor_not_last"
+            ))
 
-        kb.add(InlineKeyboardButton(
-            mark("До 6 поверху", floor_opts.get("floor_max_6", False)),
-            callback_data="toggle_floor_6"
-        ))
-        kb.insert(InlineKeyboardButton(
-            mark("До 10 поверху", floor_opts.get("floor_max_10", False)),
-            callback_data="toggle_floor_10"
-        ))
-        kb.insert(InlineKeyboardButton(
-            mark("До 17 поверху", floor_opts.get("floor_max_17", False)),
-            callback_data="toggle_floor_17"
-        ))
+            kb.add(InlineKeyboardButton(
+                mark("До 6 поверху", floor_opts.get("floor_max_6", False)),
+                callback_data="toggle_floor_6"
+            ))
+            kb.insert(InlineKeyboardButton(
+                mark("До 10 поверху", floor_opts.get("floor_max_10", False)),
+                callback_data="toggle_floor_10"
+            ))
+            kb.insert(InlineKeyboardButton(
+                mark("До 17 поверху", floor_opts.get("floor_max_17", False)),
+                callback_data="toggle_floor_17"
+            ))
 
-        kb.add(InlineKeyboardButton(
-            mark("Останній", floor_opts.get("only_last", False)),
-            callback_data="toggle_floor_only_last"
-        ))
+            kb.add(InlineKeyboardButton(
+                mark("Останній", floor_opts.get("only_last", False)),
+                callback_data="toggle_floor_only_last"
+            ))
 
-        # add "Back" or "Done" button
-        kb.add(InlineKeyboardButton("Готово", callback_data="floor_done"))
+            # add "Back" or "Done" button
+            kb.add(InlineKeyboardButton("Готово", callback_data="floor_done"))
 
-        return kb
+            logger.debug("Created Telegram floor keyboard")
+            return kb
 
 
 class ViberKeyboardFactory:
     """Factory for Viber-specific keyboards"""
 
     @classmethod
+    @log_operation("create_viber_keyboard")
     def create_keyboard(cls, keyboard_type: str, **kwargs) -> Dict[str, Any]:
         """Create a Viber keyboard based on type"""
-        if keyboard_type == "main_menu":
-            return cls.create_main_menu_keyboard()
-        elif keyboard_type == "property_type":
-            return cls.create_property_type_keyboard()
-        elif keyboard_type == "city":
-            cities = kwargs.get('cities', AVAILABLE_CITIES)
-            return cls.create_city_keyboard(cities)
-        elif keyboard_type == "rooms":
-            selected_rooms = kwargs.get('selected_rooms', [])
-            return cls.create_rooms_keyboard(selected_rooms)
-        elif keyboard_type == "price":
-            city = kwargs.get('city', 'Київ')
-            return cls.create_price_keyboard(city)
-        elif keyboard_type == "confirmation":
-            return cls.create_confirmation_keyboard()
-        elif keyboard_type == "edit_parameters":
-            return cls.create_edit_parameters_keyboard()
-        else:
-            logger.warning(f"Unknown keyboard type for Viber: {keyboard_type}")
-            return {"Type": "keyboard", "Buttons": []}
+        with log_context(logger, keyboard_type=keyboard_type):
+            if keyboard_type == "main_menu":
+                return cls.create_main_menu_keyboard()
+            elif keyboard_type == "property_type":
+                return cls.create_property_type_keyboard()
+            elif keyboard_type == "city":
+                cities = kwargs.get('cities', AVAILABLE_CITIES)
+                return cls.create_city_keyboard(cities)
+            elif keyboard_type == "rooms":
+                selected_rooms = kwargs.get('selected_rooms', [])
+                return cls.create_rooms_keyboard(selected_rooms)
+            elif keyboard_type == "price":
+                city = kwargs.get('city', 'Київ')
+                return cls.create_price_keyboard(city)
+            elif keyboard_type == "confirmation":
+                return cls.create_confirmation_keyboard()
+            elif keyboard_type == "edit_parameters":
+                return cls.create_edit_parameters_keyboard()
+            else:
+                logger.warning(f"Unknown keyboard type for Viber", extra={'keyboard_type': keyboard_type})
+                return {"Type": "keyboard", "Buttons": []}
 
     @staticmethod
+    @log_operation("create_viber_main_menu_keyboard")
     def create_main_menu_keyboard():
         """Create the main menu keyboard for Viber"""
-        return {
+        keyboard = {
             "Type": "keyboard",
             "Buttons": [
                 {
@@ -355,10 +419,14 @@ class ViberKeyboardFactory:
             ]
         }
 
+        logger.debug("Created Viber main menu keyboard", extra={'buttons_count': len(keyboard['Buttons'])})
+        return keyboard
+
     @staticmethod
+    @log_operation("create_viber_property_type_keyboard")
     def create_property_type_keyboard():
         """Create keyboard for property type selection"""
-        return {
+        keyboard = {
             "Type": "keyboard",
             "Buttons": [
                 {
@@ -378,107 +446,129 @@ class ViberKeyboardFactory:
             ]
         }
 
+        logger.debug("Created Viber property type keyboard")
+        return keyboard
+
     @staticmethod
+    @log_operation("create_viber_city_keyboard")
     def create_city_keyboard(cities):
         """Create keyboard for city selection"""
-        buttons = []
+        with log_context(logger, cities_count=len(cities)):
+            buttons = []
 
-        # Create buttons for cities
-        for city in cities:
-            buttons.append({
-                "Columns": 3,
-                "Rows": 1,
-                "Text": city,
-                "ActionType": "reply",
-                "ActionBody": f"city_{city.lower()}"
-            })
+            # Create buttons for cities
+            for city in cities:
+                buttons.append({
+                    "Columns": 3,
+                    "Rows": 1,
+                    "Text": city,
+                    "ActionType": "reply",
+                    "ActionBody": f"city_{city.lower()}"
+                })
 
-        return {
-            "Type": "keyboard",
-            "ButtonsGroupColumns": 6,
-            "ButtonsGroupRows": 7,
-            "Buttons": buttons
-        }
+            keyboard = {
+                "Type": "keyboard",
+                "ButtonsGroupColumns": 6,
+                "ButtonsGroupRows": 7,
+                "Buttons": buttons
+            }
+
+            logger.debug("Created Viber city keyboard", extra={'cities_count': len(cities)})
+            return keyboard
 
     @staticmethod
+    @log_operation("create_viber_rooms_keyboard")
     def create_rooms_keyboard(selected_rooms=None):
         """Create keyboard for room selection"""
         if selected_rooms is None:
             selected_rooms = []
 
-        buttons = []
+        with log_context(logger, selected_rooms=selected_rooms):
+            buttons = []
 
-        # Add number buttons 1-5
-        for room in range(1, 6):
-            text = f"✅ {room}" if room in selected_rooms else f"{room}"
+            # Add number buttons 1-5
+            for room in range(1, 6):
+                text = f"✅ {room}" if room in selected_rooms else f"{room}"
+                buttons.append({
+                    "Columns": 1,
+                    "Rows": 1,
+                    "Text": text,
+                    "ActionType": "reply",
+                    "ActionBody": f"room_{room}"
+                })
+
+            # Add Done and Any buttons
             buttons.append({
-                "Columns": 1,
+                "Columns": 3,
                 "Rows": 1,
-                "Text": text,
+                "Text": "Далі",
                 "ActionType": "reply",
-                "ActionBody": f"room_{room}"
+                "ActionBody": "rooms_done"
             })
-
-        # Add Done and Any buttons
-        buttons.append({
-            "Columns": 3,
-            "Rows": 1,
-            "Text": "Далі",
-            "ActionType": "reply",
-            "ActionBody": "rooms_done"
-        })
-
-        buttons.append({
-            "Columns": 3,
-            "Rows": 1,
-            "Text": "Пропустити",
-            "ActionType": "reply",
-            "ActionBody": "rooms_any"
-        })
-
-        return {
-            "Type": "keyboard",
-            "ButtonsGroupColumns": 6,
-            "ButtonsGroupRows": 2,
-            "Buttons": buttons
-        }
-
-    @staticmethod
-    def create_price_keyboard(city):
-        """Create keyboard for price range selection"""
-        intervals = get_price_ranges(city)
-        buttons = []
-
-        for i, (low, high) in enumerate(intervals):
-            if high is None:
-                label = f"Більше {low} грн."
-                callback = f"price_{low}_any"
-            else:
-                if low == 0:
-                    label = f"До {high} грн."
-                else:
-                    label = f"{low}-{high} грн."
-                callback = f"price_{low}_{high}"
 
             buttons.append({
                 "Columns": 3,
                 "Rows": 1,
-                "Text": label,
+                "Text": "Пропустити",
                 "ActionType": "reply",
-                "ActionBody": callback
+                "ActionBody": "rooms_any"
             })
 
-        return {
-            "Type": "keyboard",
-            "ButtonsGroupColumns": 6,
-            "ButtonsGroupRows": 2,
-            "Buttons": buttons
-        }
+            keyboard = {
+                "Type": "keyboard",
+                "ButtonsGroupColumns": 6,
+                "ButtonsGroupRows": 2,
+                "Buttons": buttons
+            }
+
+            logger.debug("Created Viber rooms keyboard", extra={'selected_count': len(selected_rooms)})
+            return keyboard
 
     @staticmethod
+    @log_operation("create_viber_price_keyboard")
+    def create_price_keyboard(city):
+        """Create keyboard for price range selection"""
+        with log_context(logger, city=city):
+            intervals = get_price_ranges(city)
+            buttons = []
+
+            for i, (low, high) in enumerate(intervals):
+                if high is None:
+                    label = f"Більше {low} грн."
+                    callback = f"price_{low}_any"
+                else:
+                    if low == 0:
+                        label = f"До {high} грн."
+                    else:
+                        label = f"{low}-{high} грн."
+                    callback = f"price_{low}_{high}"
+
+                buttons.append({
+                    "Columns": 3,
+                    "Rows": 1,
+                    "Text": label,
+                    "ActionType": "reply",
+                    "ActionBody": callback
+                })
+
+            keyboard = {
+                "Type": "keyboard",
+                "ButtonsGroupColumns": 6,
+                "ButtonsGroupRows": 2,
+                "Buttons": buttons
+            }
+
+            logger.debug("Created Viber price keyboard", extra={
+                'city': city,
+                'intervals_count': len(intervals)
+            })
+            return keyboard
+
+    @staticmethod
+    @log_operation("create_viber_confirmation_keyboard")
     def create_confirmation_keyboard():
         """Create keyboard for subscription confirmation"""
-        return {
+        keyboard = {
             "Type": "keyboard",
             "Buttons": [
                 {
@@ -505,10 +595,14 @@ class ViberKeyboardFactory:
             ]
         }
 
+        logger.debug("Created Viber confirmation keyboard")
+        return keyboard
+
     @staticmethod
+    @log_operation("create_viber_edit_parameters_keyboard")
     def create_edit_parameters_keyboard():
         """Create keyboard for parameter editing"""
-        return {
+        keyboard = {
             "Type": "keyboard",
             "Buttons": [
                 {
@@ -549,6 +643,9 @@ class ViberKeyboardFactory:
             ]
         }
 
+        logger.debug("Created Viber edit parameters keyboard")
+        return keyboard
+
 
 class WhatsAppKeyboardFactory:
     """
@@ -559,34 +656,37 @@ class WhatsAppKeyboardFactory:
     """
 
     @classmethod
+    @log_operation("create_whatsapp_keyboard")
     def create_keyboard(cls, keyboard_type: str, **kwargs) -> str:
         """Create a WhatsApp text-based menu based on type"""
-        if keyboard_type == "main_menu":
-            return cls.create_main_menu_keyboard()
-        elif keyboard_type == "property_type":
-            return cls.create_property_type_keyboard()
-        elif keyboard_type == "city":
-            cities = kwargs.get('cities', AVAILABLE_CITIES)
-            limit = kwargs.get('limit', 10)
-            return cls.create_city_keyboard(cities, limit)
-        elif keyboard_type == "rooms":
-            selected_rooms = kwargs.get('selected_rooms', [])
-            return cls.create_rooms_keyboard(selected_rooms)
-        elif keyboard_type == "price":
-            city = kwargs.get('city', 'Київ')
-            return cls.create_price_keyboard(city)
-        elif keyboard_type == "confirmation":
-            return cls.create_confirmation_keyboard()
-        elif keyboard_type == "edit_parameters":
-            return cls.create_edit_parameters_keyboard()
-        else:
-            logger.warning(f"Unknown keyboard type for WhatsApp: {keyboard_type}")
-            return "Меню недоступне."
+        with log_context(logger, keyboard_type=keyboard_type):
+            if keyboard_type == "main_menu":
+                return cls.create_main_menu_keyboard()
+            elif keyboard_type == "property_type":
+                return cls.create_property_type_keyboard()
+            elif keyboard_type == "city":
+                cities = kwargs.get('cities', AVAILABLE_CITIES)
+                limit = kwargs.get('limit', 10)
+                return cls.create_city_keyboard(cities, limit)
+            elif keyboard_type == "rooms":
+                selected_rooms = kwargs.get('selected_rooms', [])
+                return cls.create_rooms_keyboard(selected_rooms)
+            elif keyboard_type == "price":
+                city = kwargs.get('city', 'Київ')
+                return cls.create_price_keyboard(city)
+            elif keyboard_type == "confirmation":
+                return cls.create_confirmation_keyboard()
+            elif keyboard_type == "edit_parameters":
+                return cls.create_edit_parameters_keyboard()
+            else:
+                logger.warning(f"Unknown keyboard type for WhatsApp", extra={'keyboard_type': keyboard_type})
+                return "Меню недоступне."
 
     @staticmethod
+    @log_operation("create_whatsapp_main_menu_keyboard")
     def create_main_menu_keyboard():
         """Create the main menu text for WhatsApp"""
-        return (
+        menu_text = (
             "Головне меню:\n\n"
             "1. 📝 Мої підписки\n"
             "2. ❤️ Обрані\n"
@@ -597,31 +697,47 @@ class WhatsAppKeyboardFactory:
             "Введіть номер опції"
         )
 
+        logger.debug("Created WhatsApp main menu")
+        return menu_text
+
     @staticmethod
+    @log_operation("create_whatsapp_property_type_keyboard")
     def create_property_type_keyboard():
         """Create property type menu text for WhatsApp"""
-        return (
+        menu_text = (
             "Обери тип нерухомості (введи цифру):\n"
             "1. Квартира\n"
             "2. Будинок"
         )
 
+        logger.debug("Created WhatsApp property type menu")
+        return menu_text
+
     @staticmethod
+    @log_operation("create_whatsapp_city_keyboard")
     def create_city_keyboard(cities, limit=10):
         """Create city selection menu text for WhatsApp"""
-        city_list = cities[:limit]  # Limit to avoid too long messages
-        city_options = "\n".join([f"{i + 1}. {city}" for i, city in enumerate(city_list)])
+        with log_context(logger, cities_count=len(cities), limit=limit):
+            city_list = cities[:limit]  # Limit to avoid too long messages
+            city_options = "\n".join([f"{i + 1}. {city}" for i, city in enumerate(city_list)])
 
-        return (
-            "🏙️ Оберіть місто (введіть номер або назву):\n\n"
-            f"{city_options}\n\n"
-            "Якщо вашого міста немає в списку, введіть його назву"
-        )
+            menu_text = (
+                "🏙️ Оберіть місто (введіть номер або назву):\n\n"
+                f"{city_options}\n\n"
+                "Якщо вашого міста немає в списку, введіть його назву"
+            )
+
+            logger.debug("Created WhatsApp city menu", extra={
+                'total_cities': len(cities),
+                'displayed_cities': len(city_list)
+            })
+            return menu_text
 
     @staticmethod
+    @log_operation("create_whatsapp_rooms_keyboard")
     def create_rooms_keyboard(selected_rooms=None):
         """Create room selection menu text for WhatsApp"""
-        return (
+        menu_text = (
             "🛏️ Виберіть кількість кімнат:\n\n"
             "1. 1 кімната\n"
             "2. 2 кімнати\n"
@@ -632,40 +748,56 @@ class WhatsAppKeyboardFactory:
             "Ви можете вибрати кілька варіантів, розділивши їх комами, наприклад: 1,2,3"
         )
 
+        logger.debug("Created WhatsApp rooms menu")
+        return menu_text
+
     @staticmethod
+    @log_operation("create_whatsapp_price_keyboard")
     def create_price_keyboard(city):
         """Create price range selection menu text for WhatsApp"""
-        intervals = get_price_ranges(city)
-        options = []
+        with log_context(logger, city=city):
+            intervals = get_price_ranges(city)
+            options = []
 
-        for i, (low, high) in enumerate(intervals):
-            if high is None:
-                options.append(f"{i + 1}. Більше {low} грн.")
-            else:
-                if low == 0:
-                    options.append(f"{i + 1}. До {high} грн.")
+            for i, (low, high) in enumerate(intervals):
+                if high is None:
+                    options.append(f"{i + 1}. Більше {low} грн.")
                 else:
-                    options.append(f"{i + 1}. {low}-{high} грн.")
+                    if low == 0:
+                        options.append(f"{i + 1}. До {high} грн.")
+                    else:
+                        options.append(f"{i + 1}. {low}-{high} грн.")
 
-        return (
-                "💰 Виберіть діапазон цін (грн):\n\n"
-                + "\n".join(options)
-        )
+            menu_text = (
+                    "💰 Виберіть діапазон цін (грн):\n\n"
+                    + "\n".join(options)
+            )
+
+            logger.debug("Created WhatsApp price menu", extra={
+                'city': city,
+                'intervals_count': len(intervals)
+            })
+            return menu_text
 
     @staticmethod
+    @log_operation("create_whatsapp_confirmation_keyboard")
     def create_confirmation_keyboard():
         """Create subscription confirmation text for WhatsApp"""
-        return (
+        menu_text = (
             "Для підтвердження введіть одну з наступних команд:\n\n"
             "1. Підписатися - щоб підтвердити вибір\n"
             "2. Редагувати - щоб змінити параметри\n"
             "3. Розширений - для розширеного пошуку"
         )
 
+        logger.debug("Created WhatsApp confirmation menu")
+        return menu_text
+
     @staticmethod
+    @log_operation("create_whatsapp_edit_parameters_keyboard")
     def create_edit_parameters_keyboard():
         """Create parameter editing menu text for WhatsApp"""
-        return (
+        menu_text = (
             "Оберіть параметр для редагування (введіть цифру):\n\n"
             "1. Тип нерухомості\n"
             "2. Місто\n"
@@ -673,3 +805,6 @@ class WhatsAppKeyboardFactory:
             "4. Діапазон цін\n"
             "5. Скасувати редагування"
         )
+
+        logger.debug("Created WhatsApp edit parameters menu")
+        return menu_text
