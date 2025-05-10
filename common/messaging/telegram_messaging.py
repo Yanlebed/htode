@@ -55,18 +55,18 @@ class TelegramMessaging(MessagingInterface):
             self,
             user_id: str,
             text: str,
-            keyboard: Optional[InlineKeyboardMarkup] = None,
+            reply_markup: Optional[InlineKeyboardMarkup] = None,
             parse_mode: Optional[str] = None,
             disable_web_page_preview: bool = False,
             **kwargs
     ) -> Union[Any, None]:
         """Send a text message via Telegram."""
-        with log_context(logger, user_id=user_id[:10], text_length=len(text), has_keyboard=bool(keyboard)):
+        with log_context(logger, user_id=user_id[:10], text_length=len(text), has_keyboard=bool(reply_markup)):
             try:
                 result = await self.bot.send_message(
                     chat_id=user_id,
                     text=text,
-                    reply_markup=keyboard,
+                    reply_markup=reply_markup,
                     parse_mode=parse_mode or ParseMode.MARKDOWN,
                     disable_web_page_preview=disable_web_page_preview,
                     **kwargs

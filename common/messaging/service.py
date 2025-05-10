@@ -296,4 +296,7 @@ class MessagingService:
 
             return service
 
-__all__ = ['MessagingService']
+messaging_service = MessagingService()
+
+# Add it to the exports
+__all__ = ['MessagingService', 'messaging_service']
