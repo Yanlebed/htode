@@ -12,22 +12,22 @@ from .bot import dp
 
 # Create the tasks directly without using the task registry
 # This avoids the circular import issue
-@celery_app.task(name='telegram_service.app.tasks.send_ad_with_extra_buttons')
-def send_ad_with_extra_buttons(telegram_id: int, text: str, s3_image_links: str, resource_url: str, ad_id: int,
-                               ad_external_id: str):
-    """Send ad with extra buttons to Telegram user"""
-    # Import messaging_service here to avoid circular import
-    from common.messaging.service import messaging_service
-
-    return messaging_service.send_ad(
-        user_id=telegram_id,
-        ad_data={
-            'id': ad_id,
-            'external_id': ad_external_id,
-            'resource_url': resource_url
-        },
-        image_url=s3_image_links,
-    )
+# @celery_app.task(name='telegram_service.app.tasks.send_ad_with_extra_buttons')
+# def send_ad_with_extra_buttons(telegram_id: int, text: str, s3_image_links: str, resource_url: str, ad_id: int,
+#                                ad_external_id: str):
+#     """Send ad with extra buttons to Telegram user"""
+#     # Import messaging_service here to avoid circular import
+#     from common.messaging.service import messaging_service
+#
+#     return messaging_service.send_ad(
+#         user_id=telegram_id,
+#         ad_data={
+#             'id': ad_id,
+#             'external_id': ad_external_id,
+#             'resource_url': resource_url
+#         },
+#         image_url=s3_image_links,
+#     )
 
 
 @celery_app.task(name='telegram_service.app.tasks.send_subscription_notification')
