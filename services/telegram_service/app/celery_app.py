@@ -7,6 +7,9 @@ try:
 except ImportError:
     pass  # Silently continue if error handlers module doesn't exist yet
 
+from . import tasks
+import common.messaging.tasks  # Add this line
+
 # Telegram-specific configuration
 celery_app.conf.update(
     # Throttling to respect Telegram API limits
