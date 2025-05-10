@@ -45,3 +45,17 @@ except Exception as e:
         'error_type': type(e).__name__
     })
     raise
+
+# Register Viber messenger with the messaging service
+try:
+    from common.messaging.viber_messaging import ViberMessaging
+    from common.messaging.service import MessagingService
+
+    # Create service-specific messaging service
+    messaging_service = MessagingService.create_for_service('viber')
+    logger.info("Viber messaging service created successfully")
+except Exception as e:
+    logger.error("Failed to create Viber messaging service", exc_info=True, extra={
+        'error_type': type(e).__name__
+    })
+    raise

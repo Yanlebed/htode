@@ -4,7 +4,7 @@ from common.utils.logging_config import setup_logging
 from common.utils.log_management import setup_file_logging
 
 # Initialize service-wide logger
-logger = setup_logging('telegram_service', log_level='INFO', log_format='text')
+logger = setup_logging('telegram_service', log_level='INFO', log_format='json')
 
 # Add file logging if we're in production
 if os.getenv('ENVIRONMENT', 'development') == 'production':
@@ -25,9 +25,6 @@ from . import logging_config
 
 # Initialize bot and other components AFTER logger is set up
 from .bot import bot
-from common.messaging.service import messaging_service
-from common.messaging.telegram_messaging import TelegramMessaging
-messaging_service.register_messenger("telegram", TelegramMessaging(bot))
 
 # Import tasks after everything is initialized
 from . import tasks

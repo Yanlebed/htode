@@ -231,14 +231,10 @@ class MessagingService:
                 if service_name == "telegram":
                     try:
                         from .telegram_messaging import TelegramMessaging
-                        from services.telegram_service.app.bot import bot as telegram_bot
-                        if telegram_bot:  # Check if bot was created successfully
-                            service.register_messenger("telegram", TelegramMessaging(telegram_bot))
-                            logger.info("Telegram messenger registered successfully")
-                        else:
-                            logger.error("Telegram bot is None, check TELEGRAM_TOKEN environment variable")
+                        # Don't import the bot here, let the telegram service do it
+                        logger.info("Telegram messenger type imported successfully")
                     except ImportError as e:
-                        logger.error(f"Failed to import telegram dependencies", exc_info=True, extra={
+                        logger.error(f"Failed to import telegram messaging type", exc_info=True, extra={
                             'error_type': type(e).__name__
                         })
                     except Exception as e:
@@ -249,12 +245,17 @@ class MessagingService:
                 elif service_name == "viber":
                     try:
                         from .viber_messaging import ViberMessaging
-                        from services.viber_service.app.bot import viber as viber_bot
-                        if viber_bot:
-                            service.register_messenger("viber", ViberMessaging(viber_bot))
-                            logger.info("Viber messenger registered successfully")
-                        else:
-                            logger.error("Viber bot is None, check VIBER_AUTH_TOKEN environment variable")
+                        # Check if viber bot exists in the global namespace
+                        try:
+                            from services.viber_service.app.bot import viber as viber_bot
+                            if viber_bot:
+                                service.register_messenger("viber", ViberMessaging(viber_bot))
+                                logger.info("Viber messenger registered successfully")
+                            else:
+                                logger.error("Viber bot is None, check VIBER_AUTH_TOKEN environment variable")
+                        except ImportError:
+                            # This happens when not running in viber service
+                            logger.debug("Viber bot not available in this context")
                     except ImportError as e:
                         logger.error(f"Failed to import viber dependencies", exc_info=True, extra={
                             'error_type': type(e).__name__
@@ -267,12 +268,16 @@ class MessagingService:
                 elif service_name == "whatsapp":
                     try:
                         from .whatsapp_messaging import WhatsAppMessaging
-                        from services.whatsapp_service.app.bot import client as twilio_client
-                        if twilio_client:
-                            service.register_messenger("whatsapp", WhatsAppMessaging(twilio_client))
-                            logger.info("WhatsApp messenger registered successfully")
-                        else:
-                            logger.error("WhatsApp client is None, check Twilio environment variables")
+                        try:
+                            from services.whatsapp_service.app.bot import client as twilio_client
+                            if twilio_client:
+                                service.register_messenger("whatsapp", WhatsAppMessaging(twilio_client))
+                                logger.info("WhatsApp messenger registered successfully")
+                            else:
+                                logger.error("WhatsApp client is None, check Twilio environment variables")
+                        except ImportError:
+                            # This happens when not running in whatsapp service
+                            logger.debug("WhatsApp client not available in this context")
                     except ImportError as e:
                         logger.error(f"Failed to import whatsapp dependencies", exc_info=True, extra={
                             'error_type': type(e).__name__
@@ -291,7 +296,4 @@ class MessagingService:
 
             return service
 
-
-# Create a singleton instance for global use
-SERVICE_NAME = os.getenv('SERVICE_NAME', 'telegram')  # Set this env var in your docker-compose.yml
-messaging_service = MessagingService.create_for_service(SERVICE_NAME)
+__all__ = ['MessagingService']
