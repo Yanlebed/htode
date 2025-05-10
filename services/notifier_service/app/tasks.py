@@ -96,7 +96,6 @@ def sort_and_notify_new_ads(new_ads):
 
 @log_operation("notify_user_about_ad")
 def _notify_user_about_ad(user_id, ad, s3_image_urls):
-    from common.celery_app import celery_app as shared_app
 
     with log_context(logger, user_id=user_id, ad_id=ad.get('id')):
         text = (
@@ -114,7 +113,7 @@ def _notify_user_about_ad(user_id, ad, s3_image_urls):
             'external_id': ad.get('external_id')
         })
 
-        shared_app.send_task(
+        celery_app.send_task(
             "common.messaging.tasks.send_ad_with_extra_buttons",
             args=[user_id, text, s3_image_urls, ad.get('resource_url'), ad.get("id"), ad.get("external_id")]
         )
