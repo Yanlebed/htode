@@ -43,12 +43,18 @@ CREATE TABLE IF NOT EXISTS ad_images (
 CREATE TABLE IF NOT EXISTS user_filters (
     id SERIAL PRIMARY KEY,
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-    property_type VARCHAR(50) NOT NULL,
+    property_type VARCHAR(50),
     city BIGINT,
-    rooms_count INTEGER[] NOT NULL,
+    rooms_count INTEGER[],
     price_min NUMERIC,
     price_max NUMERIC,
-    is_paused BOOLEAN NOT NULL DEFAULT FALSE
+    is_paused BOOLEAN DEFAULT FALSE,
+    floor_max INTEGER,
+    is_not_first_floor BOOLEAN,
+    is_not_last_floor BOOLEAN,
+    is_last_floor_only BOOLEAN,
+    pets_allowed BOOLEAN,
+    without_broker BOOLEAN
 );
 
 -- Add the unique constraint so that ON CONFLICT(user_id) works

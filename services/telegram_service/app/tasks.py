@@ -19,14 +19,14 @@ def send_ad_with_extra_buttons(telegram_id: int, text: str, s3_image_links: str,
     # Import messaging_service here to avoid circular import
     from common.messaging.service import messaging_service
 
-    return messaging_service.send_ad_with_extra_buttons(
+    return messaging_service.send_ad(
         user_id=telegram_id,
-        platform="telegram",
-        text=text,
+        ad_data={
+            'id': ad_id,
+            'external_id': ad_external_id,
+            'resource_url': resource_url
+        },
         image_url=s3_image_links,
-        resource_url=resource_url,
-        ad_id=ad_id,
-        external_id=ad_external_id
     )
 
 
