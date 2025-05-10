@@ -5,12 +5,16 @@ CREATE TABLE IF NOT EXISTS users (
     telegram_id BIGINT UNIQUE,
     viber_id VARCHAR(255) UNIQUE,
     whatsapp_id VARCHAR(255) UNIQUE,
-    free_until TIMESTAMP,
-    subscription_until TIMESTAMP,
+    email VARCHAR(255) UNIQUE,
+    email_verified BOOLEAN DEFAULT FALSE,
     phone_number VARCHAR(20) UNIQUE,
     phone_verified BOOLEAN DEFAULT FALSE,
-    email VARCHAR(255) UNIQUE,
-    email_verified BOOLEAN DEFAULT FALSE
+    free_until TIMESTAMP,
+    subscription_until TIMESTAMP,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    last_active TIMESTAMP DEFAULT NOW(),
+    viber_conversation_expired BOOLEAN DEFAULT FALSE
 );
 
 CREATE TABLE IF NOT EXISTS ads (
@@ -124,6 +128,19 @@ CREATE TABLE email_verification_tokens (
     attempts INT DEFAULT 0
 );
 
+-- Create table for WhatsApp media
+CREATE TABLE IF NOT EXISTS whatsapp_media_messages (
+    id SERIAL PRIMARY KEY,
+    whatsapp_id VARCHAR(255) UNIQUE,
+    user_id INTEGER REFERENCES users(id),
+    media_url TEXT NOT NULL,
+    permanent_url TEXT,
+    media_type VARCHAR(50) NOT NULL DEFAULT 'image',
+    processed BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
 -- Create a function to sanitize phone numbers
 CREATE OR REPLACE FUNCTION sanitize_phone_number(phone TEXT)
 RETURNS TEXT AS $$
@@ -141,6 +158,21 @@ BEGIN
     RETURN sanitized;
 END;
 $$ LANGUAGE plpgsql;
+
+-- Create trigger function for updating users.updated_at
+CREATE OR REPLACE FUNCTION update_users_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create trigger for users table
+CREATE TRIGGER update_users_updated_at_trigger
+    BEFORE UPDATE ON users
+    FOR EACH ROW
+    EXECUTE FUNCTION update_users_updated_at();
 
 -- High-priority indexes
 CREATE INDEX IF NOT EXISTS idx_ads_resource_url ON ads (resource_url);

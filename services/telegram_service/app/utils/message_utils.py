@@ -19,7 +19,7 @@ from common.utils.logging_config import log_operation, log_context
 # Re-export the centralized utilities with Telegram-specific defaults
 @log_operation("telegram_safe_send_message")
 async def safe_send_message(
-        chat_id: Union[int, str],
+        user_id: Union[int, str],
         text: str,
         **kwargs
 ) -> Optional[Message]:
@@ -34,16 +34,16 @@ async def safe_send_message(
     Returns:
         The message object or None if failed
     """
-    with log_context(logger, chat_id=chat_id, text_length=len(text)):
+    with log_context(logger, user_id=user_id, text_length=len(text)):
         logger.debug("Wrapping send_message for Telegram", extra={
-            "chat_id": chat_id,
+            "user_id": user_id,
             "text_length": len(text),
             "kwargs_keys": list(kwargs.keys())
         })
 
         # Add platform identifier
         kwargs["platform"] = "telegram"
-        return await unified_send_message(chat_id, text, **kwargs)
+        return await unified_send_message(user_id, text, **kwargs)
 
 
 @log_operation("telegram_safe_send_photo")
