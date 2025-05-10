@@ -12,8 +12,8 @@ from common.utils.logging_config import log_context, log_operation, LogAggregato
 # Import the service logger
 from . import logger
 
-TELEGRAM_SEND_TASK = "telegram_service.app.tasks.send_ad_with_extra_buttons"
-
+#TELEGRAM_SEND_TASK = "telegram_service.app.tasks.send_ad_with_extra_buttons"
+TELEGRAM_SEND_TASK = "common.messaging.tasks.send_ad_with_extra_buttons"
 
 @log_operation("get_ad_images")
 def get_ad_images_local(ad):
@@ -115,7 +115,7 @@ def _notify_user_about_ad(user_id, ad, s3_image_urls):
         })
 
         shared_app.send_task(
-            "telegram_service.app.tasks.send_ad_with_extra_buttons",
+            "common.messaging.tasks.send_ad_with_extra_buttons",
             args=[user_id, text, s3_image_urls, ad.get('resource_url'), ad.get("id"), ad.get("external_id")]
         )
 

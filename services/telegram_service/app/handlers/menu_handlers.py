@@ -340,7 +340,7 @@ async def subscribe(callback_query: types.CallbackQuery, state: FSMContext):
                     "ad_id": ad_id
                 })
                 celery_app.send_task(
-                    "telegram_service.app.tasks.send_ad_with_extra_buttons",
+                    "common.messaging.tasks.send_ad_with_extra_buttons",
                     args=args_for_celery
                 )
         else:
