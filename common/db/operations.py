@@ -7,7 +7,7 @@ It should be imported after both models and repositories are initialized.
 
 import logging
 from typing import List, Dict, Any, Optional, Union
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 
 from sqlalchemy import or_
 
@@ -1276,3 +1276,114 @@ def get_subscription_status(user_id: int) -> dict:
                 'error_type': type(e).__name__
             })
             return {"active": False, "error": str(e)}
+
+
+@log_operation("get_users_for_reminders")
+def get_users_for_reminders() -> List[Dict[str, Any]]:
+    """Get users who need subscription reminders"""
+    with log_context(logger, operation="get_users_for_reminders"):
+        aggregator = LogAggregator(logger, "get_users_for_reminders")
+
+        try:
+            # Try to get from cache first
+            cache_key = get_entity_cache_key("users_for_reminders", date.today().isoformat())
+            cached_users = BaseCacheManager.get(cache_key)
+
+            if cached_users:
+                logger.info("Retrieved users for reminders from cache")
+                return cached_users
+
+            with db_session() as db:
+                # Get users whose subscriptions expire in 3, 7, or 14 days
+                target_dates = [
+                    datetime.now().date() + timedelta(days=3),
+                    datetime.now().date() + timedelta(days=7),
+                    datetime.now().date() + timedelta(days=14)
+                ]
+
+                users = db.query(User).filter(
+                    User.telegram_id.isnot(None),
+                    User.subscription_until.isnot(None),
+                    db.func.date(User.subscription_until).in_(target_dates)
+                ).all()
+
+                # Convert to list of dicts for compatibility
+                result = []
+                for user in users:
+                    user_dict = {
+                        'id': user.id,
+                        'telegram_id': user.telegram_id,
+                        'subscription_until': user.subscription_until,
+                        'days_left': (user.subscription_until.date() - datetime.now().date()).days
+                    }
+                    result.append(user_dict)
+                    aggregator.add_item({'user_id': user.id, 'days_left': user_dict['days_left']}, success=True)
+
+                # Cache the results for 1 hour
+                BaseCacheManager.set(cache_key, result, CacheTTL.SHORT)
+
+                aggregator.log_summary()
+                logger.info(f"Found {len(result)} users for reminders")
+                return result
+
+        except Exception as e:
+            logger.error("Error getting users for reminders", exc_info=True)
+            aggregator.add_error(str(e), {'error_type': type(e).__name__})
+            return []
+
+
+@log_operation("get_expiring_subscriptions")
+def get_expiring_subscriptions() -> List[Dict[str, Any]]:
+    """Get subscriptions that are expiring soon"""
+    with log_context(logger, operation="get_expiring_subscriptions"):
+        aggregator = LogAggregator(logger, "get_expiring_subscriptions")
+
+        try:
+            # Try to get from cache first
+            cache_key = get_entity_cache_key("expiring_subscriptions", date.today().isoformat())
+            cached_subscriptions = BaseCacheManager.get(cache_key)
+
+            if cached_subscriptions:
+                logger.info("Retrieved expiring subscriptions from cache")
+                return cached_subscriptions
+
+            with db_session() as db:
+                # Get subscriptions expiring in the next 7 days
+                today = datetime.now().date()
+                seven_days_later = today + timedelta(days=7)
+
+                users = db.query(User).filter(
+                    User.telegram_id.isnot(None),
+                    User.subscription_until.isnot(None),
+                    User.subscription_until > datetime.now(),
+                    User.subscription_until <= datetime.combine(seven_days_later, datetime.min.time())
+                ).order_by(User.subscription_until).all()
+
+                # Convert to list of dicts with calculated days left
+                result = []
+                for user in users:
+                    days_left = (user.subscription_until.date() - today).days
+                    subscription_dict = {
+                        'user_id': user.id,
+                        'telegram_id': user.telegram_id,
+                        'subscription_until': user.subscription_until,
+                        'days_left': days_left
+                    }
+                    result.append(subscription_dict)
+                    aggregator.add_item({
+                        'user_id': user.id,
+                        'days_left': days_left,
+                        'telegram_id': user.telegram_id
+                    }, success=True)
+
+                # Cache the results for 1 hour
+                BaseCacheManager.set(cache_key, result, CacheTTL.SHORT)
+
+                aggregator.log_summary()
+                logger.info(f"Found {len(result)} expiring subscriptions")
+                return result
+
+        except Exception as e:
+            logger.error("Error getting expiring subscriptions", exc_info=True)
+            aggregator.add_error(str(e), {'error_type': type(e).__name__})
+            return []

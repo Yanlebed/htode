@@ -1,7 +1,5 @@
 # services/viber_service/app/tasks.py
-
 from common.celery_app import celery_app
-from common.messaging.task_registry import register_platform_tasks
 
 # Import logging utilities from common modules
 from common.utils.logging_config import log_context, log_operation, LogAggregator
@@ -11,19 +9,39 @@ from . import logger
 
 logger.info("Initializing Viber service tasks")
 
-# Register standard messaging tasks for Viber
-registered_tasks = register_platform_tasks(
-    platform_name="viber",
-    task_module_path="viber_service.app.tasks"
-)
 
-# Export the registered tasks for direct use
-send_ad_with_extra_buttons = registered_tasks['send_ad_with_extra_buttons']
-send_subscription_notification = registered_tasks['send_subscription_notification']
+# Create the tasks directly without using the task registry
+# This avoids the circular import issue
+@celery_app.task(name='viber_service.app.tasks.send_ad_with_extra_buttons')
+def send_ad_with_extra_buttons(user_id: str, text: str, s3_image_links: str, resource_url: str, ad_id: int,
+                               ad_external_id: str):
+    """Send ad with extra buttons to Viber user"""
+    # Import messaging_service here to avoid circular import
+    from common.messaging.service import messaging_service
 
-logger.info("Standard messaging tasks registered for Viber", extra={
-    'registered_tasks': list(registered_tasks.keys())
-})
+    return messaging_service.send_ad_with_extra_buttons(
+        user_id=user_id,
+        platform="viber",
+        text=text,
+        image_url=s3_image_links,
+        resource_url=resource_url,
+        ad_id=ad_id,
+        external_id=ad_external_id
+    )
+
+
+@celery_app.task(name='viber_service.app.tasks.send_subscription_notification')
+def send_subscription_notification(user_id: str, notification_type: str, data: dict):
+    """Send subscription notification to Viber user"""
+    # Import messaging_service here to avoid circular import
+    from common.messaging.service import messaging_service
+
+    return messaging_service.send_subscription_notification(
+        user_id=user_id,
+        platform="viber",
+        notification_type=notification_type,
+        data=data
+    )
 
 
 # Keep Viber-specific task that has no common equivalent

@@ -8,6 +8,10 @@ from .flow_integration import check_and_process_flow, flow_message_handler
 # Import the error handler
 from . import error_handler
 
+# Import the messaging service registration
+from . import messaging_service
+
+
 # Import service logger instead of configuring local logging
 from . import logger
 from common.utils.logging_config import log_operation

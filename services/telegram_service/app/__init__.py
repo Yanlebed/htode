@@ -25,9 +25,6 @@ from . import logging_config
 
 # Initialize bot and other components AFTER logger is set up
 from .bot import bot
-from common.messaging.service import messaging_service
-from common.messaging.telegram_messaging import TelegramMessaging
-messaging_service.register_messenger("telegram", TelegramMessaging(bot))
 
 # Import tasks after everything is initialized
 from . import tasks

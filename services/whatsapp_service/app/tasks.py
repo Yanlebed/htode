@@ -1,23 +1,44 @@
 # services/whatsapp_service/app/tasks.py
 from common.celery_app import celery_app
-from common.messaging.task_registry import register_platform_tasks
-from common.db.session import db_session
-from common.db.repositories.media_repository import MediaRepository
 from common.utils.logging_config import log_context, log_operation, LogAggregator
 from .bot import client, TWILIO_PHONE_NUMBER
 
 # Import the service logger
 from . import logger
 
-# Register standard messaging tasks for WhatsApp
-registered_tasks = register_platform_tasks(
-    platform_name="whatsapp",
-    task_module_path="whatsapp_service.app.tasks"
-)
 
-# Export the registered tasks for direct use
-send_ad_with_extra_buttons = registered_tasks['send_ad_with_extra_buttons']
-send_subscription_notification = registered_tasks['send_subscription_notification']
+# Create the tasks directly without using the task registry
+# This avoids the circular import issue
+@celery_app.task(name='whatsapp_service.app.tasks.send_ad_with_extra_buttons')
+def send_ad_with_extra_buttons(user_id: str, text: str, image_url: str, resource_url: str, ad_id: int,
+                               external_id: str):
+    """Send ad with extra buttons to WhatsApp user"""
+    # Import messaging_service here to avoid circular import
+    from common.messaging.service import messaging_service
+
+    return messaging_service.send_ad_with_extra_buttons(
+        user_id=user_id,
+        platform="whatsapp",
+        text=text,
+        image_url=image_url,
+        resource_url=resource_url,
+        ad_id=ad_id,
+        external_id=external_id
+    )
+
+
+@celery_app.task(name='whatsapp_service.app.tasks.send_subscription_notification')
+def send_subscription_notification(user_id: str, notification_type: str, data: dict):
+    """Send subscription notification to WhatsApp user"""
+    # Import messaging_service here to avoid circular import
+    from common.messaging.service import messaging_service
+
+    return messaging_service.send_subscription_notification(
+        user_id=user_id,
+        platform="whatsapp",
+        notification_type=notification_type,
+        data=data
+    )
 
 
 # Keep WhatsApp-specific tasks that have no common equivalent
@@ -59,7 +80,7 @@ def check_template_status():
                             "Please review and update the template."
                         )
 
-                        # Use the unified task to send the notification
+                        # Use the task to send the notification
                         send_subscription_notification.delay(
                             user_id=admin_id,
                             notification_type="template_rejected",
@@ -85,6 +106,8 @@ def process_media_messages():
     Process and store media messages sent by users.
     """
     from common.utils.s3_utils import _upload_image_to_s3
+    from common.db.session import db_session
+    from common.db.repositories.media_repository import MediaRepository
 
     logger.info("Processing WhatsApp media messages")
     aggregator = LogAggregator(logger, "process_media_messages")
