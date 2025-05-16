@@ -170,7 +170,9 @@ class MessagingService:
         """
         from common.messaging.unified_platform_utils import resolve_user_id, format_user_id_for_platform
 
+
         with log_context(logger, user_id=user_id, ad_id=ad_data.get('id')):
+            logger.info(f'Sending ad {ad_data.get("id")} to user {user_id}...')
             # Get platform info using resolve_user_id
             _, platform_name, platform_id = resolve_user_id(user_id)
 

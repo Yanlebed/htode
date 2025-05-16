@@ -44,7 +44,7 @@ async def show_main_menu(message: types.Message):
         })
 
         await safe_send_message(
-            chat_id=message.chat.id,
+            chat_id=message.from_user.id,
             text="Головне меню:",
             reply_markup=main_menu_keyboard()
         )
@@ -83,7 +83,7 @@ async def handle_edit_button(message: types.Message):
         })
 
         await safe_send_message(
-            chat_id=message.chat.id,
+            chat_id=message.from_user.id,
             text="Оберіть параметр для редагування:",
             reply_markup=edit_parameters_keyboard()
         )
@@ -426,7 +426,7 @@ async def cancel_handler(message: types.Message, state: FSMContext):
 
         await state.finish()
         await safe_send_message(
-            chat_id=message.chat.id,
+            chat_id=message.from_user.id,
             text='Дія скасована.',
             reply_markup=types.ReplyKeyboardRemove()
         )
@@ -528,7 +528,7 @@ async def handle_how_to_use(message: types.Message):
             "Якщо у вас є додаткові питання, зверніться до служби підтримки!"
         )
         await safe_send_message(
-            chat_id=message.chat.id,
+            chat_id=message.from_user.id,
             text=text,
             reply_markup=how_to_use_keyboard()
         )
@@ -548,7 +548,7 @@ async def handle_back(message: types.Message):
         })
 
         await safe_send_message(
-            chat_id=message.chat.id,
+            chat_id=message.from_user.id,
             text="Повертаємося в головне меню.",
             reply_markup=main_menu_keyboard()
         )
@@ -567,7 +567,7 @@ async def add_subscription(message: types.Message):
         })
 
         await safe_send_message(
-            chat_id=message.chat.id,
+            chat_id=message.from_user.id,
             text="Оберіть параметр для редагування:",
             reply_markup=edit_parameters_keyboard()
         )
