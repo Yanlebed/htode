@@ -36,7 +36,7 @@ def detect_platform_from_id(user_id: str) -> Tuple[str, str]:
             # Default to Telegram for numeric IDs and other formats
             result = ("telegram", user_id_str)
 
-        logger.debug("Detected platform from ID", extra={
+        logger.info("Detected platform from ID", extra={
             'platform': result[0],
             'id_length': len(user_id_str)
         })
@@ -79,6 +79,7 @@ def resolve_user_id(user_id: Union[int, str], platform: Optional[str] = None) ->
 
     with log_context(logger, user_id=str(user_id)[:20], platform=platform):
         # Case 1: Database user ID
+        logger.info(f'Resolving user ID {user_id}')
         if isinstance(user_id, int) or (isinstance(user_id, str) and user_id.isdigit()):
             db_user_id = int(user_id)
 
@@ -95,7 +96,7 @@ def resolve_user_id(user_id: Union[int, str], platform: Optional[str] = None) ->
             else:
                 result = (db_user_id, None, None)
 
-            logger.debug("Resolved database user ID", extra={
+            logger.info("Resolved database user ID", extra={
                 'db_user_id': db_user_id,
                 'platform': result[1]
             })
@@ -107,14 +108,18 @@ def resolve_user_id(user_id: Union[int, str], platform: Optional[str] = None) ->
         if platform:
             platform_name = platform
             platform_id = user_id
+            logger.info(f'Resolving user ID for platform {platform_name}')
         else:
             # Detect platform from ID format
+            logger.info('Detecting platform from user ID')
             platform_name, platform_id = detect_platform_from_id(user_id)
+            logger.info(f'Detected platform {platform_name}, {platform_id[:20]}...')
 
         # Get database user ID
+        logger.info(f'Resolving database user ID for platform {platform_name}, {platform_id[:20]}...')
         db_user_id = get_db_user_id_by_telegram_id(platform_id, messenger_type=platform_name)
 
-        logger.debug("Resolved platform user ID", extra={
+        logger.info("Resolved platform user ID", extra={
             'platform': platform_name,
             'db_user_id': db_user_id,
             'platform_id': platform_id[:20] if platform_id else None
@@ -139,7 +144,7 @@ async def get_messenger_for_user(user_id: Union[int, str]) -> Tuple[Optional[str
 
         if platform_name and platform_id:
             messenger = get_messenger_instance(platform_name)
-            logger.debug("Found messenger for user", extra={
+            logger.info("Found messenger for user", extra={
                 'platform': platform_name,
                 'has_messenger': bool(messenger)
             })
@@ -259,7 +264,7 @@ class MessageFormatter:
                     f"🏢 Поверх: {floor} з {total_floors}\n"
                 )
 
-            logger.debug("Formatted ad text", extra={
+            logger.info("Formatted ad text", extra={
                 'platform': platform,
                 'text_length': len(text)
             })
@@ -307,7 +312,7 @@ async def safe_send_message(
                         **kwargs
                     )
                     if success:
-                        logger.debug("Message sent via messaging service", extra={
+                        logger.info("Message sent via messaging service", extra={
                             'user_id': db_user_id,
                             'platform': platform_name
                         })
@@ -328,7 +333,7 @@ async def safe_send_message(
                     for attempt in range(retry_count):
                         try:
                             result = await messenger.send_text(formatted_id, text, **kwargs)
-                            logger.debug("Message sent directly", extra={
+                            logger.info("Message sent directly", extra={
                                 'platform': platform_name,
                                 'attempt': attempt + 1
                             })
@@ -407,7 +412,7 @@ async def safe_send_media(
                         **kwargs
                     )
                     if success:
-                        logger.debug("Media sent via messaging service", extra={
+                        logger.info("Media sent via messaging service", extra={
                             'user_id': db_user_id,
                             'platform': platform_name
                         })
@@ -428,7 +433,7 @@ async def safe_send_media(
                     for attempt in range(retry_count):
                         try:
                             result = await messenger.send_media(formatted_id, media_url, caption=caption, **kwargs)
-                            logger.debug("Media sent directly", extra={
+                            logger.info("Media sent directly", extra={
                                 'platform': platform_name,
                                 'attempt': attempt + 1
                             })
@@ -511,7 +516,7 @@ async def safe_send_menu(
 
                     # Send the menu
                     result = await messenger.send_menu(formatted_id, text, options, **kwargs)
-                    logger.debug("Menu sent", extra={
+                    logger.info("Menu sent", extra={
                         'platform': platform_name,
                         'options_count': len(options)
                     })
@@ -569,10 +574,10 @@ async def safe_edit_message_telegram(
                     reply_markup=reply_markup,
                     disable_web_page_preview=disable_web_page_preview
                 )
-                logger.debug("Message edited successfully")
+                logger.info("Message edited successfully")
                 return result
             except MessageNotModified:
-                logger.debug("Message not modified (content is the same)")
+                logger.info("Message not modified (content is the same)")
                 return None
             except TelegramAPIError as e:
                 logger.error(f"Failed to edit message", exc_info=True, extra={
@@ -614,7 +619,7 @@ async def safe_answer_callback_query_telegram(
                     text=text,
                     show_alert=show_alert
                 )
-                logger.debug("Callback query answered successfully")
+                logger.info("Callback query answered successfully")
                 return True
             except InvalidQueryID:
                 logger.warning("Invalid query ID (callback is too old)")
@@ -653,10 +658,10 @@ async def delete_message_safe_telegram(
 
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=message_id)
-                logger.debug("Message deleted successfully")
+                logger.info("Message deleted successfully")
                 return True
             except MessageToDeleteNotFound:
-                logger.debug("Message to delete not found (already deleted)")
+                logger.info("Message to delete not found (already deleted)")
                 return True
             except TelegramAPIError as e:
                 logger.error(f"Failed to delete message", exc_info=True, extra={
