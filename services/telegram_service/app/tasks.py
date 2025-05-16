@@ -33,7 +33,7 @@ from .bot import dp
 def send_ad_with_extra_buttons(user_id, text, s3_image_url, resource_url, ad_id, ad_external_id):
     # Just delegate to the common task
     from common.messaging.tasks import send_ad_with_extra_buttons as common_send_ad
-    return common_send_ad.delay(user_id, text, s3_image_url, resource_url, ad_id, ad_external_id)
+    return common_send_ad(user_id, text, s3_image_url, resource_url, ad_id, ad_external_id, platform="telegram")
 
 
 @celery_app.task(name='telegram_service.app.tasks.send_subscription_notification')

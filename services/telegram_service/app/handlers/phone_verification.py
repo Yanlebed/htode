@@ -46,7 +46,7 @@ async def start_phone_verification(message: types.Message, state: FSMContext):
         })
 
         await safe_send_message(
-            chat_id=message.chat.id,
+            chat_id=message.from_user.id,
             text=(
                 "Для додавання номера телефону і єдиного входу з різних пристроїв, "
                 "будь ласка, надайте свій номер телефону.\n\n"
@@ -127,7 +127,7 @@ async def process_phone_number(message: types.Message, state: FSMContext, phone_
                 "error": str(e)
             })
             await safe_send_message(
-                chat_id=message.chat.id,
+                chat_id=message.from_user.id,
                 text="Помилка при створенні коду підтвердження. Спробуйте ще раз.",
                 reply_markup=main_menu_keyboard()
             )
@@ -137,7 +137,7 @@ async def process_phone_number(message: types.Message, state: FSMContext, phone_
         # In a production environment, you would send this code via SMS
         # For testing purposes, we're showing it directly in the chat
         await safe_send_message(
-            chat_id=message.chat.id,
+            chat_id=message.from_user.id,
             text=(
                 f"Код підтвердження відправлено на номер {phone_number}.\n\n"
                 f"⚠️ Для тестування, ось ваш код: {code}\n\n"

@@ -511,7 +511,7 @@ async def show_main_menu(message: types.Message):
         })
 
         await safe_send_message(
-            chat_id=message.chat.id,
+            chat_id=message.from_user.id,
             text="Головне меню:",
             reply_markup=main_menu_keyboard()
         )
